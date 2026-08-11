@@ -2,8 +2,9 @@ const { tokenize } = require("./src/compiler/parser/tokenizer.js");
 const { parseTemplate } = require("./src/compiler/parser/templateParser.js");
 const { integrateExpressions } = require("./src/compiler/parser/integrator.js");
 const { extractScriptBlock } = require("./src/compiler/parser/extractor.js");
+const { scanState } = require("./src/compiler/parser/stateScanner.js");
 
-const header = '<script>console.log("Hello, {user.name}!");</script><div class="hero"><h1>Hello, {user.name}!</h1></div>';
+const header = "<script>let user = {\n  name: 'John',\n  age: 30\n};console.log('Hello, {user.name}!');</script><div class=\"hero\"><h1>Hello, {user.name}!</h1></div>";
 
 // 1. Tokenize the raw HTML string
 const tokens = tokenize(header);
@@ -17,5 +18,9 @@ const finalUnifiedAST = integrateExpressions(templateAST);
 // 4. Extract the script block from the final unified AST
 const scriptContent = extractScriptBlock(finalUnifiedAST);
 
-console.log(JSON.stringify(finalUnifiedAST, null, 2));
-console.log("Extracted script content:", scriptContent);
+// console.log(JSON.stringify(finalUnifiedAST, null, 2));
+// console.log("Extracted script content:", scriptContent);
+
+// 5. Scan the extracted script content for state declarations
+const stateDeclarations = scanState(scriptContent);
+console.log("State declarations:", JSON.stringify(stateDeclarations, null, 2));
