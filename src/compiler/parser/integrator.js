@@ -1,0 +1,52 @@
+const { lexExpression } = require('./expressionLexer.js');
+const { parseExpression } = require('./prattParser.js');
+
+/**
+ * Recursively walks the Template AST and parses the raw strings inside 'Expression' nodes.
+ * @param {Object} node - The current AST node being evaluated
+ * @returns {Object} The mutated AST node
+ */
+function integrateExpressions(node) {
+  // 1. Base Case: If the node is an Expression, parse it
+  if (node.type === 'Expression') {
+    try {
+      // Pass the raw string to your new lexer and parser
+      const tokens = lexExpression(node.value);
+      const parsedAST = parseExpression(tokens);
+      
+      // Attach the parsed mini-AST to the node, preserving the original template location
+      node.expressionAST = parsedAST;
+      
+    } catch (error) {
+      const templateLocation = node.loc?.start;
+      const expressionLocation = error.message.match(/ at (\d+):(\d+)\.?$/);
+      const expressionLine = Number(expressionLocation?.[1]);
+      const expressionColumn = Number(expressionLocation?.[2]);
+      const line = templateLocation && expressionLocation
+        ? templateLocation.line + expressionLine - 1
+        : templateLocation?.line || 'unknown';
+      const column = templateLocation && expressionLocation
+        ? expressionLine === 1
+          ? templateLocation.column + expressionColumn
+          : expressionColumn
+        : templateLocation?.column || 'unknown';
+      const message = expressionLocation
+        ? error.message.replace(/ at \d+:\d+\.?$/, '')
+        : error.message;
+
+      throw new SyntaxError(`Template Expression Error at ${line}:${column} - ${message}`);
+    }
+  }
+
+  // 2. Recursive Step: If the node has children, walk through all of them
+  if (node.children && Array.isArray(node.children)) {
+    for (let i = 0; i < node.children.length; i++) {
+      integrateExpressions(node.children[i]);
+    }
+  }
+
+  // We mutate in place for performance, but return the node for easy chaining
+  return node; 
+}
+
+module.exports = { integrateExpressions };
