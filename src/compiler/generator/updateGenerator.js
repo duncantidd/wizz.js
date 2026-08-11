@@ -1,0 +1,65 @@
+const { CodeBuilder } = require('./codeBuilder');
+
+/**
+ * Generates the update() lifecycle function for a component's reactivity engine.
+ * @param {Object} templateAST - The enriched template AST.
+ * @returns {string} The generated JavaScript string.
+ */
+function generateUpdateFunction(templateAST) {
+  const builder = new CodeBuilder();
+
+  builder.add('function update(ctx, changed) {')
+        .indent();
+
+  function walk(node) {
+    if (node.type === 'Element') {
+      // 1. Get the assigned data-wizz-id (if this element has reactive children)
+      const idAttr = node.attributes && node.attributes.find(attr => attr.name === 'data-wizz-id');
+      const wizzId = idAttr ? idAttr.value : null;
+
+      // 2. Iterate through children and track the exact index
+      if (node.children && Array.isArray(node.children)) {
+        node.children.forEach((child, childIndex) => {
+          
+          // 3. Find Reactive Expressions
+          if (child.type === 'Expression' && child.dependencies && child.dependencies.length > 0) {
+            
+            // 4. Loop through each dependency and generate an if-block
+            child.dependencies.forEach(dependencyName => {
+              builder.add(`if (changed.${dependencyName}) {`)
+                    .indent();
+              
+              // Target the exact DOM element via the unique ID
+              builder.add(`const target_${wizzId} = document.querySelector('[data-wizz-id="${wizzId}"]');`);
+              
+              // Update the specific text node at the exact child index.
+              // We pull the raw string (e.g., "count + 1") directly from child.value.
+              // We wrap it in String() so numeric calculations don't throw type errors in the DOM.
+              builder.add(`target_${wizzId}.childNodes[${childIndex}].nodeValue = String(${child.value});`);
+              
+              builder.dedent()
+                    .add('}');
+            });
+          }
+          
+          // 5. Continue walking down the tree
+          walk(child);
+        });
+      }
+    } else if (node.type === 'Root') {
+      // Handle the root node traversal
+      if (node.children && Array.isArray(node.children)) {
+        node.children.forEach(walk);
+      }
+    }
+  }
+
+  walk(templateAST);
+
+  builder.dedent()
+        .add('}');
+
+  return builder.generate();
+}
+
+module.exports = { generateUpdateFunction };
