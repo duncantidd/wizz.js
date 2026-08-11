@@ -1,4 +1,3 @@
-// src/compiler/parser/index.js
 const { tokenize } = require('./tokenizer.js');
 const { parseTemplate } = require('./templateParser.js');
 const { integrateExpressions } = require('./integrator.js');
@@ -15,25 +14,26 @@ function parseComponent(source) {
     throw new TypeError('Component source must be a string.');
   }
 
-  // 1. Tokenize the raw string
+  // 1. Tokenize the raw string 
   const tokens = tokenize(source);
 
-  // 2. Build the structural Template AST
+  // 2. Build the structural Template AST 
   const rawTemplateAST = parseTemplate(tokens);
 
-  // 3. Integrate the Pratt Expression ASTs into the template
+  // 3. Integrate the Pratt Expression ASTs into the template 
   const integratedTemplateAST = integrateExpressions(rawTemplateAST);
 
-  // 4. Extract the <script> block and remove its node from the visual DOM tree
+  // 4. Extract the <script> block and remove its node from the visual DOM tree 
   const scriptContent = extractScriptBlock(integratedTemplateAST);
 
-  // 5. Scan the extracted script for state and logic
+  // 5. Scan the extracted script for state and logic 
   const scriptDeclarations = scanState(scriptContent);
 
   // 6. Return the Final Handoff Object 
   return {
     template: integratedTemplateAST,
-    script: scriptDeclarations
+    script: scriptDeclarations,
+    rawScript: scriptContent || '' // <-- NEW ADDITION: Pass the raw string down the pipeline
   };
 }
 

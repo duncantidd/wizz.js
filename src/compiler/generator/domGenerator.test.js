@@ -78,3 +78,10 @@ test('preserves quotes, backslashes, and newlines in text and attribute values',
   assert.equal(root.attributes.title, 'He said "hello"');
   assert.equal(root.children[0].value, 'C:\\work\nnext line');
 });
+
+test('requires a root element for component creation', () => {
+  assert.throws(
+    () => generateCreateFunction({ type: 'Root', children: [{ type: 'Text', value: 'Only text' }] }),
+    /Component template must contain a root element\./
+  );
+});

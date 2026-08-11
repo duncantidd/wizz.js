@@ -50,6 +50,9 @@ function generateComponent(astPayload) {
         .add('const rootNode = create(ctx);')
         .add('target.appendChild(rootNode);');
 
+  const initialChanges = reactiveVars.map(decl => `${decl.name}: true`).join(', ');
+  builder.add(`update(ctx, { ${initialChanges} });`);
+
   // 7. Return the public API (e.g., a way to unmount/destroy the component)
   builder.add('\nreturn {')
         .indent()

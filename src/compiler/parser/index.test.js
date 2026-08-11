@@ -27,6 +27,10 @@ test('returns an integrated template and scanned script declarations', () => {
       name: 'increment'
     }
   ]);
+  assert.equal(
+    component.rawScript,
+    'let count = 0; const title = "Total"; function increment() {}'
+  );
 
   assert.equal(component.template.type, 'Root');
   assert.equal(component.template.children.length, 1);

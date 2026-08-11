@@ -58,8 +58,11 @@ function generateCreateFunction(templateAST) {
     return varName;
   }
 
-  // We assume the root has a single top-level element as its first child
-  const rootNode = templateAST.children[0];
+  // Components currently require one top-level element; ignore formatting text around it.
+  const rootNode = templateAST.children.find(node => node.type === 'Element');
+  if (!rootNode) {
+    throw new SyntaxError('Component template must contain a root element.');
+  }
   const rootVarName = walk(rootNode, null);
 
   builder.add(`return ${rootVarName};`)
