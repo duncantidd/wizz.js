@@ -40,8 +40,22 @@ test('tokenizes self-closing tags and nested braces in expressions', () => {
   ]);
 });
 
+test('tokenizes brace-delimited event directive values', () => {
+  const tokens = tokenize('<button on:click={handleClick}>Click</button>');
+
+  assert.deepEqual(tokens.map(withoutLocations), [
+    {
+      type: 'OpenTag',
+      name: 'button',
+      attributes: [{ name: 'on:click', value: 'handleClick' }]
+    },
+    { type: 'Text', value: 'Click' },
+    { type: 'CloseTag', name: 'button' }
+  ]);
+});
+
 test('reports malformed tags and expressions', () => {
   assert.throws(() => tokenize('<div'), /Unclosed tag at 1:5/);
   assert.throws(() => tokenize('{count'), /Unclosed expression at 1:7/);
-  assert.throws(() => tokenize('<div id=main>'), /Expected a quoted value for attribute 'id'/);
+  assert.throws(() => tokenize('<div id=main>'), /Expected a quoted or brace-delimited value for attribute 'id'/);
 });

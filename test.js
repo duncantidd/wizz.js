@@ -1,26 +1,18 @@
-const { parseComponent } = require('./src/compiler/parser/index.js');
-const { analyzeDependencies } = require('./src/compiler/analyzer/dependencyAnalyzer.js');
-const { assignNodeIds } = require('./src/compiler/analyzer/idAssigner.js');
-const { generateComponent } = require('./src/compiler/generator/componentGenerator.js');
+const { parseComponent } = require('./src/compiler/parser');
+const { analyzeDependencies } = require('./src/compiler/analyzer/dependencyAnalyzer');
+const { assignNodeIds } = require('./src/compiler/analyzer/idAssigner');
+const { generateComponent } = require('./src/compiler/generator/componentGenerator');
 
-// 1. The Input
-const rawWizzCode = `
+const source = `
 <script>
   let count = 0;
-  function increment() {
-    count += 1;
-  }
 </script>
-<main>
-  <h1>Count: {count}</h1>
-</main>
+<main><p>Count: {count}</p></main>
 `;
 
-// 2. The Pipeline
-const parserPayload = parseComponent(rawWizzCode);
-const analyzedPayload = analyzeDependencies(parserPayload);
-const finalPayload = assignNodeIds(analyzedPayload);
-const vanillaJsOutput = generateComponent(finalPayload);
+const parsed = parseComponent(source);
+const analyzed = analyzeDependencies(parsed);
+const identified = assignNodeIds(analyzed);
+const output = generateComponent(identified);
 
-// 3. The Output
-console.log(vanillaJsOutput);
+console.log(output);

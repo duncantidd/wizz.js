@@ -1,0 +1,23 @@
+<script>
+  const frameworkName = "wizz.js";
+  let clicks = 0;
+  
+  function handleClick() {
+    clicks++;
+  }
+
+  function clickme() {
+    alert('Hello ' + name);
+  }
+
+  let name = null;
+  if (!name) {
+    name = "Alice";
+  }
+</script>
+
+<main>
+  <h1 on:click={clickme}>Hi {name} Welcome to {frameworkName}!</h1>
+  <p>Zero dependencies. 100% compiled.</p>
+  <button on:click={handleClick}>Clicks: {clicks}</button>
+</main>

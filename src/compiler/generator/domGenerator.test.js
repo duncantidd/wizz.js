@@ -42,7 +42,7 @@ test('generates create() code that builds a nested DOM tree', () => {
       children: [
         { type: 'Text', value: 'Hello ', children: [] },
         { type: 'Element', name: 'p', attributes: [{ name: 'hidden', value: null }], children: [
-          { type: 'Expression', value: 'count', dependencies: ['count'] }
+          { type: 'Expression', value: '1 + 1', dependencies: [] }
         ] }
       ]
     }]
@@ -61,7 +61,7 @@ test('generates create() code that builds a nested DOM tree', () => {
   });
   assert.equal(root.children[1].value, 'p');
   assert.deepEqual(root.children[1].attributes, { hidden: '' });
-  assert.equal(root.children[1].children[0].value, '');
+  assert.equal(root.children[1].children[0].value, '2');
 });
 
 test('preserves quotes, backslashes, and newlines in text and attribute values', () => {
@@ -77,6 +77,36 @@ test('preserves quotes, backslashes, and newlines in text and attribute values',
 
   assert.equal(root.attributes.title, 'He said "hello"');
   assert.equal(root.children[0].value, 'C:\\work\nnext line');
+});
+
+test('emits event directives as DOM listeners rather than inline attributes', () => {
+  const source = generateCreateFunction({
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'button',
+      attributes: [{ name: 'on:click', value: 'handleClick' }],
+      children: []
+    }]
+  });
+
+  assert.match(source, /addEventListener\("click", handleClick\)/);
+  assert.doesNotMatch(source, /setAttribute\("on:click"/);
+});
+
+test('rejects event directives without a handler identifier', () => {
+  assert.throws(
+    () => generateCreateFunction({
+      type: 'Root',
+      children: [{
+        type: 'Element',
+        name: 'button',
+        attributes: [{ name: 'on:click', value: 'handleClick()' }],
+        children: []
+      }]
+    }),
+    /Event directive 'on:click' requires a handler identifier\./
+  );
 });
 
 test('requires a root element for component creation', () => {

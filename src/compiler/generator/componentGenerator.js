@@ -1,6 +1,7 @@
 const { CodeBuilder } = require('./codeBuilder');
 const { generateCreateFunction } = require('./domGenerator');
 const { generateUpdateFunction } = require('./updateGenerator');
+const { interceptAssignments } = require('./assignmentInterceptor');
 
 /**
  * Wraps the parsed component into a single, importable Factory Closure.
@@ -14,11 +15,24 @@ function generateComponent(astPayload) {
   builder.add('export default function mountComponent(target) {')
         .indent();
 
+      const reactiveVars = astPayload.script.filter(decl => decl.isReactive);
+
+      builder.add('let isMounted = false;');
+      builder.add('function queueUpdate(changed) {')
+                        .indent()
+                        .add('if (isMounted) update(ctx, changed);')
+                        .dedent()
+                        .add('}');
+
   // 2. Paste the developer's original logic so it forms the lexical environment
   builder.add('// --- Developer Logic ---');
   if (astPayload.rawScript) {
     // Split by newline and add to builder to maintain proper indentation
-    astPayload.rawScript.split('\n').forEach(line => builder.add(line));
+            const interceptedScript = interceptAssignments(
+                  astPayload.rawScript,
+                  reactiveVars.map(decl => decl.name)
+            );
+            interceptedScript.split('\n').forEach(line => builder.add(line));
   }
 
   // 3. Build the Context Object dynamically
@@ -27,7 +41,6 @@ function generateComponent(astPayload) {
   builder.add('const ctx = {')
         .indent();
   
-  const reactiveVars = astPayload.script.filter(decl => decl.isReactive);
   reactiveVars.forEach(decl => {
     builder.add(`get ${decl.name}() { return ${decl.name}; },`);
   });
@@ -51,7 +64,8 @@ function generateComponent(astPayload) {
         .add('target.appendChild(rootNode);');
 
   const initialChanges = reactiveVars.map(decl => `${decl.name}: true`).join(', ');
-  builder.add(`update(ctx, { ${initialChanges} });`);
+  builder.add(`update(ctx, { ${initialChanges} });`)
+        .add('isMounted = true;');
 
   // 7. Return the public API (e.g., a way to unmount/destroy the component)
   builder.add('\nreturn {')

@@ -101,7 +101,7 @@ The current implementation is intentionally small. Documentation should distingu
 | Area | Supported | Current boundary |
 | --- | --- | --- |
 | Elements | Named opening, closing, and self-closing tags | Tag names begin with a letter and continue with letters, digits, `:`, `_`, or `-`. |
-| Attributes | Boolean attributes and single- or double-quoted values | Unquoted values are rejected; interpolation inside attributes is not parsed separately. |
+| Attributes | Boolean attributes, single- or double-quoted values, and brace-delimited directive values such as `on:click={handleClick}` | Brace-delimited values are currently used for directives; general dynamic attribute interpolation is not compiled yet. |
 | Interpolations | `{...}` in template text, nested braces, quotes, and escapes while locating the end brace | The expression grammar below determines which interpolation contents can be compiled. |
 | Expressions | Identifiers, integer literals, `+`, `-`, `*`, `/`, `.`, and parentheses | No strings, booleans, calls, arrays, objects, assignments, comparisons, optional chaining, or unary operators. |
 | Script scanning | Semicolon-terminated `let`/`const` assignments and named `function` declarations | It is a targeted regex scanner, not a JavaScript parser. `var`, imports, classes, arrow functions, and syntax without the recognized forms are not reported. |
@@ -138,13 +138,13 @@ It throws `TypeError` unless `source` is a string. A component without `<script>
 
 The positional fields are recorded here, at the point exact character information still exists. `start` and `end` are zero-based offsets; `loc` uses one-based line and column values.
 
-`STATES` names the scanner's modes: text, tag parsing, attribute parsing, interpolation parsing, quoted interpolation strings, escape handling, and script content. Exporting it makes the state vocabulary explicit for tests and future maintenance.
+`STATES` names the scanner's modes: text, tag parsing, quoted and brace-delimited attribute parsing, interpolation parsing, quoted interpolation strings, escape handling, and script content. Exporting it makes the state vocabulary explicit for tests and future maintenance.
 
 Important behavior:
 
 - `emitText()` flushes accumulated text only when non-empty, preventing empty text nodes.
 - `emitTag()` centralizes open, close, and self-closing tag token construction.
-- `commitAttribute()` stores both boolean attributes (`value: null`) and quoted values.
+- `commitAttribute()` stores boolean attributes (`value: null`), quoted values, and the contents of brace-delimited directive values without their surrounding braces.
 - `EXPRESSION`, `EXPRESSION_STRING`, and `EXPRESSION_ESCAPE` track brace depth and quotes, so a nested object literal or a brace inside a string does not prematurely end `{...}`.
 - `SCRIPT` treats everything as text until the exact `</script>` sequence. This preserves JavaScript such as `"Hello, {name}"` rather than tokenizing its braces as template interpolations.
 - `fail()` consistently reports source coordinates for malformed markup, missing quotes, and unclosed tags or expressions.

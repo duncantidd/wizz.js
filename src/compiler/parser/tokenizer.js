@@ -6,6 +6,7 @@ const STATES = {
   ATTRIBUTE_NAME: 'ATTRIBUTE_NAME',
   BEFORE_ATTRIBUTE_VALUE: 'BEFORE_ATTRIBUTE_VALUE',
   ATTRIBUTE_VALUE: 'ATTRIBUTE_VALUE',
+  ATTRIBUTE_EXPRESSION: 'ATTRIBUTE_EXPRESSION',
   AFTER_ATTRIBUTE_VALUE: 'AFTER_ATTRIBUTE_VALUE',
   SELF_CLOSING_START_TAG: 'SELF_CLOSING_START_TAG',
   TAG_CLOSE: 'TAG_CLOSE',
@@ -172,10 +173,15 @@ function tokenize(input) {
 
       case STATES.BEFORE_ATTRIBUTE_VALUE:
         if (isWhitespace(char)) break;
-        if (char !== '"' && char !== "'") fail(`Expected a quoted value for attribute '${attributeName}'`);
-        quote = char;
-        attributeValue = '';
-        state = STATES.ATTRIBUTE_VALUE;
+        if (char === '{') {
+          attributeValue = '';
+          expressionDepth = 1;
+          state = STATES.ATTRIBUTE_EXPRESSION;
+        } else if (char === '"' || char === "'") {
+          quote = char;
+          attributeValue = '';
+          state = STATES.ATTRIBUTE_VALUE;
+        } else fail(`Expected a quoted or brace-delimited value for attribute '${attributeName}'`);
         break;
 
       case STATES.ATTRIBUTE_VALUE:
@@ -183,6 +189,23 @@ function tokenize(input) {
           commitAttribute();
           state = STATES.AFTER_ATTRIBUTE_VALUE;
         } else attributeValue += char;
+        break;
+
+      case STATES.ATTRIBUTE_EXPRESSION:
+        if (char === '{') {
+          expressionDepth += 1;
+          attributeValue += char;
+        } else if (char === '}') {
+          expressionDepth -= 1;
+          if (expressionDepth === 0) {
+            commitAttribute();
+            state = STATES.AFTER_ATTRIBUTE_VALUE;
+          } else {
+            attributeValue += char;
+          }
+        } else {
+          attributeValue += char;
+        }
         break;
 
       case STATES.AFTER_ATTRIBUTE_VALUE:

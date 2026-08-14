@@ -27,6 +27,19 @@ function generateCreateFunction(templateAST) {
       // Add attributes (including your data-wizz-id)
       if (node.attributes) {
         node.attributes.forEach(attr => {
+          if (attr.name.startsWith('on:')) {
+            const eventName = attr.name.slice(3);
+            const handlerName = attr.value?.trim();
+            if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(eventName)) {
+              throw new SyntaxError(`Invalid event directive '${attr.name}'.`);
+            }
+            if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(handlerName)) {
+              throw new SyntaxError(`Event directive '${attr.name}' requires a handler identifier.`);
+            }
+            builder.add(`${varName}.addEventListener(${JSON.stringify(eventName)}, ${handlerName});`);
+            return;
+          }
+
           // If it's a boolean attribute like 'hidden', value is null
           if (attr.value === null) {
             builder.add(`${varName}.setAttribute(${JSON.stringify(attr.name)}, "");`);
@@ -38,9 +51,7 @@ function generateCreateFunction(templateAST) {
     } else if (node.type === 'Text') {
       builder.add(`const ${varName} = document.createTextNode(${JSON.stringify(node.value)});`);
     } else if (node.type === 'Expression') {
-      // For now, we'll initialize expressions as empty text nodes. 
-      // The reactivity engine (update phase) will populate them!
-      builder.add(`const ${varName} = document.createTextNode("");`);
+      builder.add(`const ${varName} = document.createTextNode(String(${node.value}));`);
     }
 
     // If this node has a parent, append it immediately
