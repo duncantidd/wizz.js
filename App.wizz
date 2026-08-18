@@ -7,17 +7,19 @@
   }
 
   function clickme() {
-    alert('Hello ' + name);
+    alert('Hello ' + name + '\n There have been ' + clicks + ' clicks');
   }
+  
+  let params = new URLSearchParams(document.location.search);
+  let name = params.get("name");
 
-  let name = null;
   if (!name) {
-    name = "Alice";
+    name = "friend";
   }
 </script>
 
 <main>
-  <h1 on:click={clickme}>Hi {name} Welcome to {frameworkName}!</h1>
-  <p>Zero dependencies. 100% compiled.</p>
+  <h1 on:click={clickme}>Hello {name} Welcome to {frameworkName}!</h1>
+  <p>Zero dependencies. 100% compiled. Fuck Tailwind and write your own css</p>
   <button on:click={handleClick}>Clicks: {clicks}</button>
 </main>

@@ -13,18 +13,21 @@ export default function mountComponent(target) {
     }
   
     function clickme() {
-      alert('Hello ' + name);
+      alert('Hello ' + name + '\n There have been ' + clicks + ' clicks');
     }
+    
+    let params = new URLSearchParams(document.location.search);
+    let name = params.get("name");
   
-    let name = null;
     if (!name) {
-      name = "Alice"; queueUpdate({ name: true });
+      name = "friend"; queueUpdate({ name: true });
     }
   
   
 // --- Framework Context ---
   const ctx = {
     get clicks() { return clicks; },
+    get params() { return params; },
     get name() { return name; },
   };
   
@@ -37,7 +40,7 @@ export default function mountComponent(target) {
     node_3.addEventListener("click", clickme);
     node_3.setAttribute("data-wizz-id", "1");
     node_1.appendChild(node_3);
-    const node_4 = document.createTextNode("Hi ");
+    const node_4 = document.createTextNode("Hello ");
     node_3.appendChild(node_4);
     const node_5 = document.createTextNode(String(name));
     node_3.appendChild(node_5);
@@ -51,7 +54,7 @@ export default function mountComponent(target) {
     node_1.appendChild(node_9);
     const node_10 = document.createElement("p");
     node_1.appendChild(node_10);
-    const node_11 = document.createTextNode("Zero dependencies. 100% compiled.");
+    const node_11 = document.createTextNode("Zero dependencies. 100% compiled. Fuck Tailwind and write your own css");
     node_10.appendChild(node_11);
     const node_12 = document.createTextNode("\n  ");
     node_1.appendChild(node_12);
@@ -83,7 +86,7 @@ export default function mountComponent(target) {
 // --- Initialization ---
   const rootNode = create(ctx);
   target.appendChild(rootNode);
-  update(ctx, { clicks: true, name: true });
+  update(ctx, { clicks: true, params: true, name: true });
   isMounted = true;
   
 return {
