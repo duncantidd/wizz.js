@@ -54,7 +54,7 @@ export default function mountComponent(target) {
     node_1.appendChild(node_9);
     const node_10 = document.createElement("p");
     node_1.appendChild(node_10);
-    const node_11 = document.createTextNode("Zero dependencies. 100% compiled. Fuck Tailwind and write your own css");
+    const node_11 = document.createTextNode("Zero dependencies. 100% compiled.");
     node_10.appendChild(node_11);
     const node_12 = document.createTextNode("\n  ");
     node_1.appendChild(node_12);

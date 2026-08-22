@@ -59,3 +59,72 @@ test('supports reactive names containing dollar signs', () => {
 
   assert.equal(interceptAssignments(input, ['$count']), expected);
 });
+
+test('leaves for-loop headers untouched while still intercepting body mutations', () => {
+  const input = 'for (count = 0; count < 10; count++) { total += count; }';
+  const expected = 'for (count = 0; count < 10; count++) { total += count; queueUpdate({ total: true }); }';
+
+  assert.equal(interceptAssignments(input, ['count', 'total']), expected);
+});
+
+test('leaves arrow-function default parameters untouched', () => {
+  const input = 'const render = (count = 1) => {};\ncount = 2;';
+  const expected = 'const render = (count = 1) => {};\ncount = 2; queueUpdate({ count: true });';
+
+  assert.equal(interceptAssignments(input, ['count']), expected);
+});
+
+test('preserves regular expression literals that resemble assignments', () => {
+  const input = 'const pattern = /count = 5;/;';
+
+  assert.equal(interceptAssignments(input, ['count']), input);
+});
+
+test('rewrites statements containing regex literals at their true end', () => {
+  const input = 'x = /a;b/.test(s);';
+  const expected = 'x = /a;b/.test(s); queueUpdate({ x: true });';
+
+  assert.equal(interceptAssignments(input, ['x']), expected);
+});
+
+test('preserves regex literals passed as call arguments', () => {
+  const input = 'const matches = value.match(/count = 3;/);';
+
+  assert.equal(interceptAssignments(input, ['count']), input);
+});
+
+test('preserves division while intercepting an outer assignment', () => {
+  const input = 'average = total / count;';
+  const expected = 'average = total / count; queueUpdate({ average: true });';
+
+  assert.equal(interceptAssignments(input, ['average', 'total', 'count']), expected);
+});
+
+test('preserves regex literals after return statements', () => {
+  const input = 'function matches() { return /count = 5;/; }';
+
+  assert.equal(interceptAssignments(input, ['count']), input);
+});
+
+test('still intercepts statement mutations inside function and block bodies', () => {
+  assert.equal(
+    interceptAssignments('function increment() { count += 1; }', ['count']),
+    'function increment() { count += 1; queueUpdate({ count: true }); }'
+  );
+  assert.equal(
+    interceptAssignments('if (!name) { name = "friend"; }', ['name']),
+    'if (!name) { name = "friend"; queueUpdate({ name: true }); }'
+  );
+  assert.equal(
+    interceptAssignments('if (ready) { count = 1; }', ['count']),
+    'if (ready) { count = 1; queueUpdate({ count: true }); }'
+  );
+});
+
+test('leaves unbraced control-flow bodies untransformed', () => {
+  const conditional = 'if (ready) count = 1; else count = 2;';
+  const loop = 'while (ready) count += 1;';
+
+  assert.equal(interceptAssignments(conditional, ['count']), conditional);
+  assert.equal(interceptAssignments(loop, ['count']), loop);
+});
