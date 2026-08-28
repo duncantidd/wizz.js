@@ -157,7 +157,7 @@ For each supported node type, it emits:
 
 Every generated child is appended to `parentVarName` immediately after creation. The recursive traversal then creates descendants in source order. This produces the same child-node indexing that `updateGenerator.js` later uses for reactive text updates.
 
-For attributes, a normal value produces `setAttribute(name, value)`. A parser-produced boolean attribute has `value: null` and produces `setAttribute(name, "")`, matching HTML's presence-based boolean attribute representation. An explicit event directive such as `on:click={handleClick}` emits `addEventListener("click", handleClick)` instead of an inline attribute, so the listener retains access to the component factory's local state and functions. Event directive values must currently be a single handler identifier.
+For attributes, a normal value produces `setAttribute(name, value)`. A parser-produced boolean attribute has `value: null` and produces `setAttribute(name, "")`, matching HTML's presence-based boolean attribute representation. An explicit event directive such as `on:click={handleClick}` emits `addEventListener("click", handleClick)` instead of an inline attribute, so the listener retains access to the component factory's local state and functions. Event directive values may be any non-empty JavaScript listener expression, including an arrow function that receives the native event: `on:click={(event) => increment(event.detail)}`. The generator embeds this expression directly as the listener; it does not parse or transform its JavaScript.
 
 Names, text content, and attribute values are embedded with `JSON.stringify()`. That is important for correct generated JavaScript when source contains quotes, backslashes, or newlines; they are emitted as valid string literals rather than interpolated unsafely into source code.
 
@@ -235,7 +235,7 @@ The generated output is intentionally small and uses direct DOM APIs. Its curren
 
 - Components must have at least one top-level element. Root-level formatting text is ignored, and additional top-level elements are not mounted because creation selects the first root element.
 - Dynamic expressions are supported only as direct text-node children of elements. Dynamic attributes are not generated yet.
-- Explicit event directives use `on:<event>={handler}` and compile to native `addEventListener()` bindings. Their handler value is currently limited to one component-local identifier; inline event attributes and arbitrary expressions are not supported.
+- Explicit event directives use `on:<event>={handler}` and compile to native `addEventListener()` bindings. A handler may be a component-local identifier or any non-empty JavaScript listener expression, such as `(event) => increment(event.detail)`. Inline event attributes are not supported.
 - Generated updates assume the analyzer gave every reactive expression's parent element a `data-wizz-id`. Skipping `assignNodeIds()` can yield a lookup for `data-wizz-id="null"` if dependencies are present without an ID.
 - The update function queries the document each time a dependency changes and assumes the target still exists. The current output has no null-target guard or caching layer.
 - Repeated dependencies generate separate guards by expression dependency, which is correct but not batched or scheduled. Runtime scheduling is outside this directory's current scope.

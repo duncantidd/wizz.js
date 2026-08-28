@@ -43,14 +43,14 @@ function generateCreateFunction(templateAST, componentImports = []) {
         node.attributes.forEach(attr => {
           if (attr.name.startsWith('on:')) {
             const eventName = attr.name.slice(3);
-            const handlerName = attr.value?.trim();
+            const handlerExpression = attr.value?.trim();
             if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(eventName)) {
               throw new SyntaxError(`Invalid event directive '${attr.name}'.`);
             }
-            if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(handlerName)) {
-              throw new SyntaxError(`Event directive '${attr.name}' requires a handler identifier.`);
+            if (!handlerExpression) {
+              throw new SyntaxError(`Event directive '${attr.name}' requires a handler expression.`);
             }
-            builder.add(`${varName}.addEventListener(${JSON.stringify(eventName)}, ${handlerName});`);
+            builder.add(`${varName}.addEventListener(${JSON.stringify(eventName)}, ${handlerExpression});`);
             return;
           }
 

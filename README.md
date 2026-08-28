@@ -43,6 +43,14 @@ A component has a template and an optional `<script>` block. `let` declarations 
 
 Save it as `Counter.wizz`.
 
+Event directives use native browser event names and accept either a component-local handler or an expression that receives the event:
+
+```wizz
+<button on:click={(event) => increment(event.detail)}>Add</button>
+```
+
+The directive expression is emitted as the listener passed to `addEventListener()`.
+
 ## Compile Components
 
 Place components below an input directory, then compile the whole directory into a separate output directory:
