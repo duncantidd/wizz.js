@@ -94,6 +94,22 @@ Add routes explicitly as compiled component modules become available. The router
 
 The router also exposes `navigate(pathname)`, which updates browser history with `pushState()` and rerenders. Browser Back and Forward navigation rerenders through the `popstate` listener.
 
+## Nested Components
+
+Import another Wizz component with a default `.wizz` import and render it with a self-closing tag:
+
+```wizz
+<script>
+  import Counter from './components/Counter.wizz';
+</script>
+
+<main>
+  <Counter />
+</main>
+```
+
+The build rewrites the import to `./components/Counter.js`, which follows the output-path mapping. Imported component tags must be nested inside a native element and cannot yet receive attributes or children. Destroying the parent component also destroys all imported child components.
+
 Serve the directory over HTTP when loading browser ES modules, for example:
 
 ```bash

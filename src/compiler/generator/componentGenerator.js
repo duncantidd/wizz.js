@@ -10,6 +10,12 @@ const { interceptAssignments } = require('./assignmentInterceptor');
  */
 function generateComponent(astPayload) {
   const builder = new CodeBuilder();
+      const componentImports = astPayload.imports || [];
+
+      componentImports.forEach(({ name, source }) => {
+            builder.add(`import ${name} from ${JSON.stringify(source.replace(/\.wizz$/, '.js'))};`);
+      });
+      if (componentImports.length > 0) builder.add('');
 
   // 1. Factory Function Signature
   builder.add('export default function mountComponent(target) {')
@@ -50,7 +56,7 @@ function generateComponent(astPayload) {
 
   // 4. Inject the generated DOM create() function
   builder.add('\n// --- DOM Creation ---');
-  const createCode = generateCreateFunction(astPayload.template);
+      const createCode = generateCreateFunction(astPayload.template, componentImports);
   createCode.split('\n').forEach(line => builder.add(line));
 
   // 5. Inject the generated Reactivity Engine update() function
@@ -61,7 +67,9 @@ function generateComponent(astPayload) {
   // 6. Mount the component to the DOM
   builder.add('\n// --- Initialization ---')
         .add('const rootNode = create(ctx);')
-        .add('target.appendChild(rootNode);');
+        .add('const childComponents = rootNode.__wizzChildComponents;')
+        .add('target.appendChild(rootNode);')
+        .add('rootNode.__wizzMountChildren();');
 
   const initialChanges = reactiveVars.map(decl => `${decl.name}: true`).join(', ');
   builder.add(`update(ctx, { ${initialChanges} });`)
@@ -72,6 +80,7 @@ function generateComponent(astPayload) {
         .indent()
         .add('destroy() {')
         .indent()
+      .add('childComponents.forEach((component) => component.destroy());')
         .add('target.removeChild(rootNode);')
         .dedent()
         .add('}')

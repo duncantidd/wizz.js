@@ -169,3 +169,32 @@ test('binds explicit event directives to component-local handlers', () => {
   assert.equal(button.attributes['on:click'], undefined);
   assert.equal(button.childNodes[1].nodeValue, '1');
 });
+
+test('emits top-level component imports and mounts imported self-closing components', () => {
+  const payload = assignNodeIds(analyzeDependencies(parseComponent(
+    "<script>import Counter from './Counter.wizz';</script><main><Counter /></main>"
+  )));
+  const source = generateComponent(payload);
+
+  assert.match(source, /^import Counter from "\.\/Counter\.js";/);
+  assert.match(source, /mountChildren\.push\(\(\) => childComponents\.push\(Counter\(node_1\)\)\);/);
+  assert.match(
+    source,
+    /target\.appendChild\(rootNode\);\n  rootNode\.__wizzMountChildren\(\);\n  update\(ctx, \{  \}\);/
+  );
+  assert.match(source, /childComponents\.forEach\(\(component\) => component\.destroy\(\)\);/);
+  assert.doesNotMatch(source, /document\.createElement\("Counter"\)/);
+});
+
+test('rejects component attributes, children, and root-level component tags', () => {
+  const generate = (template) => generateComponent(assignNodeIds(analyzeDependencies(parseComponent(template))));
+
+  assert.throws(
+    () => generate("<script>import Counter from './Counter.wizz';</script><main><Counter label=\"Count\" /></main>"),
+    /Component <Counter> does not support attributes or children\./
+  );
+  assert.throws(
+    () => generate("<script>import Counter from './Counter.wizz';</script><Counter />"),
+    /Component <Counter> must be nested inside an element\./
+  );
+});

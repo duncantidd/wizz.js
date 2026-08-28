@@ -1,3 +1,5 @@
+import Counter from "../components/Counter.js";
+
 export default function mountComponent(target) {
   let isMounted = false;
   function queueUpdate(changed) {
@@ -5,35 +7,39 @@ export default function mountComponent(target) {
   }
   // --- Developer Logic ---
   
-    let count = 0;
-  
-    function increment() {
-      count += 1; queueUpdate({ count: true });
-    }
+      const section = "About";
   
   
 // --- Framework Context ---
   const ctx = {
-    get count() { return count; },
   };
   
 // --- DOM Creation ---
   function create(ctx) {
     const childComponents = [];
     const mountChildren = [];
-    const node_1 = document.createElement("div");
+    const node_1 = document.createElement("main");
     const node_2 = document.createTextNode("\n  ");
     node_1.appendChild(node_2);
-    const node_3 = document.createElement("button");
-    node_3.addEventListener("click", increment);
-    node_3.setAttribute("data-wizz-id", "1");
+    const node_3 = document.createElement("h1");
     node_1.appendChild(node_3);
-    const node_4 = document.createTextNode("Clicks: ");
+    const node_4 = document.createTextNode("The ");
     node_3.appendChild(node_4);
-    const node_5 = document.createTextNode(String(count));
+    const node_5 = document.createTextNode(String(section));
     node_3.appendChild(node_5);
-    const node_6 = document.createTextNode("\n");
-    node_1.appendChild(node_6);
+    const node_6 = document.createTextNode(" section!");
+    node_3.appendChild(node_6);
+    const node_7 = document.createTextNode("\n  ");
+    node_1.appendChild(node_7);
+    const node_8 = document.createElement("p");
+    node_1.appendChild(node_8);
+    const node_9 = document.createTextNode("Lets build something. How about a counter?");
+    node_8.appendChild(node_9);
+    const node_10 = document.createTextNode("\n  ");
+    node_1.appendChild(node_10);
+    mountChildren.push(() => childComponents.push(Counter(node_1)));
+    const node_12 = document.createTextNode("\n");
+    node_1.appendChild(node_12);
     node_1.__wizzChildComponents = childComponents;
     node_1.__wizzMountChildren = () => mountChildren.forEach((mount) => mount());
     return node_1;
@@ -41,10 +47,6 @@ export default function mountComponent(target) {
   
 // --- Reactivity Engine ---
   function update(ctx, changed) {
-    if (changed.count) {
-      const target_1 = document.querySelector('[data-wizz-id="1"]');
-      target_1.childNodes[1].nodeValue = String(count);
-    }
   }
   
 // --- Initialization ---
@@ -52,7 +54,7 @@ export default function mountComponent(target) {
   const childComponents = rootNode.__wizzChildComponents;
   target.appendChild(rootNode);
   rootNode.__wizzMountChildren();
-  update(ctx, { count: true });
+  update(ctx, {  });
   isMounted = true;
   
 return {

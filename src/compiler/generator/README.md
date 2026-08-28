@@ -151,6 +151,7 @@ For each supported node type, it emits:
 | AST node | Generated DOM operation |
 | --- | --- |
 | `Element` | `document.createElement(name)` plus attribute assignment |
+| Imported component tag | Invokes the imported component's mount function with its parent element |
 | `Text` | `document.createTextNode(value)` |
 | `Expression` | `document.createTextNode(String(expression))` |
 
@@ -159,6 +160,8 @@ Every generated child is appended to `parentVarName` immediately after creation.
 For attributes, a normal value produces `setAttribute(name, value)`. A parser-produced boolean attribute has `value: null` and produces `setAttribute(name, "")`, matching HTML's presence-based boolean attribute representation. An explicit event directive such as `on:click={handleClick}` emits `addEventListener("click", handleClick)` instead of an inline attribute, so the listener retains access to the component factory's local state and functions. Event directive values must currently be a single handler identifier.
 
 Names, text content, and attribute values are embedded with `JSON.stringify()`. That is important for correct generated JavaScript when source contains quotes, backslashes, or newlines; they are emitted as valid string literals rather than interpolated unsafely into source code.
+
+An imported component is recognized only when its tag name matches a default `.wizz` import from the component script, for example `import Counter from './Counter.wizz';` with `<Counter />`. The generated module moves this import to module scope and changes the specifier to `./Counter.js`. Component tags must be self-closing, nested in a native element, and have no attributes or children. Their mount results are retained so the parent component's `destroy()` can destroy each child before removing the parent root.
 
 Expressions create text nodes from `String(expression)` during initial DOM construction. This renders both reactive `let` values and non-reactive `const` values at mount time. `componentGenerator.js` still invokes `update()` once during mount so the reactive update path is exercised consistently.
 

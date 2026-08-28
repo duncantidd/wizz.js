@@ -1,0 +1,10 @@
+<script>
+    import Counter from '../components/Counter.wizz';
+    const section = "About";
+</script>
+
+<main>
+  <h1>The {section} section!</h1>
+  <p>Lets build something. How about a counter?</p>
+  <Counter />
+</main>

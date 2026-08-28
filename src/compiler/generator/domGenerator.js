@@ -6,12 +6,15 @@ const { CodeBuilder } = require('./codeBuilder');
  * @param {Object} templateAST - The enriched template AST.
  * @returns {string} The generated JavaScript string.
  */
-function generateCreateFunction(templateAST) {
+function generateCreateFunction(templateAST, componentImports = []) {
   const builder = new CodeBuilder();
   let nodeCounter = 0;
+  const importedComponents = new Set(componentImports.map((component) => component.name));
 
   builder.add('function create(ctx) {')
-        .indent();
+        .indent()
+      .add('const childComponents = [];')
+      .add('const mountChildren = [];');
 
   // A map to keep track of which JS variable name corresponds to which AST node
   const nodeVariables = new Map();
@@ -22,6 +25,17 @@ function generateCreateFunction(templateAST) {
     nodeVariables.set(node, varName);
 
     if (node.type === 'Element') {
+      if (importedComponents.has(node.name)) {
+        if (!parentVarName) {
+          throw new SyntaxError(`Component <${node.name}> must be nested inside an element.`);
+        }
+        if (node.attributes.length > 0 || node.children.length > 0) {
+          throw new SyntaxError(`Component <${node.name}> does not support attributes or children.`);
+        }
+        builder.add(`mountChildren.push(() => childComponents.push(${node.name}(${parentVarName})));`);
+        return null;
+      }
+
       builder.add(`const ${varName} = document.createElement(${JSON.stringify(node.name)});`);
 
       // Add attributes (including your data-wizz-id)
@@ -55,7 +69,7 @@ function generateCreateFunction(templateAST) {
     }
 
     // If this node has a parent, append it immediately
-    if (parentVarName) {
+    if (parentVarName && varName) {
       builder.add(`${parentVarName}.appendChild(${varName});`);
     }
 
@@ -76,7 +90,9 @@ function generateCreateFunction(templateAST) {
   }
   const rootVarName = walk(rootNode, null);
 
-  builder.add(`return ${rootVarName};`)
+    builder.add(`${rootVarName}.__wizzChildComponents = childComponents;`)
+      .add(`${rootVarName}.__wizzMountChildren = () => mountChildren.forEach((mount) => mount());`)
+      .add(`return ${rootVarName};`)
         .dedent()
         .add('}');
 

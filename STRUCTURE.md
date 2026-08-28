@@ -9,6 +9,7 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 │   └── dev.js                            Builds, serves dist, and watches .wizz source files
 ├── test.js                              End-to-end compilation example
 ├── test/
+│   ├── componentImports.test.js          Builds and mounts nested imported Wizz components
 │   ├── dev.test.js                       Development server and SPA fallback tests
 │   ├── endToEnd.test.js                 Compiles fixture components and executes them against a minimal DOM
 │   └── fixtures/                        Representative .wizz components loaded from disk by the e2e suite
@@ -25,6 +26,7 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 	  ├── prattParser.js            Expression token stream -> expression AST
 	  ├── integrator.js             Attaches expression ASTs to template nodes
 	  ├── extractor.js              Extracts and removes <script> from template AST
+	  ├── componentImportExtractor.js Extracts default .wizz imports from component scripts
 	  ├── stateScanner.js           Recognizes script declarations
 	  └── *.test.js                 Focused Node tests for each parser module
 	├── analyzer/                    2. Parser handoff -> reactive metadata

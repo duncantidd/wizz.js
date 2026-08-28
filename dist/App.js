@@ -33,6 +33,8 @@ export default function mountComponent(target) {
   
 // --- DOM Creation ---
   function create(ctx) {
+    const childComponents = [];
+    const mountChildren = [];
     const node_1 = document.createElement("main");
     const node_2 = document.createTextNode("\n  ");
     node_1.appendChild(node_2);
@@ -68,6 +70,8 @@ export default function mountComponent(target) {
     node_13.appendChild(node_15);
     const node_16 = document.createTextNode("\n");
     node_1.appendChild(node_16);
+    node_1.__wizzChildComponents = childComponents;
+    node_1.__wizzMountChildren = () => mountChildren.forEach((mount) => mount());
     return node_1;
   }
   
@@ -85,12 +89,15 @@ export default function mountComponent(target) {
   
 // --- Initialization ---
   const rootNode = create(ctx);
+  const childComponents = rootNode.__wizzChildComponents;
   target.appendChild(rootNode);
+  rootNode.__wizzMountChildren();
   update(ctx, { clicks: true, params: true, name: true });
   isMounted = true;
   
 return {
     destroy() {
+      childComponents.forEach((component) => component.destroy());
       target.removeChild(rootNode);
     }
   };
