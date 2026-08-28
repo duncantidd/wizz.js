@@ -54,6 +54,15 @@ test('tokenizes brace-delimited event directive values', () => {
   ]);
 });
 
+test('marks brace-delimited regular attributes as dynamic', () => {
+  const [token] = tokenize('<input value={name} checked={isSelected}>');
+
+  assert.deepEqual(token.attributes, [
+    { name: 'value', value: 'name', dynamic: true },
+    { name: 'checked', value: 'isSelected', dynamic: true }
+  ]);
+});
+
 test('reports malformed tags and expressions', () => {
   assert.throws(() => tokenize('<div'), /Unclosed tag at 1:5/);
   assert.throws(() => tokenize('{count'), /Unclosed expression at 1:7/);

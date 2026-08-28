@@ -101,7 +101,7 @@ The current implementation is intentionally small. Documentation should distingu
 | Area | Supported | Current boundary |
 | --- | --- | --- |
 | Elements | Named opening, closing, and self-closing tags | Tag names begin with a letter and continue with letters, digits, `:`, `_`, or `-`. |
-| Attributes | Boolean attributes, single- or double-quoted values, and brace-delimited directive values such as `on:click={handleClick}` | Brace-delimited values are currently used for directives; general dynamic attribute interpolation is not compiled yet. |
+| Attributes | Boolean attributes, single- or double-quoted values, event directives, and dynamic brace-delimited values such as `value={name}` | Dynamic values use the current expression grammar. Their reactive dependencies are analyzed like text interpolations. |
 | Interpolations | `{...}` in template text, nested braces, quotes, and escapes while locating the end brace | The expression grammar below determines which interpolation contents can be compiled. |
 | Expressions | Identifiers, integer literals, `+`, `-`, `*`, `/`, `.`, and parentheses | No strings, booleans, calls, arrays, objects, assignments, comparisons, optional chaining, or unary operators. |
 | Component imports | Default imports ending in `.wizz`, such as `import Counter from './Counter.wizz';` | Imported modules are rewritten to `.js` in generated output. Named, namespace, dynamic, and non-Wizz imports are outside this contract. |

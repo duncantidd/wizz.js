@@ -17,6 +17,21 @@ function generateUpdateFunction(templateAST) {
       const idAttr = node.attributes && node.attributes.find(attr => attr.name === 'data-wizz-id');
       const wizzId = idAttr ? idAttr.value : null;
 
+      for (const attribute of node.attributes || []) {
+        if (!attribute.dynamic || !attribute.dependencies?.length) continue;
+        for (const dependencyName of attribute.dependencies) {
+          builder.add(`if (changed.${dependencyName}) {`)
+            .indent()
+            .add(`const target_${wizzId} = document.querySelector('[data-wizz-id="${wizzId}"]');`);
+          if (['value', 'checked', 'disabled'].includes(attribute.name)) {
+            builder.add(`target_${wizzId}.${attribute.name} = ${attribute.value};`);
+          } else {
+            builder.add(`target_${wizzId}.setAttribute(${JSON.stringify(attribute.name)}, String(${attribute.value}));`);
+          }
+          builder.dedent().add('}');
+        }
+      }
+
       // 2. Iterate through children and track the exact index
       if (node.children && Array.isArray(node.children)) {
         node.children.forEach((child, childIndex) => {

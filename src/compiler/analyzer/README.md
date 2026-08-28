@@ -97,7 +97,7 @@ The current analyzer is intentionally conservative and works with the parser's p
 | `{title}` where `title` is `const` | `[]` | `const` declarations are currently non-reactive. |
 | Static text or ordinary elements | No `dependencies` property | Only parsed interpolation nodes participate in dependency tracking. |
 
-`assignNodeIds()` only marks an element when one of its **immediate children** is an expression with a non-empty dependency list. It does not mark ancestors merely because a descendant is reactive. For example, in `<section><div><p>{count}</p></div></section>`, only the `p` is assigned an ID.
+`assignNodeIds()` marks an element when one of its **immediate children** is a reactive expression or when it has a reactive dynamic attribute. It does not mark ancestors merely because a descendant is reactive. For example, in `<section><div><p>{count}</p></div></section>`, only the `p` is assigned an ID.
 
 ## Files
 
@@ -176,7 +176,7 @@ The current scope deliberately has several limits:
 
 - Dependency analysis handles the parser's `Identifier`, `BinaryExpression`, and `MemberExpression` nodes only. Adding expression grammar requires extending this visitor for any new AST node that can contain state references.
 - The parser's script scanner determines which declarations exist and which are reactive. It is not a full JavaScript semantic analyzer.
-- Dynamic attributes are not yet analyzed or assigned IDs. The inline design note in `idAssigner.js` identifies this as a future extension point.
+- Dynamic brace-valued attributes are analyzed using their parsed expression AST and receive an ID when they read reactive state.
 - An element is marked only for direct reactive expression children. Parent elements and elements containing only non-reactive expressions remain unmarked.
 - Existing `data-wizz-id` attributes are preserved. Because ID generation restarts from `1` for each call, callers should treat assignment as a one-time stage on a newly parsed payload rather than merge independently assigned AST fragments.
 

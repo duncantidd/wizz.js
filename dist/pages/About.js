@@ -37,9 +37,21 @@ export default function mountComponent(target) {
     node_8.appendChild(node_9);
     const node_10 = document.createTextNode("\n  ");
     node_1.appendChild(node_10);
+    if (section === 'About') {
+      const node_11 = document.createTextNode("\n    ");
+      node_1.appendChild(node_11);
+      const node_12 = document.createElement("p");
+      node_1.appendChild(node_12);
+      const node_13 = document.createTextNode("The counter will be rendered below");
+      node_12.appendChild(node_13);
+      const node_14 = document.createTextNode("\n  ");
+      node_1.appendChild(node_14);
+    }
+    const node_15 = document.createTextNode("\n  ");
+    node_1.appendChild(node_15);
     mountChildren.push(() => childComponents.push(Counter(node_1)));
-    const node_12 = document.createTextNode("\n");
-    node_1.appendChild(node_12);
+    const node_17 = document.createTextNode("\n");
+    node_1.appendChild(node_17);
     node_1.__wizzChildComponents = childComponents;
     node_1.__wizzMountChildren = () => mountChildren.forEach((mount) => mount());
     return node_1;

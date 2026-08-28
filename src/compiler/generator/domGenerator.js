@@ -20,6 +20,18 @@ function generateCreateFunction(templateAST, componentImports = []) {
   const nodeVariables = new Map();
 
   function walk(node, parentVarName) {
+    if (node.type === 'IfBlock') {
+      builder.add(`if (${node.test}) {`).indent();
+      node.consequent.forEach((child) => walk(child, parentVarName));
+      builder.dedent();
+      if (node.alternate) {
+        builder.add('} else {').indent();
+        node.alternate.forEach((child) => walk(child, parentVarName));
+        builder.dedent();
+      }
+      builder.add('}');
+      return null;
+    }
     nodeCounter++;
     const varName = `node_${nodeCounter}`;
     nodeVariables.set(node, varName);
@@ -41,6 +53,14 @@ function generateCreateFunction(templateAST, componentImports = []) {
       // Add attributes (including your data-wizz-id)
       if (node.attributes) {
         node.attributes.forEach(attr => {
+          if (attr.dynamic) {
+            if (['value', 'checked', 'disabled'].includes(attr.name)) {
+              builder.add(`${varName}.${attr.name} = ${attr.value};`);
+            } else {
+              builder.add(`${varName}.setAttribute(${JSON.stringify(attr.name)}, String(${attr.value}));`);
+            }
+            return;
+          }
           if (attr.name.startsWith('on:')) {
             const eventName = attr.name.slice(3);
             const handlerExpression = attr.value?.trim();

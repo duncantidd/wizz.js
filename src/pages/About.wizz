@@ -6,5 +6,8 @@
 <main>
   <h1>The {section} section!</h1>
   <p>Lets build something. How about a counter?</p>
+  {#if section === 'About'}
+    <p>The counter will be rendered below</p>
+  {/if}
   <Counter />
 </main>

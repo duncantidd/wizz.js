@@ -52,6 +52,28 @@ function lexExpression(input) {
       continue;
     }
 
+    if (char === '"' || char === "'") {
+      const start = position();
+      const quote = char;
+      let value = '';
+      advance();
+      while (current < input.length && input[current] !== quote) {
+        value += input[current];
+        advance();
+      }
+      if (input[current] !== quote) throw new SyntaxError(`Unclosed string at ${line}:${column}.`);
+      advance();
+      emit('String', value, start);
+      continue;
+    }
+
+    if (input.startsWith('===', current)) {
+      const start = position();
+      advance(); advance(); advance();
+      emit('===', '===', start);
+      continue;
+    }
+
     if (['+', '-', '*', '/', '.', '(', ')'].includes(char)) {
       const start = position();
       advance();

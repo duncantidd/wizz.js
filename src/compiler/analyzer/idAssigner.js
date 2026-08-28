@@ -17,12 +17,15 @@ function assignNodeIds(astPayload) {
         child.dependencies && 
         child.dependencies.length > 0
       );
+      const hasReactiveAttributes = node.attributes && node.attributes.some(attribute =>
+        attribute.dynamic && attribute.dependencies && attribute.dependencies.length > 0
+      );
 
       // (Note: Later, when I add support for dynamic attributes like `<div class={dynamicClass}>`, 
       // I would also check for reactive attributes here).
 
       // 2. If it is reactive, give it a unique ID so the generated JS can find it
-      if (hasReactiveChildren) {
+      if (hasReactiveChildren || hasReactiveAttributes) {
         // Ensure the attributes array exists (it should, based on your template parser)
         if (!node.attributes) node.attributes = [];
 

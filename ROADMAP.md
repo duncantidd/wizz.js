@@ -88,8 +88,8 @@ This roadmap orders work by dependency. Each milestone should have focused tests
 Suggested order:
 
 1. ~~More event directives and event arguments.~~
-2. Dynamic attributes and properties.
-3. Conditional rendering.
+2. ~~Dynamic attributes and properties.~~
+3. ~~Conditional rendering.~~
 4. Lists and keyed reconciliation semantics.
 5. ~~Component imports and nested components.~~
 6. Lifecycle hooks, cleanup, and scheduler batching.

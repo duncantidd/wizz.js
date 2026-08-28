@@ -51,6 +51,12 @@ Event directives use native browser event names and accept either a component-lo
 
 The directive expression is emitted as the listener passed to `addEventListener()`.
 
+Dynamic attributes use brace-delimited expressions. Wizz updates `value`, `checked`, and `disabled` as DOM properties; all other dynamic names are updated as HTML attributes:
+
+```wizz
+<input value={name} checked={isSelected} aria-label={name} />
+```
+
 ## Compile Components
 
 Place components below an input directory, then compile the whole directory into a separate output directory:

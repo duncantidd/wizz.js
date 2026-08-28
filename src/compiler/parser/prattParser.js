@@ -1,5 +1,6 @@
 const PRECEDENCE = {
   'EOF': 0,
+  '===': 5,
   '+': 10,
   '-': 10,
   '*': 20,
@@ -25,6 +26,7 @@ function parseExpression(tokens) {
   const prefixParselets = {
     'Identifier': (token) => ({ type: 'Identifier', name: token.value }),
     'Number': (token) => ({ type: 'Literal', value: token.value }),
+    'String': (token) => ({ type: 'Literal', value: token.value }),
     '(': () => {
       const expr = parse(0);
       const closingToken = advance();
@@ -36,6 +38,7 @@ function parseExpression(tokens) {
   };
 
   const infixParselets = {
+    '===': (left) => ({ type: 'BinaryExpression', operator: '===', left, right: parse(PRECEDENCE['===']) }),
     '+': (left, token) => ({ type: 'BinaryExpression', operator: '+', left, right: parse(PRECEDENCE['+']) }),
     '-': (left, token) => ({ type: 'BinaryExpression', operator: '-', left, right: parse(PRECEDENCE['-']) }),
     '*': (left, token) => ({ type: 'BinaryExpression', operator: '*', left, right: parse(PRECEDENCE['*']) }),

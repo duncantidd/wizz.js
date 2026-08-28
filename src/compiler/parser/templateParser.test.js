@@ -82,3 +82,13 @@ test('rejects unsupported tokens instead of discarding them', () => {
     /Unsupported token type 'Comment' at 2:4\./
   );
 });
+
+test('parses if blocks with an optional else branch', () => {
+  const root = parseTemplate(tokenize("<main>{#if section === 'About'}<p>About</p>{:else}<p>Other</p>{/if}</main>"));
+  const block = root.children[0].children[0];
+
+  assert.equal(block.type, 'IfBlock');
+  assert.equal(block.test, "section === 'About'");
+  assert.equal(block.consequent[0].name, 'p');
+  assert.equal(block.alternate[0].name, 'p');
+});
