@@ -65,7 +65,7 @@ test('the document shell supplies #app and loads only the emitted runtime entry'
   const documentShell = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 
   assert.match(documentShell, /<div id="app"><\/div>/);
-  assert.match(documentShell, /<script type="module" src="\/dist\/runtime\/main\.js"><\/script>/);
+  assert.match(documentShell, /<script type="module" src="\/runtime\/main\.js"><\/script>/);
   assert.doesNotMatch(documentShell, /import mountComponent/);
 });
 

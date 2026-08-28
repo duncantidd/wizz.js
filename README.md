@@ -97,10 +97,12 @@ The router also exposes `navigate(pathname)`, which updates browser history with
 Serve the directory over HTTP when loading browser ES modules, for example:
 
 ```bash
-python3 -m http.server
+node scripts/dev.js
 ```
 
-Then open the printed local URL in a browser.
+The development command builds `src` into `dist`, copies `index.html` and `App.css` into the output directory, serves it at `http://localhost:3000`, and watches `.wizz` files for changes. It reports compiler errors while keeping the server available for subsequent fixes.
+
+Requests for browser routes such as `http://localhost:3000/Home` receive the document shell, allowing the client router to select the matching component. Existing output files such as `/runtime/main.js` and `/pages/Home.js` are served directly; missing asset paths return HTTP 404.
 
 ## Compiler Errors
 

@@ -5,8 +5,11 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 ```text
 .
 ├── STRUCTURE.md                         Project map and compiler pipeline
+├── scripts/
+│   └── dev.js                            Builds, serves dist, and watches .wizz source files
 ├── test.js                              End-to-end compilation example
 ├── test/
+│   ├── dev.test.js                       Development server and SPA fallback tests
 │   ├── endToEnd.test.js                 Compiles fixture components and executes them against a minimal DOM
 │   └── fixtures/                        Representative .wizz components loaded from disk by the e2e suite
 └── src/
@@ -45,6 +48,8 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 `src/compiler/index.test.js` and `src/compiler/errorAugmenter.test.js` hold the focused Node tests for the public `compile()` contract and its file-path error behavior.
 
 `src/runtime/main.js` and `src/runtime/router.js` are copied to `dist/runtime/` by `build.js`. The entry module defines an explicit route table, finds `<div id="app"></div>`, and starts the router. The router dynamically imports the component for the current path, destroys the previously mounted component before replacement, renders a not-found view for unmatched paths, and rerenders after history navigation. The document shell loads the entry module rather than importing an application component itself.
+
+`node scripts/dev.js` runs a project build for `src` into `dist`, copies the document shell and stylesheet into `dist`, serves that directory at `http://localhost:3000`, and watches `.wizz` files for full rebuilds. It returns `index.html` for unknown extensionless paths so client-side routes can load directly, while missing asset paths return HTTP 404.
 
 The generated component module contains its own small `create()` and `update()` functions, alongside the component author's script and a `destroy()` API.
 

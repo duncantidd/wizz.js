@@ -11,9 +11,21 @@ export default function mountComponent(target) {
   
 // --- DOM Creation ---
   function create(ctx) {
-    const node_1 = document.createElement("h1");
-    const node_2 = document.createTextNode("This is the Home section");
+    const node_1 = document.createElement("main");
+    const node_2 = document.createTextNode("\n  ");
     node_1.appendChild(node_2);
+    const node_3 = document.createElement("h1");
+    node_1.appendChild(node_3);
+    const node_4 = document.createTextNode("The Home section!");
+    node_3.appendChild(node_4);
+    const node_5 = document.createTextNode("\n  ");
+    node_1.appendChild(node_5);
+    const node_6 = document.createElement("p");
+    node_1.appendChild(node_6);
+    const node_7 = document.createTextNode("Lets build something.");
+    node_6.appendChild(node_7);
+    const node_8 = document.createTextNode("\n");
+    node_1.appendChild(node_8);
     return node_1;
   }
   

@@ -1,1 +1,4 @@
-<h1>This is the Home section</h1>
+<main>
+  <h1>The Home section!</h1>
+  <p>Lets build something.</p>
+</main>
