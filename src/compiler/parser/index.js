@@ -2,6 +2,7 @@ const { tokenize } = require('./tokenizer.js');
 const { parseTemplate } = require('./templateParser.js');
 const { integrateExpressions } = require('./integrator.js');
 const { extractScriptBlock } = require('./extractor.js');
+const { extractComponentImports } = require('./componentImportExtractor.js');
 const { scanState } = require('./stateScanner.js');
 
 /**
@@ -25,15 +26,17 @@ function parseComponent(source) {
 
   // 4. Extract the <script> block and remove its node from the visual DOM tree 
   const scriptContent = extractScriptBlock(integratedTemplateAST);
+  const { imports, script } = extractComponentImports(scriptContent);
 
   // 5. Scan the extracted script for state and logic 
-  const scriptDeclarations = scanState(scriptContent);
+  const scriptDeclarations = scanState(script);
 
   // 6. Return the Final Handoff Object 
   return {
     template: integratedTemplateAST,
     script: scriptDeclarations,
-    rawScript: scriptContent || '' // <-- NEW ADDITION: Pass the raw string down the pipeline
+    rawScript: script || '',
+    imports
   };
 }
 

@@ -62,6 +62,25 @@ function parseTemplate(tokens) {
       }
 
       case 'Expression': {
+        const directive = token.value.trim();
+        if (directive.startsWith('#if ')) {
+          const block = { type: 'IfBlock', test: directive.slice(4).trim(), consequent: [], alternate: null, children: [] };
+          currentParent.children.push(block);
+          stack.push(block);
+          block.children = block.consequent;
+          break;
+        }
+        if (directive === ':else') {
+          if (currentParent.type !== 'IfBlock') throw new SyntaxError('Unexpected {:else}.');
+          currentParent.alternate = [];
+          currentParent.children = currentParent.alternate;
+          break;
+        }
+        if (directive === '/if') {
+          if (currentParent.type !== 'IfBlock') throw new SyntaxError('Unexpected {/if}.');
+          stack.pop();
+          break;
+        }
         currentParent.children.push({
           type: 'Expression',
           value: token.value, // We will hand this raw string to the Pratt Parser later

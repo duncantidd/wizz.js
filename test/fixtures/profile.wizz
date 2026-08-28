@@ -1,0 +1,16 @@
+<script>
+  let user = { name: "Ada" };
+  let visits = 0;
+  const siteTitle = "Dashboard";
+
+  function recordVisit() {
+    visits += 1;
+    user.name = "Grace";
+  }
+</script>
+
+<section>
+  <h2>{user.name}</h2>
+  <p>{siteTitle}: {visits}</p>
+  <button on:click={recordVisit}>Record {visits}</button>
+</section>

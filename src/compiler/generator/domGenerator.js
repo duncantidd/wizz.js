@@ -6,37 +6,71 @@ const { CodeBuilder } = require('./codeBuilder');
  * @param {Object} templateAST - The enriched template AST.
  * @returns {string} The generated JavaScript string.
  */
-function generateCreateFunction(templateAST) {
+function generateCreateFunction(templateAST, componentImports = []) {
   const builder = new CodeBuilder();
   let nodeCounter = 0;
+  const importedComponents = new Set(componentImports.map((component) => component.name));
 
   builder.add('function create(ctx) {')
-        .indent();
+        .indent()
+      .add('const childComponents = [];')
+      .add('const mountChildren = [];');
 
   // A map to keep track of which JS variable name corresponds to which AST node
   const nodeVariables = new Map();
 
   function walk(node, parentVarName) {
+    if (node.type === 'IfBlock') {
+      builder.add(`if (${node.test}) {`).indent();
+      node.consequent.forEach((child) => walk(child, parentVarName));
+      builder.dedent();
+      if (node.alternate) {
+        builder.add('} else {').indent();
+        node.alternate.forEach((child) => walk(child, parentVarName));
+        builder.dedent();
+      }
+      builder.add('}');
+      return null;
+    }
     nodeCounter++;
     const varName = `node_${nodeCounter}`;
     nodeVariables.set(node, varName);
 
     if (node.type === 'Element') {
+      if (importedComponents.has(node.name)) {
+        if (!parentVarName) {
+          throw new SyntaxError(`Component <${node.name}> must be nested inside an element.`);
+        }
+        if (node.attributes.length > 0 || node.children.length > 0) {
+          throw new SyntaxError(`Component <${node.name}> does not support attributes or children.`);
+        }
+        builder.add(`mountChildren.push(() => childComponents.push(${node.name}(${parentVarName})));`);
+        return null;
+      }
+
       builder.add(`const ${varName} = document.createElement(${JSON.stringify(node.name)});`);
 
       // Add attributes (including your data-wizz-id)
       if (node.attributes) {
         node.attributes.forEach(attr => {
+          if (attr.dynamic) {
+            if (['value', 'checked', 'disabled'].includes(attr.name)) {
+              builder.add(`${varName}.${attr.name} = ${attr.value};`);
+            } else {
+              builder.add(`${varName}.setAttribute(${JSON.stringify(attr.name)}, String(${attr.value}));`);
+            }
+            return;
+          }
           if (attr.name.startsWith('on:')) {
             const eventName = attr.name.slice(3);
-            const handlerName = attr.value?.trim();
+            const handlerExpression = attr.value?.trim();
             if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(eventName)) {
               throw new SyntaxError(`Invalid event directive '${attr.name}'.`);
             }
-            if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(handlerName)) {
-              throw new SyntaxError(`Event directive '${attr.name}' requires a handler identifier.`);
+            if (!handlerExpression) {
+              throw new SyntaxError(`Event directive '${attr.name}' requires a handler expression.`);
             }
-            builder.add(`${varName}.addEventListener(${JSON.stringify(eventName)}, ${handlerName});`);
+            builder.add(`${varName}.addEventListener(${JSON.stringify(eventName)}, ${handlerExpression});`);
             return;
           }
 
@@ -55,7 +89,7 @@ function generateCreateFunction(templateAST) {
     }
 
     // If this node has a parent, append it immediately
-    if (parentVarName) {
+    if (parentVarName && varName) {
       builder.add(`${parentVarName}.appendChild(${varName});`);
     }
 
@@ -76,7 +110,9 @@ function generateCreateFunction(templateAST) {
   }
   const rootVarName = walk(rootNode, null);
 
-  builder.add(`return ${rootVarName};`)
+    builder.add(`${rootVarName}.__wizzChildComponents = childComponents;`)
+      .add(`${rootVarName}.__wizzMountChildren = () => mountChildren.forEach((mount) => mount());`)
+      .add(`return ${rootVarName};`)
         .dedent()
         .add('}');
 

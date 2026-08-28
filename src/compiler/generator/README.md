@@ -151,14 +151,17 @@ For each supported node type, it emits:
 | AST node | Generated DOM operation |
 | --- | --- |
 | `Element` | `document.createElement(name)` plus attribute assignment |
+| Imported component tag | Invokes the imported component's mount function with its parent element |
 | `Text` | `document.createTextNode(value)` |
 | `Expression` | `document.createTextNode(String(expression))` |
 
 Every generated child is appended to `parentVarName` immediately after creation. The recursive traversal then creates descendants in source order. This produces the same child-node indexing that `updateGenerator.js` later uses for reactive text updates.
 
-For attributes, a normal value produces `setAttribute(name, value)`. A parser-produced boolean attribute has `value: null` and produces `setAttribute(name, "")`, matching HTML's presence-based boolean attribute representation. An explicit event directive such as `on:click={handleClick}` emits `addEventListener("click", handleClick)` instead of an inline attribute, so the listener retains access to the component factory's local state and functions. Event directive values must currently be a single handler identifier.
+For attributes, a normal value produces `setAttribute(name, value)`. A parser-produced boolean attribute has `value: null` and produces `setAttribute(name, "")`, matching HTML's presence-based boolean attribute representation. Dynamic values such as `value={name}` are evaluated during creation and on every change to their reactive dependencies. `value`, `checked`, and `disabled` are assigned as DOM properties; other dynamic names are assigned with `setAttribute()`. An explicit event directive such as `on:click={handleClick}` emits `addEventListener("click", handleClick)` instead of an inline attribute, so the listener retains access to the component factory's local state and functions. Event directive values may be any non-empty JavaScript listener expression, including an arrow function that receives the native event: `on:click={(event) => increment(event.detail)}`. The generator embeds this expression directly as the listener; it does not parse or transform its JavaScript.
 
 Names, text content, and attribute values are embedded with `JSON.stringify()`. That is important for correct generated JavaScript when source contains quotes, backslashes, or newlines; they are emitted as valid string literals rather than interpolated unsafely into source code.
+
+An imported component is recognized only when its tag name matches a default `.wizz` import from the component script, for example `import Counter from './Counter.wizz';` with `<Counter />`. The generated module moves this import to module scope and changes the specifier to `./Counter.js`. Component tags must be self-closing, nested in a native element, and have no attributes or children. Their mount results are retained so the parent component's `destroy()` can destroy each child before removing the parent root.
 
 Expressions create text nodes from `String(expression)` during initial DOM construction. This renders both reactive `let` values and non-reactive `const` values at mount time. `componentGenerator.js` still invokes `update()` once during mount so the reactive update path is exercised consistently.
 
@@ -204,9 +207,9 @@ count += 1;
 count += 1; queueUpdate({ count: true });
 ```
 
-It uses a small stateful scanner instead of a regular expression over the entire script. The scanner skips single-quoted strings, double-quoted strings, template literals, line comments, and block comments, so text that merely resembles an assignment is not rewritten. It supports direct and property mutations using `=`, compound arithmetic assignment operators, `++`, and `--`, and preserves the original assignment text rather than reconstructing its whitespace. The component wrapper provides `queueUpdate()` before executing developer logic; it calls `update()` only after initial mounting completes. This makes initialization assignments safe because DOM creation reads their final values directly.
+It uses a small stateful scanner instead of a regular expression over the entire script. The scanner skips single-quoted strings, double-quoted strings, template literals, line comments, block comments, and slash-delimited regions, so text that merely resembles an assignment is never rewritten. Treating every non-comment slash as opaque can miss mutations in complex division expressions, but avoids inspecting or corrupting regular expression literals. Rewrites are only attempted at statement level, outside `(` and `[` nesting; for-loop headers, arrow-function default parameters, and unbraced control-flow bodies are left untouched. It supports direct and property mutations using `=`, compound arithmetic assignment operators, `++`, and `--`, and preserves the original assignment text rather than reconstructing its whitespace. Braces are deliberately not treated as nesting: function and block bodies are legitimate statement-level mutation sites, and telling them apart from object literals would require parsing. The component wrapper provides `queueUpdate()` before executing developer logic; it calls `update()` only after initial mounting completes. This makes initialization assignments safe because DOM creation reads their final values directly.
 
-The current contract is intentionally narrow: only semicolon-terminated mutations are intercepted, and template-literal contents are skipped as a protected region. This is safer than treating unrestricted JavaScript as a regular language, while leaving a clear future path to a full JavaScript AST transform when broader language coverage is needed.
+The scanner is deliberately scoped and is not a JavaScript parser, and nothing in the compiler should represent it as one. Its limits are part of its contract: statements that omit semicolons, mutations nested inside parentheses, unbraced control-flow bodies, and mutations in slash-delimited regions pass through untouched. Unrecognized syntax is preserved untransformed rather than approximated — a missed interception is acceptable, corrupted output is not. Broader language coverage should come from replacing this module with a syntax-aware JavaScript transform, as planned in the production-hardening milestone, not from widening these heuristics.
 
 ### `componentGenerator.js` - Mountable ES Module Emitter
 
@@ -231,12 +234,12 @@ The initial `changed` object is derived from reactive script declarations, for e
 The generated output is intentionally small and uses direct DOM APIs. Its current behavior has a few boundaries that future work should address deliberately:
 
 - Components must have at least one top-level element. Root-level formatting text is ignored, and additional top-level elements are not mounted because creation selects the first root element.
-- Dynamic expressions are supported only as direct text-node children of elements. Dynamic attributes are not generated yet.
-- Explicit event directives use `on:<event>={handler}` and compile to native `addEventListener()` bindings. Their handler value is currently limited to one component-local identifier; inline event attributes and arbitrary expressions are not supported.
+- Dynamic expressions are supported as direct text-node children and as brace-valued attributes. `value`, `checked`, and `disabled` use property assignment; other dynamic attributes use HTML attributes.
+- Explicit event directives use `on:<event>={handler}` and compile to native `addEventListener()` bindings. A handler may be a component-local identifier or any non-empty JavaScript listener expression, such as `(event) => increment(event.detail)`. Inline event attributes are not supported.
 - Generated updates assume the analyzer gave every reactive expression's parent element a `data-wizz-id`. Skipping `assignNodeIds()` can yield a lookup for `data-wizz-id="null"` if dependencies are present without an ID.
 - The update function queries the document each time a dependency changes and assumes the target still exists. The current output has no null-target guard or caching layer.
 - Repeated dependencies generate separate guards by expression dependency, which is correct but not batched or scheduled. Runtime scheduling is outside this directory's current scope.
-- The emitted developer script must be valid JavaScript in the component factory context. The current interceptor only rewrites semicolon-terminated mutations outside protected strings, comments, and template literals; it is not a complete JavaScript parser or sandbox.
+- The emitted developer script must be valid JavaScript in the component factory context. The current interceptor only rewrites semicolon-terminated statement-level mutations outside protected strings, comments, template literals, and regular expression literals; it is not a complete JavaScript parser or sandbox.
 - `destroy()` removes the generated root from the provided target. Native event listeners become unreachable with their removed nodes, but lifecycle hooks and explicit listener cleanup are not emitted yet.
 
 ## Tests

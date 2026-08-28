@@ -33,6 +33,8 @@ export default function mountComponent(target) {
   
 // --- DOM Creation ---
   function create(ctx) {
+    const childComponents = [];
+    const mountChildren = [];
     const node_1 = document.createElement("main");
     const node_2 = document.createTextNode("\n  ");
     node_1.appendChild(node_2);
@@ -54,7 +56,7 @@ export default function mountComponent(target) {
     node_1.appendChild(node_9);
     const node_10 = document.createElement("p");
     node_1.appendChild(node_10);
-    const node_11 = document.createTextNode("Zero dependencies. 100% compiled. Fuck Tailwind and write your own css");
+    const node_11 = document.createTextNode("Zero dependencies. 100% compiled.");
     node_10.appendChild(node_11);
     const node_12 = document.createTextNode("\n  ");
     node_1.appendChild(node_12);
@@ -68,6 +70,8 @@ export default function mountComponent(target) {
     node_13.appendChild(node_15);
     const node_16 = document.createTextNode("\n");
     node_1.appendChild(node_16);
+    node_1.__wizzChildComponents = childComponents;
+    node_1.__wizzMountChildren = () => mountChildren.forEach((mount) => mount());
     return node_1;
   }
   
@@ -85,12 +89,15 @@ export default function mountComponent(target) {
   
 // --- Initialization ---
   const rootNode = create(ctx);
+  const childComponents = rootNode.__wizzChildComponents;
   target.appendChild(rootNode);
+  rootNode.__wizzMountChildren();
   update(ctx, { clicks: true, params: true, name: true });
   isMounted = true;
   
 return {
     destroy() {
+      childComponents.forEach((component) => component.destroy());
       target.removeChild(rootNode);
     }
   };

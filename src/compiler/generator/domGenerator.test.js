@@ -94,18 +94,32 @@ test('emits event directives as DOM listeners rather than inline attributes', ()
   assert.doesNotMatch(source, /setAttribute\("on:click"/);
 });
 
-test('rejects event directives without a handler identifier', () => {
+test('emits event handler expressions with arguments', () => {
+  const source = generateCreateFunction({
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'button',
+      attributes: [{ name: 'on:click', value: '(event) => increment(event.detail)' }],
+      children: []
+    }]
+  });
+
+  assert.match(source, /addEventListener\("click", \(event\) => increment\(event\.detail\)\)/);
+});
+
+test('rejects event directives without a handler expression', () => {
   assert.throws(
     () => generateCreateFunction({
       type: 'Root',
       children: [{
         type: 'Element',
         name: 'button',
-        attributes: [{ name: 'on:click', value: 'handleClick()' }],
+        attributes: [{ name: 'on:click', value: '   ' }],
         children: []
       }]
     }),
-    /Event directive 'on:click' requires a handler identifier\./
+    /Event directive 'on:click' requires a handler expression\./
   );
 });
 

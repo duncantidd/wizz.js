@@ -49,6 +49,14 @@ function analyzeDependencies(astPayload) {
       node.dependencies = Array.from(deps);
     }
 
+    if (node.type === 'Element') {
+      for (const attribute of node.attributes || []) {
+        if (attribute.dynamic && attribute.expressionAST) {
+          attribute.dependencies = Array.from(extractIdentifiers(attribute.expressionAST));
+        }
+      }
+    }
+
     if (node.children && Array.isArray(node.children)) {
       for (let i = 0; i < node.children.length; i++) {
         walkTemplate(node.children[i]);

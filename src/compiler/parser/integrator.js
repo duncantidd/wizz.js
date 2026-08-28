@@ -38,6 +38,28 @@ function integrateExpressions(node) {
     }
   }
 
+  if (node.type === 'Element') {
+    for (const attribute of node.attributes || []) {
+      if (!attribute.dynamic) continue;
+      try {
+        attribute.expressionAST = parseExpression(lexExpression(attribute.value));
+      } catch (error) {
+        throw new SyntaxError(`Dynamic attribute '${attribute.name}' must contain a supported expression.`);
+      }
+    }
+  }
+
+  if (node.type === 'IfBlock') {
+    try {
+      node.testAST = parseExpression(lexExpression(node.test));
+    } catch {
+      throw new SyntaxError('Conditional expression must contain a supported expression.');
+    }
+    node.consequent.forEach(integrateExpressions);
+    node.alternate?.forEach(integrateExpressions);
+    return node;
+  }
+
   // 2. Recursive Step: If the node has children, walk through all of them
   if (node.children && Array.isArray(node.children)) {
     for (let i = 0; i < node.children.length; i++) {

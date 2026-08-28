@@ -35,6 +35,25 @@ function skipTemplateLiteral(source, start) {
   return current;
 }
 
+function skipRegexLiteral(source, start) {
+  let current = start + 1;
+  let inCharacterClass = false;
+
+  while (current < source.length) {
+    const char = source[current];
+    if (char === '\\') current += 2;
+    else {
+      if (char === '[') inCharacterClass = true;
+      else if (char === ']') inCharacterClass = false;
+      else if (char === '/' && !inCharacterClass) return current + 1;
+      current += 1;
+    }
+  }
+
+  // Unterminated: consume only the slash so the scan can continue.
+  return start + 1;
+}
+
 function skipProtectedRegion(source, current) {
   const char = source[current];
 
@@ -113,16 +132,44 @@ function mutationOperatorAt(source, current) {
   return null;
 }
 
+function isBareControlFlowBody(source, start) {
+  const prefix = source.slice(0, start);
+
+  return /\b(?:else|do)\s*$/.test(prefix)
+    || /\b(?:if|for|while|with)\s*\([^{};]*\)\s*$/.test(prefix);
+}
+
+function skipProtectedValue(source, current, previousSignificant) {
+  const char = source[current];
+
+  if (char === '"' || char === "'" || char === '`') {
+    const end = char === '`' ? skipTemplateLiteral(source, current) : skipQuotedString(source, current, char);
+    return { end, significant: char };
+  }
+  if (char === '/' && (source[current + 1] === '/' || source[current + 1] === '*')) {
+    // Comments are not significant: what preceded them still applies.
+    return { end: skipComment(source, current), significant: previousSignificant };
+  }
+  if (char === '/') {
+    return { end: skipRegexLiteral(source, current), significant: '/' };
+  }
+
+  return null;
+}
+
 function findStatementEnd(source, start) {
   let current = start;
   let parentheses = 0;
   let brackets = 0;
   let braces = 0;
+  let previousSignificant = '';
 
   while (current < source.length) {
     const char = source[current];
-    if (char === '"' || char === "'" || char === '`' || (char === '/' && (source[current + 1] === '/' || source[current + 1] === '*'))) {
-      current = skipProtectedRegion(source, current);
+    const protectedRegion = skipProtectedValue(source, current, previousSignificant);
+    if (protectedRegion) {
+      current = protectedRegion.end;
+      previousSignificant = protectedRegion.significant;
       continue;
     }
     if (char === '(') parentheses += 1;
@@ -132,6 +179,7 @@ function findStatementEnd(source, start) {
     else if (char === '{') braces += 1;
     else if (char === '}') braces -= 1;
     else if (char === ';' && parentheses === 0 && brackets === 0 && braces === 0) return current + 1;
+    if (!/\s/.test(char)) previousSignificant = char;
     current += 1;
   }
 
@@ -178,7 +226,14 @@ function findPrefixMutation(source, start, reactiveVars) {
 
 /**
  * Rewrites semicolon-terminated reactive mutations to notify the component update dispatcher.
- * Strings, comments, and template literals are preserved without inspection.
+ * Strings, template literals, comments, and regular expression literals are preserved without
+ * inspection, and rewrites are attempted only at statement level, outside `(` and `[` nesting,
+ * so for-loop headers and default parameters are never rewritten.
+ *
+ * This scanner is deliberately scoped and is not a JavaScript parser. Statements that omit
+ * semicolons, mutations nested inside parentheses, and unrecognized syntax pass through
+ * untransformed rather than being approximated; broader coverage should replace this module
+ * with a syntax-aware JavaScript transform, not widen these heuristics.
  * @param {string} rawScript - The raw JavaScript string from the <script> block.
  * @param {Array<string>} reactiveVars - Reactive variable names.
  * @returns {string} The rewritten JavaScript string.
@@ -189,23 +244,38 @@ function interceptAssignments(rawScript, reactiveVars) {
   const reactiveNames = new Set(reactiveVars);
   let output = '';
   let current = 0;
+  let nestingDepth = 0;
+  let previousSignificant = '';
 
   while (current < rawScript.length) {
     const char = rawScript[current];
-    if (char === '"' || char === "'" || char === '`' || (char === '/' && (rawScript[current + 1] === '/' || rawScript[current + 1] === '*'))) {
-      const end = skipProtectedRegion(rawScript, current);
-      output += rawScript.slice(current, end);
-      current = end;
+
+    const protectedRegion = skipProtectedValue(rawScript, current, previousSignificant);
+    if (protectedRegion) {
+      output += rawScript.slice(current, protectedRegion.end);
+      current = protectedRegion.end;
+      previousSignificant = protectedRegion.significant;
       continue;
     }
 
-    const mutation = findPrefixMutation(rawScript, current, reactiveNames)
-      || findMutation(rawScript, current, reactiveNames);
-    if (mutation) {
-      output += rawScript.slice(current, mutation.statementEnd);
-      output += ` queueUpdate({ ${mutation.variableName}: true });`;
-      current = mutation.statementEnd;
-      continue;
+    // Braces are deliberately not counted: function and block bodies are legitimate
+    // statement-level mutation sites, and telling them apart from object literals
+    // would require parsing.
+    if (char === '(' || char === '[') nestingDepth += 1;
+    else if ((char === ')' || char === ']') && nestingDepth > 0) nestingDepth -= 1;
+
+    if (!/\s/.test(char)) previousSignificant = char;
+
+    if (nestingDepth === 0 && !isBareControlFlowBody(rawScript, current)) {
+      const mutation = findPrefixMutation(rawScript, current, reactiveNames)
+        || findMutation(rawScript, current, reactiveNames);
+      if (mutation) {
+        output += rawScript.slice(current, mutation.statementEnd);
+        output += ` queueUpdate({ ${mutation.variableName}: true });`;
+        current = mutation.statementEnd;
+        previousSignificant = ';';
+        continue;
+      }
     }
 
     output += char;

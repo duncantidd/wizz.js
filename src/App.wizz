@@ -20,6 +20,6 @@
 
 <main>
   <h1 on:click={clickme}>Hello {name} Welcome to {frameworkName}!</h1>
-  <p>Zero dependencies. 100% compiled. Fuck Tailwind and write your own css</p>
+  <p>Zero dependencies. 100% compiled.</p>
   <button on:click={handleClick}>Clicks: {clicks}</button>
 </main>

@@ -169,3 +169,68 @@ test('binds explicit event directives to component-local handlers', () => {
   assert.equal(button.attributes['on:click'], undefined);
   assert.equal(button.childNodes[1].nodeValue, '1');
 });
+
+test('updates dynamic attributes and properties when reactive state changes', () => {
+  const payload = assignNodeIds(analyzeDependencies(parseComponent(
+    '<script>let name = "Ada"; let selected = 1; function applyChanges() { name = "Grace"; selected = 0; }</script><input value={name} checked={selected} aria-label={name} on:click={applyChanges} />'
+  )));
+  const source = generateComponent(payload);
+  const document = createDocument();
+  const target = {
+    childNodes: [],
+    appendChild(node) { this.childNodes.push(node); },
+    removeChild(node) { this.childNodes.splice(this.childNodes.indexOf(node), 1); }
+  };
+  const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
+  mountComponent(target);
+
+  const input = target.childNodes[0];
+  assert.equal(input.value, 'Ada');
+  assert.equal(input.checked, 1);
+  assert.equal(input.attributes['aria-label'], 'Ada');
+  input.dispatchEvent('click');
+  assert.equal(input.value, 'Grace');
+  assert.equal(input.checked, 0);
+  assert.equal(input.attributes['aria-label'], 'Grace');
+});
+
+test('renders the selected conditional branch during mounting', () => {
+  const payload = assignNodeIds(analyzeDependencies(parseComponent(
+    "<script>const section = 'About';</script><main>{#if section === 'About'}<p>Shown</p>{:else}<p>Hidden</p>{/if}</main>"
+  )));
+  const source = generateComponent(payload);
+  const document = createDocument();
+  const target = { childNodes: [], appendChild(node) { this.childNodes.push(node); }, removeChild() {} };
+  const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
+  mountComponent(target);
+  assert.equal(target.childNodes[0].childNodes[0].childNodes[0].nodeValue, 'Shown');
+});
+
+test('emits top-level component imports and mounts imported self-closing components', () => {
+  const payload = assignNodeIds(analyzeDependencies(parseComponent(
+    "<script>import Counter from './Counter.wizz';</script><main><Counter /></main>"
+  )));
+  const source = generateComponent(payload);
+
+  assert.match(source, /^import Counter from "\.\/Counter\.js";/);
+  assert.match(source, /mountChildren\.push\(\(\) => childComponents\.push\(Counter\(node_1\)\)\);/);
+  assert.match(
+    source,
+    /target\.appendChild\(rootNode\);\n  rootNode\.__wizzMountChildren\(\);\n  update\(ctx, \{  \}\);/
+  );
+  assert.match(source, /childComponents\.forEach\(\(component\) => component\.destroy\(\)\);/);
+  assert.doesNotMatch(source, /document\.createElement\("Counter"\)/);
+});
+
+test('rejects component attributes, children, and root-level component tags', () => {
+  const generate = (template) => generateComponent(assignNodeIds(analyzeDependencies(parseComponent(template))));
+
+  assert.throws(
+    () => generate("<script>import Counter from './Counter.wizz';</script><main><Counter label=\"Count\" /></main>"),
+    /Component <Counter> does not support attributes or children\./
+  );
+  assert.throws(
+    () => generate("<script>import Counter from './Counter.wizz';</script><Counter />"),
+    /Component <Counter> must be nested inside an element\./
+  );
+});

@@ -1,0 +1,4 @@
+<article>
+  <h3>Plain component</h3>
+  <p>No state, no updates.</p>
+</article>

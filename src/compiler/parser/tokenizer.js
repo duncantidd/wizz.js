@@ -35,6 +35,7 @@ function tokenize(input) {
   let attributes = [];
   let attributeName = '';
   let attributeValue = null;
+  let attributeIsDynamic = false;
   let quote = null;
   let expressionDepth = 0;
   let tagLocation = null;
@@ -82,9 +83,14 @@ function tokenize(input) {
     });
   };
   const commitAttribute = () => {
-    attributes.push({ name: attributeName, value: attributeValue });
+    attributes.push({
+      name: attributeName,
+      value: attributeValue,
+      ...(attributeIsDynamic && !attributeName.startsWith('on:') && { dynamic: true })
+    });
     attributeName = '';
     attributeValue = null;
+    attributeIsDynamic = false;
   };
 
   while (current < input.length) {
@@ -175,6 +181,7 @@ function tokenize(input) {
         if (isWhitespace(char)) break;
         if (char === '{') {
           attributeValue = '';
+          attributeIsDynamic = true;
           expressionDepth = 1;
           state = STATES.ATTRIBUTE_EXPRESSION;
         } else if (char === '"' || char === "'") {
