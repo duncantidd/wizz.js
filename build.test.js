@@ -4,7 +4,14 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { spawnSync } = require('node:child_process');
-const { buildProject, discoverWizzFiles, getOutputPath, main, parseBuildArguments } = require('./build');
+const {
+  buildProject,
+  copyRuntimeModules,
+  discoverWizzFiles,
+  getOutputPath,
+  main,
+  parseBuildArguments
+} = require('./build');
 
 function createTemporaryDirectory() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-build-test-'));
@@ -181,6 +188,10 @@ test('builds nested components into missing output directories', (t) => {
     /^export default function mountComponent\(target\)/
   );
   assert.equal(fs.existsSync(path.join(outputDirectory, 'pages', 'ignored.js')), false);
+  assert.equal(
+    fs.readFileSync(path.join(outputDirectory, 'runtime', 'main.js'), 'utf8'),
+    fs.readFileSync(path.join(__dirname, 'src', 'runtime', 'main.js'), 'utf8')
+  );
   assert.equal(logger.errors.length, 0);
 });
 
@@ -252,4 +263,16 @@ test('the CLI sets a non-zero exit code when compilation fails', (t) => {
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Compilation failed for .*Broken\.wizz:/);
+});
+
+test('copies runtime modules without requiring component files', (t) => {
+  const outputDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(outputDirectory, { recursive: true, force: true }));
+
+  copyRuntimeModules(outputDirectory);
+
+  assert.equal(
+    fs.readFileSync(path.join(outputDirectory, 'runtime', 'main.js'), 'utf8'),
+    fs.readFileSync(path.join(__dirname, 'src', 'runtime', 'main.js'), 'utf8')
+  );
 });

@@ -49,7 +49,7 @@ Place components below an input directory, then compile the whole directory into
 
 ```text
 src/
-  Counter.wizz
+  App.wizz
   pages/
     Home.wizz
 ```
@@ -61,25 +61,24 @@ node build.js src dist
 Wizz recursively compiles every `.wizz` file and preserves its path below the output directory:
 
 ```text
-src/Counter.wizz     -> dist/Counter.js
+src/App.wizz         -> dist/App.js
 src/pages/Home.wizz  -> dist/pages/Home.js
 ```
 
 The output directory is created when needed. It must be different from the input directory. Wizz continues compiling independent components after an error, reports each failed file and its source location, and exits with a non-zero status if any component fails.
 
-The generated file has a default `mountComponent(target)` export. Import it from a browser module and pass it a DOM element:
+## Application Entry
+
+The input directory must contain `App.wizz`. The build emits `dist/App.js` and copies Wizz's browser entry module to `dist/runtime/main.js`. That entry imports `App.js`, finds the `#app` mount target, and mounts the component.
+
+Keep the document shell responsible only for the mount element and entry-module load:
 
 ```html
 <div id="app"></div>
-<script type="module">
-  import mountComponent from './Counter.js';
-
-  const target = document.getElementById('app');
-  const component = mountComponent(target);
-
-  // Call component.destroy() when the component is no longer needed.
-</script>
+<script type="module" src="/dist/runtime/main.js"></script>
 ```
+
+If the document does not contain `<div id="app"></div>`, the entry module reports `Wizz could not find mount target "#app".`
 
 Serve the directory over HTTP when loading browser ES modules, for example:
 
@@ -94,7 +93,7 @@ Then open the printed local URL in a browser.
 Always provide `filePath` when compiling a source file. Wizz then includes both the component path and source location in compiler errors:
 
 ```text
-Unclosed tag <main> starting at Counter.wizz:4:1.
+Unclosed tag <main> starting at src/App.wizz:4:1.
 ```
 
 ## Further Reading

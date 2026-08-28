@@ -62,6 +62,13 @@ function compileWizzFile(inputPath, outputPath) {
   fs.writeFileSync(outputPath, generatedModule, 'utf-8');
 }
 
+function copyRuntimeModules(outputDirectory) {
+  const runtimeSourceDirectory = path.join(__dirname, 'src', 'runtime');
+  const runtimeOutputDirectory = path.join(outputDirectory, 'runtime');
+
+  fs.cpSync(runtimeSourceDirectory, runtimeOutputDirectory, { recursive: true });
+}
+
 function buildProject(inputDirectory, outputDirectory, logger = console) {
   const resolvedInputDirectory = path.resolve(inputDirectory);
   const resolvedOutputDirectory = path.resolve(outputDirectory);
@@ -89,6 +96,8 @@ function buildProject(inputDirectory, outputDirectory, logger = console) {
     }
   }
 
+  copyRuntimeModules(resolvedOutputDirectory);
+
   return {
     compiledCount: inputFiles.length - failedCount,
     failedCount
@@ -111,4 +120,12 @@ if (require.main === module) {
   }
 }
 
-module.exports = { buildProject, compileWizzFile, discoverWizzFiles, getOutputPath, main, parseBuildArguments };
+module.exports = {
+  buildProject,
+  compileWizzFile,
+  copyRuntimeModules,
+  discoverWizzFiles,
+  getOutputPath,
+  main,
+  parseBuildArguments
+};

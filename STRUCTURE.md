@@ -29,7 +29,7 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 	│   ├── dependencyAnalyzer.js     Tags expressions with reactive dependencies
 	│   ├── idAssigner.js             Adds data-wizz-id to reactive DOM targets
 	│   └── *.test.js                 Focused Node tests for analyzer modules
-	└── generator/                   3. Analyzed payload -> ES module source
+	├── generator/                   3. Analyzed payload -> ES module source
 	  ├── README.md                 Generator contracts and module reference
 	  ├── codeBuilder.js            Indented source-code builder
 	  ├── domGenerator.js           Emits create() DOM construction function
@@ -37,11 +37,15 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 	  ├── assignmentInterceptor.js  Scoped rewriter for reactive script mutations
 	  ├── componentGenerator.js     Emits the mountable default-export module
 	  └── *.test.js                 Focused Node tests for generator modules
+	└── runtime/                     Browser application entry modules
+	  └── main.js                   Imports the emitted App module and mounts it at #app
 ```
 
 `src/compiler/index.test.js` and `src/compiler/errorAugmenter.test.js` hold the focused Node tests for the public `compile()` contract and its file-path error behavior.
 
-There is no standalone `src/runtime` directory yet. The current generated component module contains its own small `create()` and `update()` functions, alongside the component author's script and a `destroy()` API.
+`src/runtime/main.js` is copied to `dist/runtime/main.js` by `build.js`. It imports the emitted `dist/App.js`, finds `<div id="app"></div>`, and mounts the application. The document shell loads this entry module rather than importing an application component itself.
+
+The generated component module contains its own small `create()` and `update()` functions, alongside the component author's script and a `destroy()` API.
 
 ## Compilation Pipeline
 
