@@ -80,6 +80,20 @@ Keep the document shell responsible only for the mount element and entry-module 
 
 If the document does not contain `<div id="app"></div>`, the entry module reports `Wizz could not find mount target "#app".`
 
+## Routing
+
+`src/runtime/main.js` defines an explicit route table. The initial application route is `/`, which loads the emitted `App.js` module:
+
+```js
+const routes = {
+  '/': () => import('../App.js')
+};
+```
+
+Add routes explicitly as compiled component modules become available. The router loads the component matching `window.location.pathname`, destroys the previously mounted component before each replacement, and renders `Not found` for unmatched paths.
+
+The router also exposes `navigate(pathname)`, which updates browser history with `pushState()` and rerenders. Browser Back and Forward navigation rerenders through the `popstate` listener.
+
 Serve the directory over HTTP when loading browser ES modules, for example:
 
 ```bash

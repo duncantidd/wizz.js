@@ -38,12 +38,13 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 	  ├── componentGenerator.js     Emits the mountable default-export module
 	  └── *.test.js                 Focused Node tests for generator modules
 	└── runtime/                     Browser application entry modules
-	  └── main.js                   Imports the emitted App module and mounts it at #app
+	  ├── main.js                   Declares application routes and starts the router
+	  └── router.js                 Resolves routes, mounts views, and handles history
 ```
 
 `src/compiler/index.test.js` and `src/compiler/errorAugmenter.test.js` hold the focused Node tests for the public `compile()` contract and its file-path error behavior.
 
-`src/runtime/main.js` is copied to `dist/runtime/main.js` by `build.js`. It imports the emitted `dist/App.js`, finds `<div id="app"></div>`, and mounts the application. The document shell loads this entry module rather than importing an application component itself.
+`src/runtime/main.js` and `src/runtime/router.js` are copied to `dist/runtime/` by `build.js`. The entry module defines an explicit route table, finds `<div id="app"></div>`, and starts the router. The router dynamically imports the component for the current path, destroys the previously mounted component before replacement, renders a not-found view for unmatched paths, and rerenders after history navigation. The document shell loads the entry module rather than importing an application component itself.
 
 The generated component module contains its own small `create()` and `update()` functions, alongside the component author's script and a `destroy()` API.
 
