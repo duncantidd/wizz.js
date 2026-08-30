@@ -1,6 +1,11 @@
 <script>
     import Counter from '../components/Counter.wizz';
     const section = "About";
+    const fruits = [
+      { id: 'apple', name: 'Apple' },
+      { id: 'orange', name: 'Orange' },
+      { id: 'pear', name: 'Pear' }
+    ];
 </script>
 
 <main>
@@ -8,6 +13,12 @@
   <p>Lets build something. How about a counter?</p>
   {#if section === 'About'}
     <p>The counter will be rendered below</p>
+    <Counter />
+  {:else}
+    <ul>
+      {#each fruits as fruit (fruit.id)}
+        <li>{fruit.name}</li>
+      {/each}
+    </ul>
   {/if}
-  <Counter />
 </main>

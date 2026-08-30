@@ -57,6 +57,10 @@ function analyzeDependencies(astPayload) {
       }
     }
 
+    if (node.type === 'EachBlock') {
+      node.dependencies = reactiveVars.has(node.collection) ? [node.collection] : [];
+    }
+
     if (node.children && Array.isArray(node.children)) {
       for (let i = 0; i < node.children.length; i++) {
         walkTemplate(node.children[i]);

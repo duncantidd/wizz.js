@@ -68,11 +68,12 @@ function generateComponent(astPayload) {
   builder.add('\n// --- Initialization ---')
         .add('const rootNode = create(ctx);')
         .add('const childComponents = rootNode.__wizzChildComponents;')
+      .add('const listUpdates = rootNode.__wizzListUpdates;')
         .add('target.appendChild(rootNode);')
         .add('rootNode.__wizzMountChildren();');
 
   const initialChanges = reactiveVars.map(decl => `${decl.name}: true`).join(', ');
-  builder.add(`update(ctx, { ${initialChanges} });`)
+      builder.add(`update(ctx, { ${initialChanges} });`)
         .add('isMounted = true;');
 
   // 7. Return the public API (e.g., a way to unmount/destroy the component)

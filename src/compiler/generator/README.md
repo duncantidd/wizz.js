@@ -163,6 +163,8 @@ Names, text content, and attribute values are embedded with `JSON.stringify()`. 
 
 An imported component is recognized only when its tag name matches a default `.wizz` import from the component script, for example `import Counter from './Counter.wizz';` with `<Counter />`. The generated module moves this import to module scope and changes the specifier to `./Counter.js`. Component tags must be self-closing, nested in a native element, and have no attributes or children. Their mount results are retained so the parent component's `destroy()` can destroy each child before removing the parent root.
 
+Keyed each blocks compile into a collection reconciler. Given `{#each items as item (item.id)}<li>{item.name}</li>{/each}`, it keeps a record for every key, reuses and moves the record's root node when its key remains present, updates its repeated text and dynamic attributes with the new item value, creates records for new keys, and removes records for deleted keys. Duplicate keys throw at runtime. Each blocks must contain exactly one native root element and imported components are not supported in the body yet.
+
 Expressions create text nodes from `String(expression)` during initial DOM construction. This renders both reactive `let` values and non-reactive `const` values at mount time. `componentGenerator.js` still invokes `update()` once during mount so the reactive update path is exercised consistently.
 
 ### `updateGenerator.js` - Reactive Text Update Emitter

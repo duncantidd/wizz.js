@@ -7,9 +7,17 @@ const { CodeBuilder } = require('./codeBuilder');
  */
 function generateUpdateFunction(templateAST) {
   const builder = new CodeBuilder();
+  const hasEachBlock = (node) => node.type === 'EachBlock'
+    || (node.children || []).some(hasEachBlock)
+    || (node.consequent || []).some(hasEachBlock)
+    || (node.alternate || []).some(hasEachBlock);
 
   builder.add('function update(ctx, changed) {')
         .indent();
+
+  if (hasEachBlock(templateAST)) {
+    builder.add('listUpdates.forEach((updateList) => updateList(changed));');
+  }
 
   function walk(node) {
     if (node.type === 'Element') {

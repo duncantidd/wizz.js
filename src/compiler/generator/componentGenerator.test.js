@@ -24,6 +24,15 @@ function createDocument() {
         appendChild(node) {
           this.childNodes.push(node);
         },
+        insertBefore(node, referenceNode) {
+          const existingIndex = this.childNodes.indexOf(node);
+          if (existingIndex !== -1) this.childNodes.splice(existingIndex, 1);
+          const referenceIndex = this.childNodes.indexOf(referenceNode);
+          this.childNodes.splice(referenceIndex === -1 ? this.childNodes.length : referenceIndex, 0, node);
+        },
+        removeChild(node) {
+          this.childNodes.splice(this.childNodes.indexOf(node), 1);
+        },
         addEventListener(eventName, listener) {
           this.listeners[eventName] = listener;
         },
@@ -204,6 +213,54 @@ test('renders the selected conditional branch during mounting', () => {
   const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
   mountComponent(target);
   assert.equal(target.childNodes[0].childNodes[0].childNodes[0].nodeValue, 'Shown');
+});
+
+test('reconciles keyed each blocks by moving retained nodes and removing deleted nodes', () => {
+  const payload = assignNodeIds(analyzeDependencies(parseComponent(`
+    <script>
+      let items = [{ id: 1, name: 'Ada' }, { id: 2, name: 'Grace' }];
+      function reorder() { items = [{ id: 2, name: 'Grace Hopper' }, { id: 1, name: 'Ada' }]; }
+      function removeFirst() { items = [{ id: 1, name: 'Ada' }]; }
+    </script>
+    <main><button on:click={reorder}>Reorder</button><button on:click={removeFirst}>Remove</button><ul>{#each items as item (item.id)}<li>{item.name}</li>{/each}</ul></main>
+  `)));
+  const source = generateComponent(payload);
+  const document = createDocument();
+  const target = { childNodes: [], appendChild(node) { this.childNodes.push(node); }, removeChild() {} };
+  const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
+  mountComponent(target);
+
+  const main = target.childNodes[0];
+  const list = main.childNodes[2];
+  const firstItem = list.childNodes[0];
+  const secondItem = list.childNodes[1];
+  main.childNodes[0].dispatchEvent('click');
+
+  assert.strictEqual(list.childNodes[0], secondItem);
+  assert.strictEqual(list.childNodes[1], firstItem);
+  assert.equal(list.childNodes[0].childNodes[0].nodeValue, 'Grace Hopper');
+  main.childNodes[1].dispatchEvent('click');
+  assert.deepEqual(list.childNodes.filter((node) => node.name === 'li'), [firstItem]);
+});
+
+test('rejects duplicate each block keys during mounting', () => {
+  const payload = assignNodeIds(analyzeDependencies(parseComponent(
+    "<script>let items = [{ id: 1 }, { id: 1 }];</script><ul>{#each items as item (item.id)}<li>{item.id}</li>{/each}</ul>"
+  )));
+  const source = generateComponent(payload);
+  const document = createDocument();
+  const target = { appendChild() {} };
+  const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
+
+  assert.throws(() => mountComponent(target), /Each block keys must be unique\./);
+});
+
+test('allows formatting whitespace around an each block root element', () => {
+  const payload = assignNodeIds(analyzeDependencies(parseComponent(
+    "<script>let items = [{ id: 1, name: 'Ada' }];</script><ul>\n  {#each items as item (item.id)}\n    <li>{item.name}</li>\n  {/each}\n</ul>"
+  )));
+
+  assert.doesNotThrow(() => generateComponent(payload));
 });
 
 test('emits top-level component imports and mounts imported self-closing components', () => {

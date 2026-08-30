@@ -57,6 +57,38 @@ Dynamic attributes use brace-delimited expressions. Wizz updates `value`, `check
 <input value={name} checked={isSelected} aria-label={name} />
 ```
 
+## Keyed Lists
+
+Render a reactive collection with a keyed `each` block. The collection must be a reactive `let`, and every item needs a unique key:
+
+```wizz
+<script>
+  let items = [{ id: 1, name: 'Ada' }];
+</script>
+
+<ul>
+  {#each items as item (item.id)}
+    <li>{item.name}</li>
+  {/each}
+</ul>
+```
+
+When `items` is reassigned, Wizz retains nodes with matching keys, moves retained nodes into the new order, updates their text and dynamic attributes, creates new keys, and removes missing keys. Each blocks currently require exactly one native root element and do not support imported components inside the repeated content.
+
+## Conditional Rendering
+
+Select a branch during mounting with an `if` block and optional `else` branch:
+
+```wizz
+{#if section === 'About'}
+  <p>The counter is available.</p>
+{:else}
+  <p>Unknown section.</p>
+{/if}
+```
+
+Conditions currently support the Wizz expression grammar, including identifiers, member access, string literals, and strict equality. A conditional branch is selected at mount time; changing a reactive condition does not yet replace an already-rendered branch.
+
 ## Compile Components
 
 Place components below an input directory, then compile the whole directory into a separate output directory:

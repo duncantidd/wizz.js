@@ -21,6 +21,7 @@ export default function mountComponent(target) {
   function create(ctx) {
     const childComponents = [];
     const mountChildren = [];
+    const listUpdates = [];
     const node_1 = document.createElement("div");
     const node_2 = document.createTextNode("\n  ");
     node_1.appendChild(node_2);
@@ -36,6 +37,7 @@ export default function mountComponent(target) {
     node_1.appendChild(node_6);
     node_1.__wizzChildComponents = childComponents;
     node_1.__wizzMountChildren = () => mountChildren.forEach((mount) => mount());
+    node_1.__wizzListUpdates = listUpdates;
     return node_1;
   }
   
@@ -50,6 +52,7 @@ export default function mountComponent(target) {
 // --- Initialization ---
   const rootNode = create(ctx);
   const childComponents = rootNode.__wizzChildComponents;
+  const listUpdates = rootNode.__wizzListUpdates;
   target.appendChild(rootNode);
   rootNode.__wizzMountChildren();
   update(ctx, { count: true });
