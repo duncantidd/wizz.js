@@ -1,11 +1,12 @@
 <script>
     import Counter from '../components/Counter.wizz';
-    const section = "About";
+    const section = "Fruit";
     const fruits = [
       { id: 'apple', name: 'Apple' },
       { id: 'orange', name: 'Orange' },
       { id: 'pear', name: 'Pear' }
     ];
+    const list = ['item1', 'item2'];
 </script>
 
 <main>
@@ -18,6 +19,11 @@
     <ul>
       {#each fruits as fruit (fruit.id)}
         <li>{fruit.name}</li>
+      {/each}
+    </ul>
+    <ul>
+      {#each list as item}
+        <li>{item}</li>
       {/each}
     </ul>
   {/if}

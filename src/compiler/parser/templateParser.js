@@ -82,10 +82,10 @@ function parseTemplate(tokens) {
           break;
         }
         if (directive.startsWith('#each ')) {
-          const match = directive.match(/^#each\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+\(\2\.([A-Za-z_$][A-Za-z0-9_$]*)\)$/);
-          if (!match) throw new SyntaxError('Each blocks require `collection as item (item.key)` syntax.');
+          const match = directive.match(/^#each\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)(?:\s+\(\2\.([A-Za-z_$][A-Za-z0-9_$]*)\))?$/);
+          if (!match) throw new SyntaxError('Each blocks require `collection as item` or `collection as item (item.key)` syntax.');
           const [, collection, item, key] = match;
-          const block = { type: 'EachBlock', collection, item, key, children: [] };
+          const block = { type: 'EachBlock', collection, item, key: key ?? null, children: [] };
           currentParent.children.push(block);
           stack.push(block);
           break;

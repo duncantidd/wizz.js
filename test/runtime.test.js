@@ -29,6 +29,15 @@ function createDocument(target) {
   };
 }
 
+async function waitFor(condition, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(condition(), 'expected condition was not met before the timeout');
+}
+
 function createWindow(pathname = '/') {
   const listeners = new Map();
 
@@ -88,7 +97,7 @@ test('emitted runtime mounts the compiled App component into #app', async (t) =>
   t.after(() => { global.window = originalWindow; });
 
   await import(`${pathToFileURL(path.join(outputDirectory, 'runtime', 'main.js')).href}?test=${Date.now()}`);
-  await new Promise((resolve) => setImmediate(resolve));
+  await waitFor(() => target.childNodes.length === 1);
 
   assert.equal(target.childNodes.length, 1);
   assert.equal(target.childNodes[0].name, 'main');

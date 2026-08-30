@@ -104,9 +104,28 @@ test('parses keyed each blocks', () => {
   assert.equal(block.children[0].name, 'li');
 });
 
-test('rejects each blocks without an explicit item key', () => {
+test('parses keyless each blocks without an item key', () => {
+  const root = parseTemplate(tokenize('<ul>{#each items as item}<li>{item}</li>{/each}</ul>'));
+  const block = root.children[0].children[0];
+
+  assert.deepEqual(
+    { type: block.type, collection: block.collection, item: block.item, key: block.key },
+    { type: 'EachBlock', collection: 'items', item: 'item', key: null }
+  );
+  assert.equal(block.children[0].name, 'li');
+});
+
+test('rejects each blocks with malformed syntax', () => {
   assert.throws(
-    () => parseTemplate(tokenize('<ul>{#each items as item}<li>{item.name}</li>{/each}</ul>')),
-    /Each blocks require `collection as item \(item.key\)` syntax\./
+    () => parseTemplate(tokenize('<ul>{#each items as}<li></li>{/each}</ul>')),
+    /Each blocks require `collection as item` or `collection as item \(item\.key\)` syntax\./
+  );
+  assert.throws(
+    () => parseTemplate(tokenize('<ul>{#each items as item (item)}<li></li>{/each}</ul>')),
+    /Each blocks require `collection as item` or `collection as item \(item\.key\)` syntax\./
+  );
+  assert.throws(
+    () => parseTemplate(tokenize('<ul>{#each items}<li></li>{/each}</ul>')),
+    /Each blocks require `collection as item` or `collection as item \(item\.key\)` syntax\./
   );
 });

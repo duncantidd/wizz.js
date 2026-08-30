@@ -83,7 +83,7 @@ This roadmap orders work by dependency. Each milestone should have focused tests
 
 ## 6. Expand Core Component Features Deliberately
 
-**Goal:** Add language features only when their parser, analyzer, generator, and runtime behavior are designed together.
+~~**Goal:** Add language features only when their parser, analyzer, generator, and runtime behavior are designed together.~~
 
 Suggested order:
 
@@ -92,7 +92,7 @@ Suggested order:
 3. ~~Conditional rendering.~~
 4. ~~Lists and keyed reconciliation semantics.~~
 5. ~~Component imports and nested components.~~
-6. Lifecycle hooks, cleanup, and scheduler batching.
+6. ~~Lifecycle hooks, cleanup, and scheduler batching.~~
 
 Every feature should include parser tests, generated-source tests, and a mounted runtime test.
 
@@ -100,8 +100,8 @@ Every feature should include parser tests, generated-source tests, and a mounted
 
 **Goal:** Make framework behavior dependable for real applications.
 
-- Define compatibility and versioning policy for component syntax and generated output.
-- Replace or substantially extend the limited script scanner and transformation layer with syntax-aware JavaScript handling.
+- ~~Define compatibility and versioning policy for component syntax and generated output.~~
+- ~~Replace or substantially extend the limited script scanner and transformation layer with syntax-aware JavaScript handling.~~
 - Improve diagnostics with component file paths, source excerpts, and code frames.
 - Add source maps or another debug mapping strategy for generated modules.
 - Add benchmark fixtures and regression tests for repeated updates, teardown, and large trees.

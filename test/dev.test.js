@@ -47,7 +47,7 @@ test('builds before serving generated output and supplies SPA fallback', async (
 
   const component = await fetch(`${url}/App.js`);
   assert.equal(component.status, 200);
-  assert.match(await component.text(), /^export default function mountComponent\(target\)/);
+  assert.match(await component.text(), /^export default function mountComponent\(target\)/m);
 
   const stylesheet = await fetch(`${url}/App.css`);
   assert.equal(stylesheet.status, 200);

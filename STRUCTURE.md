@@ -5,6 +5,8 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 ```text
 .
 ├── STRUCTURE.md                         Project map and compiler pipeline
+├── ROADMAP.md                           Ordered development milestones
+├── CHANGELOG.md                         Notable changes, grouped by milestone
 ├── scripts/
 │   └── dev.js                            Builds, serves dist, and watches .wizz source files
 ├── test.js                              End-to-end compilation example
@@ -16,6 +18,7 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 └── src/
   └── compiler/
       ├── index.js                     Public compile(source) entry point
+      ├── version.js                   Compatibility contract versions (compiler, syntax, output)
       ├── errorAugmenter.js            Qualifies compiler errors with the component file path
       ├── parser/                      1. Component source -> parser handoff
 	  ├── README.md                 Parser contracts and module reference
@@ -39,7 +42,8 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 	  ├── codeBuilder.js            Indented source-code builder
 	  ├── domGenerator.js           Emits create() DOM construction function
 	  ├── updateGenerator.js        Emits update() reactive text function
-	  ├── assignmentInterceptor.js  Scoped rewriter for reactive script mutations
+	  ├── scriptLexer.js            Tokenizes component script for syntax-aware rewriting
+	  ├── assignmentInterceptor.js  Syntax-aware rewriter for reactive script mutations
 	  ├── componentGenerator.js     Emits the mountable default-export module
 	  └── *.test.js                 Focused Node tests for generator modules
 	└── runtime/                     Browser application entry modules

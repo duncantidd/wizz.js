@@ -24,9 +24,9 @@ function generateCreateFunction(templateAST, componentImports = []) {
     if (node.type === 'EachBlock') {
       if (!parentVarName) throw new SyntaxError('Each blocks must be nested inside an element.');
       const contentNodes = node.children.filter((child) => child.type !== 'Text' || child.value.trim() !== '');
-      // if (contentNodes.length !== 1 || contentNodes[0].type !== 'Element') {
-      //   throw new SyntaxError('Each blocks must contain exactly one root element.');
-      // }
+      if (contentNodes.length !== 1 || contentNodes[0].type !== 'Element') {
+        throw new SyntaxError('Each blocks must contain exactly one root element.');
+      }
 
       const listId = ++nodeCounter;
       const anchorName = `anchor_${listId}`;
@@ -48,6 +48,10 @@ function generateCreateFunction(templateAST, componentImports = []) {
           if (importedComponents.has(listNode.name)) {
             throw new SyntaxError('Imported components are not supported inside each blocks.');
           }
+          const eventAttribute = (listNode.attributes || []).find((attribute) => attribute.name.startsWith('on:'));
+          if (eventAttribute) {
+            throw new SyntaxError(`Event directive '${eventAttribute.name}' is not supported inside each blocks yet.`);
+          }
           builder.add(`const ${listVarName} = document.createElement(${JSON.stringify(listNode.name)});`);
           for (const attribute of listNode.attributes || []) {
             if (attribute.dynamic) {
@@ -63,6 +67,8 @@ function generateCreateFunction(templateAST, componentImports = []) {
           builder.add(`const ${listVarName} = document.createTextNode(${JSON.stringify(listNode.value)});`);
         } else if (listNode.type === 'Expression') {
           builder.add(`const ${listVarName} = document.createTextNode(String(${listNode.value}));`);
+        } else {
+          throw new SyntaxError(`Each block bodies do not support '${listNode.type}' nodes yet.`);
         }
         if (listParentName) builder.add(`${listParentName}.appendChild(${listVarName});`);
         (listNode.children || []).forEach((child) => walkListNode(child, listVarName));
@@ -95,8 +101,8 @@ function generateCreateFunction(templateAST, componentImports = []) {
         .add(`function ${updateName}(items) {`).indent()
         .add('const nextRecords = new Map();')
         .add('const seenKeys = new Set();')
-        .add(`items.forEach((${node.item}) => {`).indent()
-        .add(`const key = ${node.item}.${node.key};`)
+        .add(`items.forEach((${node.item}${node.key ? '' : `, index_${listId}`}) => {`).indent()
+        .add(node.key ? `const key = ${node.item}.${node.key};` : `const key = index_${listId};`)
         .add('if (seenKeys.has(key)) throw new Error("Each block keys must be unique.");')
         .add('seenKeys.add(key);')
         .add(`let record = ${recordsName}.get(key);`)
@@ -163,7 +169,7 @@ function generateCreateFunction(templateAST, componentImports = []) {
             if (!handlerExpression) {
               throw new SyntaxError(`Event directive '${attr.name}' requires a handler expression.`);
             }
-            builder.add(`${varName}.addEventListener(${JSON.stringify(eventName)}, ${handlerExpression});`);
+            builder.add(`trackListener(${varName}, ${JSON.stringify(eventName)}, ${handlerExpression});`);
             return;
           }
 

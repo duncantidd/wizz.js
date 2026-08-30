@@ -90,8 +90,9 @@ test('emits event directives as DOM listeners rather than inline attributes', ()
     }]
   });
 
-  assert.match(source, /addEventListener\("click", handleClick\)/);
+  assert.match(source, /trackListener\(\w+, "click", handleClick\)/);
   assert.doesNotMatch(source, /setAttribute\("on:click"/);
+  assert.doesNotMatch(source, /\w+\.addEventListener/);
 });
 
 test('emits event handler expressions with arguments', () => {
@@ -105,7 +106,7 @@ test('emits event handler expressions with arguments', () => {
     }]
   });
 
-  assert.match(source, /addEventListener\("click", \(event\) => increment\(event\.detail\)\)/);
+  assert.match(source, /trackListener\(\w+, "click", \(event\) => increment\(event\.detail\)\)/);
 });
 
 test('rejects event directives without a handler expression', () => {
@@ -128,4 +129,90 @@ test('requires a root element for component creation', () => {
     () => generateCreateFunction({ type: 'Root', children: [{ type: 'Text', value: 'Only text' }] }),
     /Component template must contain a root element\./
   );
+});
+
+function createEachTemplate(key, children) {
+  return {
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'ul',
+      attributes: [],
+      children: [{
+        type: 'EachBlock',
+        collection: 'items',
+        item: 'item',
+        key,
+        children
+      }]
+    }]
+  };
+}
+
+const listItem = () => ({ type: 'Element', name: 'li', attributes: [], children: [{ type: 'Expression', value: 'item.name' }] });
+
+test('emits item key lookups for keyed each blocks', () => {
+  const source = generateCreateFunction(createEachTemplate('id', [listItem()]));
+
+  assert.match(source, /items\.forEach\(\(item\) => \{/);
+  assert.match(source, /const key = item\.id;/);
+});
+
+test('emits index-based keys for keyless each blocks', () => {
+  const source = generateCreateFunction(createEachTemplate(null, [listItem()]));
+
+  assert.match(source, /items\.forEach\(\(item, index_\d+\) => \{/);
+  assert.match(source, /const key = index_\d+;/);
+  assert.doesNotMatch(source, /const key = item\./);
+});
+
+test('ignores formatting whitespace when counting each block root elements', () => {
+  assert.doesNotThrow(
+    () => generateCreateFunction(createEachTemplate(null, [
+      { type: 'Text', value: '\n        ' },
+      listItem(),
+      { type: 'Text', value: '\n      ' }
+    ]))
+  );
+});
+
+test('rejects each blocks without exactly one root element', () => {
+  assert.throws(
+    () => generateCreateFunction(createEachTemplate(null, [listItem(), listItem()])),
+    /Each blocks must contain exactly one root element\./
+  );
+  assert.throws(
+    () => generateCreateFunction(createEachTemplate(null, [{ type: 'Expression', value: 'item' }])),
+    /Each blocks must contain exactly one root element\./
+  );
+});
+
+test('rejects event directives inside each block bodies', () => {
+  assert.throws(
+    () => generateCreateFunction(createEachTemplate(null, [{
+      type: 'Element',
+      name: 'li',
+      attributes: [{ name: 'on:click', value: 'select' }],
+      children: []
+    }])),
+    /Event directive 'on:click' is not supported inside each blocks yet\./
+  );
+});
+
+test('rejects nested blocks inside each block bodies', () => {
+  const nestedIf = createEachTemplate(null, [{
+    type: 'Element',
+    name: 'li',
+    attributes: [],
+    children: [{ type: 'IfBlock', test: 'item.active', consequent: [], alternate: null, children: [] }]
+  }]);
+  assert.throws(() => generateCreateFunction(nestedIf), /Each block bodies do not support 'IfBlock' nodes yet\./);
+
+  const nestedEach = createEachTemplate(null, [{
+    type: 'Element',
+    name: 'li',
+    attributes: [],
+    children: [{ type: 'EachBlock', collection: 'inner', item: 'sub', key: null, children: [] }]
+  }]);
+  assert.throws(() => generateCreateFunction(nestedEach), /Each block bodies do not support 'EachBlock' nodes yet\./);
 });

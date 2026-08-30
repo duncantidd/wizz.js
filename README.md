@@ -51,15 +51,17 @@ Event directives use native browser event names and accept either a component-lo
 
 The directive expression is emitted as the listener passed to `addEventListener()`.
 
+Reactive updates are batched. When a handler runs, each changed variable is marked, and one DOM update runs on the next microtask with all marks combined — a handler that changes several variables triggers a single update, and the DOM settles before the browser paints. Updates therefore happen asynchronously: read the DOM after an `await`, not synchronously after dispatching an event.
+
 Dynamic attributes use brace-delimited expressions. Wizz updates `value`, `checked`, and `disabled` as DOM properties; all other dynamic names are updated as HTML attributes:
 
 ```wizz
 <input value={name} checked={isSelected} aria-label={name} />
 ```
 
-## Keyed Lists
+## Lists
 
-Render a reactive collection with a keyed `each` block. The collection must be a reactive `let`, and every item needs a unique key:
+Render a collection with an `each` block. Give each item a unique key when node identity should follow the item — for example when rows reorder:
 
 ```wizz
 <script>
@@ -73,7 +75,25 @@ Render a reactive collection with a keyed `each` block. The collection must be a
 </ul>
 ```
 
-When `items` is reassigned, Wizz retains nodes with matching keys, moves retained nodes into the new order, updates their text and dynamic attributes, creates new keys, and removes missing keys. Each blocks currently require exactly one native root element and do not support imported components inside the repeated content.
+When `items` is reassigned, Wizz retains nodes with matching keys, moves retained nodes into the new order, updates their text and dynamic attributes, creates new keys, and removes missing keys. Duplicate keys throw at runtime.
+
+For arrays of primitives, or any collection where positional identity is enough, omit the key:
+
+```wizz
+<script>
+  let list = ['item1', 'item2'];
+</script>
+
+<ul>
+  {#each list as item}
+    <li>{item}</li>
+  {/each}
+</ul>
+```
+
+A keyless block reconciles by array index: on reassignment each rendered row updates in place with the item now at its position, rows are appended as the collection grows, and rows beyond the new length are removed. Rows are reused by position, not by item identity.
+
+In both forms the collection must be a reactive `let` for updates to run (a `const` collection renders once at mount), the block must be nested inside a native element, and the body must contain exactly one native root element. Each blocks do not support imported components, event directives, or nested `if`/`each` blocks inside the repeated content yet; these are compile-time errors rather than silently ignored.
 
 ## Conditional Rendering
 
@@ -88,6 +108,30 @@ Select a branch during mounting with an `if` block and optional `else` branch:
 ```
 
 Conditions currently support the Wizz expression grammar, including identifiers, member access, string literals, and strict equality. A conditional branch is selected at mount time; changing a reactive condition does not yet replace an already-rendered branch.
+
+## Lifecycle Hooks
+
+`onMount` and `onDestroy` are available inside the component script — no import is needed; the compiled component provides them. Register them at the top level of the script:
+
+```wizz
+<script>
+  let status = "connecting";
+
+  function initialize() {
+    status = "ready";
+  }
+
+  onMount(initialize);
+</script>
+
+<main><p>{status}</p></main>
+```
+
+`onMount` runs once, after the component is attached to its target, child components are mounted, and the initial update has completed. State assigned in a mount hook flows through the batched scheduler, so the example above renders `ready` on the next microtask. `onDestroy` runs when the component's `destroy()` is called, before child components are destroyed and the root node is removed — the right place to remove global event listeners or clear timers.
+
+For reactive state changes from a hook, both styles notify the scheduler: `onMount(() => { status = "ready"; })` and `onMount(initialize)` (where `initialize` assigns at statement level) are intercepted by the syntax-aware script rewriter, which follows mutations into function and arrow callback bodies. Assignments in expression position — call arguments, conditions, object literals, template interpolations — and unbraced control-flow bodies are deliberately left unrewritten.
+
+Calling `destroy()` tears the component down completely: destroy hooks run first, child components are destroyed, every event listener Wizz attached through an `on:` directive is removed from its node, and the root is removed from the target. Listeners you attach yourself — for example to `window` or `document` inside `onMount` — are not tracked, so remove them in `onDestroy`.
 
 ## Compile Components
 
@@ -165,6 +209,22 @@ node scripts/dev.js
 The development command builds `src` into `dist`, copies `index.html` and `App.css` into the output directory, serves it at `http://localhost:3000`, and watches `.wizz` files for changes. It reports compiler errors while keeping the server available for subsequent fixes.
 
 Requests for browser routes such as `http://localhost:3000/Home` receive the document shell, allowing the client router to select the matching component. Existing output files such as `/runtime/main.js` and `/pages/Home.js` are served directly; missing asset paths return HTTP 404.
+
+## Compatibility and Versioning
+
+Wizz's compatibility contract has three semver versions, defined in `src/compiler/version.js`: the compiler itself, the component syntax contract, and the generated output contract.
+
+As a component author, within one `syntax` major version any component that compiled before keeps compiling with the same meaning. New syntax may be added in a minor version, but existing syntax never changes meaning without a major bump.
+
+As a consumer of generated modules, within one `output` major version every generated module keeps its surface: the `mountComponent(target)` default export, the returned `{ destroy() }` handle, and the teardown behavior behind it.
+
+A breaking change to either contract bumps its major version and the compiler's major version. Every compiled module is stamped with all three versions on its first line, so build artifacts stay traceable to the compiler that produced them:
+
+```js
+// Generated by Wizz 1.1.0 (component syntax 1.0.0, generated output 1.1.0). Edits will be overwritten.
+```
+
+`compile()` also returns the frozen version table as its `version` field.
 
 ## Compiler Errors
 
