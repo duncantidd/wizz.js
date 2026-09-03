@@ -119,7 +119,20 @@ Every feature should include parser tests, generated-source tests, and a mounted
 
 **Done when:** application authors can install and run documented `wizz build` and `wizz dev` commands with the same reliable behavior as the current Node entry points.
 
-## 9. Add Server-Side Rendering
+## 9. Add Component Props
+
+**Goal:** Let parent components pass explicit inputs to imported child components through a stable render and update contract.
+
+- Define prop declaration and consumption syntax for child component scripts and template expressions.
+- Allow imported component tags to receive static and dynamic attributes as props while retaining clear native-attribute behavior.
+- Define prop values, defaults, missing-prop behavior, and whether prop bindings are read-only inside child components.
+- Update component mounting so child instances receive props without relying on ambient parent state.
+- Define reactive prop-update semantics, including parent updates, child rerenders, teardown, and component identity in lists.
+- Add parser, analyzer, generator, and mounted runtime tests for static props, reactive props, defaults, invalid prop syntax, nested components, and child teardown.
+
+**Done when:** an imported component receives documented static and reactive props, rerenders predictably as parent values change, and retains its independent teardown contract.
+
+## 10. Add Server-Side Rendering
 
 **Goal:** Reuse the component AST for a distinct HTML string-rendering target and define how the browser hydrates its output.
 
