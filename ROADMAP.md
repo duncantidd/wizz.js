@@ -119,7 +119,20 @@ Every feature should include parser tests, generated-source tests, and a mounted
 
 ~~**Done when:** application authors can install and run documented `wizz build` and `wizz dev` commands with the same reliable behavior as the current Node entry points.~~
 
-## 9. Add Component Props
+## 9. Generate File-Based Routes
+
+**Goal:** Generate the browser route table from the application `src/pages` directory so authors do not maintain routes manually in `src/runtime/main.js`.
+
+- Make the project build discover page components below `src/pages` and emit a generated route manifest into `dist/runtime`.
+- Define stable path conventions, including `src/App.wizz` for `/`, `src/pages/index.wizz` for `/`, nested page paths, and case normalization.
+- Make the runtime consume the generated manifest rather than a repository-owned hard-coded route table.
+- Detect ambiguous paths, duplicate route claims, and reserved runtime paths during the build, with file-aware diagnostics.
+- Preserve explicit dynamic imports so only the route selected by the browser is loaded.
+- Add build, generated-manifest, and runtime tests for root pages, nested pages, direct route loads, collisions, and removal of a page after a rebuild.
+
+**Done when:** adding, renaming, nesting, or removing a `.wizz` page changes its browser route after the next build without an edit to `src/runtime/main.js`.
+
+## 10. Add Component Props
 
 **Goal:** Let parent components pass explicit inputs to imported child components through a stable render and update contract.
 
@@ -132,7 +145,7 @@ Every feature should include parser tests, generated-source tests, and a mounted
 
 **Done when:** an imported component receives documented static and reactive props, rerenders predictably as parent values change, and retains its independent teardown contract.
 
-## 10. Add Server-Side Rendering
+## 11. Add Server-Side Rendering
 
 **Goal:** Reuse the component AST for a distinct HTML string-rendering target and define how the browser hydrates its output.
 
