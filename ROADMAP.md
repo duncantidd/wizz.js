@@ -107,11 +107,35 @@ Every feature should include parser tests, generated-source tests, and a mounted
 - ~~Add benchmark fixtures and regression tests for repeated updates, teardown, and large trees.~~
 - ~~Document browser support, security boundaries, and generated-code assumptions.~~
 
+## 8. Promote a Public CLI
+
+**Goal:** Make the project compiler and development server available through a stable `wizz` command.
+
+- Define a package entry point that exposes `wizz build <input-directory> <output-directory>` and `wizz dev`.
+- Reuse the existing build and development-server implementations rather than duplicating their behavior in the CLI layer.
+- Validate commands and arguments with actionable usage errors and non-zero exit codes on failures.
+- Document installation, command usage, defaults, and the public stability boundary.
+- Add focused command-level tests for successful execution, invalid arguments, and propagated build failures.
+
+**Done when:** application authors can install and run documented `wizz build` and `wizz dev` commands with the same reliable behavior as the current Node entry points.
+
+## 9. Add Server-Side Rendering
+
+**Goal:** Reuse the component AST for a distinct HTML string-rendering target and define how the browser hydrates its output.
+
+- Define an explicit server compilation or rendering API without changing the current browser-module contract implicitly.
+- Render an initial, deliberately narrow supported component surface to HTML strings without creating DOM nodes.
+- Define trusted-component execution, initial-state serialization, escaping, and source-map exposure boundaries for server output.
+- Define deterministic hydration markers or traversal rules so browser code can attach to server-rendered DOM without recreating it.
+- Specify mismatch reporting and fallback behavior before broadening the supported feature set.
+- Add end-to-end tests that render on the server, hydrate in a minimal browser DOM, preserve initial markup, attach events, and update reactive state.
+
+**Done when:** a documented server-rendered component can be delivered as HTML and hydrated by its client module without duplicate DOM or divergent initial state.
+
 ## Later Ecosystem Work
 
-- **CLI:** Promote the project compiler and dev command into the public `wizz` interface.
 - **VS Code extension:** Provide syntax highlighting, diagnostics, component navigation, and build integration after the language syntax is stable.
-- **SSR:** Reuse the component AST but add a distinct string-rendering target and hydration contract.
+- **MCP:** Expose the Wizz project structure, component language contract, compiler diagnostics, build command, and development workflow through a Model Context Protocol server so AI agents can inspect an application and safely create or update Wizz web applications autonomously. Keep filesystem permissions explicit and project-scoped; do not make the core compiler depend on an AI runtime.
 - **ORM:** Keep it separate from the core renderer/compiler so application persistence choices do not define component semantics.
 
 ## Development Server Decision
