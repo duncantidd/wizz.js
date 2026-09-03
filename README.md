@@ -7,13 +7,15 @@ Wizz is a zero-dependency component compiler. It turns `.wizz` component source 
 - Node.js 18 or newer
 - A modern browser for running generated modules
 
-There are no packages to install.
+Wizz has no runtime dependencies.
 
 ## Get Started
 
-Clone the repository and run the test suite from its root:
+Clone the repository, enter it, and run the test suite:
 
 ```bash
+git clone <repository-url> wizz
+cd wizz
 node --test
 ```
 
@@ -22,6 +24,57 @@ To see the compiler output for the included example component:
 ```bash
 node test.js
 ```
+
+## CLI
+
+Wizz installs without npm or a package registry. From the cloned repository, run:
+
+```bash
+./scripts/install-cli.sh
+```
+
+The installer requires Node.js 18 or newer. It copies the compiler and CLI runtime to `${XDG_DATA_HOME:-~/.local/share}/wizz` and places the `wizz` launcher in `${XDG_BIN_HOME:-~/.local/bin}`. It does not require administrator privileges or modify shell configuration files.
+
+Ensure the launcher directory is on your `PATH`. For Bash or Zsh using the default location, add this to your shell profile, then open a new shell:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Run `./scripts/install-cli.sh` again from an updated checkout to replace the managed local installation. To remove it, delete the launcher and installed runtime:
+
+```bash
+rm -f "${XDG_BIN_HOME:-$HOME/.local/bin}/wizz"
+rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/wizz"
+```
+
+Build a project with its conventional source and output directories:
+
+```bash
+wizz build
+```
+
+This compiles `src` into `dist`. To choose both directories explicitly, pass both arguments:
+
+```bash
+wizz build components public
+```
+
+Start the development server with:
+
+```bash
+wizz dev
+```
+
+`wizz dev` uses the directory where you run the command as the application project: it builds that directory's `src` into `dist`, serves the result, and watches `.wizz` source files. The public CLI currently accepts only `build` and `dev`; `build` accepts either no directory arguments or both an input and an output directory.
+
+`wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
+
+### CLI Stability
+
+The installed `wizz` command is Wizz's public command-line interface. Its supported commands are `wizz build`, `wizz build <input-directory> <output-directory>`, and `wizz dev`; their documented defaults, generated output paths, and non-zero failure behavior are stable within a CLI major version.
+
+`build.js`, `scripts/cli.js`, and `scripts/dev.js` are implementation entry points used by the repository and may change as the CLI evolves. Use `wizz` for application automation and development workflows.
 
 ## Create a Component
 
@@ -143,6 +196,12 @@ src/
   pages/
     Home.wizz
 ```
+
+```bash
+wizz build
+```
+
+The same build can be run directly without the package command:
 
 ```bash
 node build.js src dist

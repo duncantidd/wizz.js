@@ -33,6 +33,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Division followed by a regular expression no longer corrupts output. The old character scanner treated `average = total / count;` followed by `const re = /x = 5/;` as one unterminated regex region and merged the statements, placing the update notification after the wrong statement.
 
+### Milestone 8 — Promote a Public CLI (in progress)
+
+#### Added
+
+- Managed local `wizz` installation without npm or a package registry: `scripts/install-cli.sh` copies the required runtime to an XDG data directory and installs a launcher in an XDG bin directory. `wizz build` delegates to the existing project compiler with `src` and `dist` defaults, `wizz build <input-directory> <output-directory>` accepts explicit paths, and `wizz dev` delegates to the existing development server for the directory where it is invoked. Command parsing rejects unknown commands, incomplete build paths, and unsupported dev arguments with actionable usage guidance.
+- CLI stability contract: the installed `wizz` interface is the supported automation surface, while direct Node entry points remain implementation details. Build failures, invalid commands, invalid argument combinations, and missing development document shells exit non-zero with actionable errors; `wizz dev` validates `index.html` before it opens a server.
+- Command-level tests cover command parsing, the conventional default build, explicit build paths, development-server delegation, propagated build failures, missing document shells, and a managed local installation in an isolated home directory.
+
 ### Milestone 6 — Expand Core Component Features Deliberately
 
 #### Added

@@ -111,13 +111,13 @@ Every feature should include parser tests, generated-source tests, and a mounted
 
 **Goal:** Make the project compiler and development server available through a stable `wizz` command.
 
-- Define a package entry point that exposes `wizz build <input-directory> <output-directory>` and `wizz dev`.
-- Reuse the existing build and development-server implementations rather than duplicating their behavior in the CLI layer.
-- Validate commands and arguments with actionable usage errors and non-zero exit codes on failures.
-- Document installation, command usage, defaults, and the public stability boundary.
-- Add focused command-level tests for successful execution, invalid arguments, and propagated build failures.
+- ~~Define an installable `wizz` command that exposes `wizz build <input-directory> <output-directory>` and `wizz dev`, with `src` and `dist` defaults when build paths are omitted, without requiring npm or a package registry.~~
+- ~~Reuse the existing build and development-server implementations rather than duplicating their behavior in the CLI layer.~~
+- ~~Validate commands and arguments with actionable usage errors and non-zero exit codes on failures.~~
+- ~~Document installation, command usage, defaults, and the public stability boundary.~~
+- ~~Add focused command-level tests for successful execution, invalid arguments, and propagated build failures.~~
 
-**Done when:** application authors can install and run documented `wizz build` and `wizz dev` commands with the same reliable behavior as the current Node entry points.
+~~**Done when:** application authors can install and run documented `wizz build` and `wizz dev` commands with the same reliable behavior as the current Node entry points.~~
 
 ## 9. Add Component Props
 

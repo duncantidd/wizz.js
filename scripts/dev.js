@@ -18,6 +18,13 @@ function copyDocumentShell(projectDirectory, outputDirectory) {
   }
 }
 
+function assertDocumentShell(outputDirectory) {
+  const indexPath = path.join(outputDirectory, 'index.html');
+  if (!fs.existsSync(indexPath) || !fs.statSync(indexPath).isFile()) {
+    throw new Error(`Project document shell is missing: ${indexPath}`);
+  }
+}
+
 function buildApplication(inputDirectory, outputDirectory, projectDirectory, logger, build = buildProject) {
   const result = build(inputDirectory, outputDirectory, logger);
   copyDocumentShell(projectDirectory, outputDirectory);
@@ -67,6 +74,7 @@ function startDevelopmentServer(options = {}) {
   const watch = options.watch || fs.watch;
 
   buildApplication(inputDirectory, outputDirectory, projectDirectory, logger, build);
+  assertDocumentShell(outputDirectory);
   const server = http.createServer(createRequestHandler(outputDirectory));
   const watcher = watch(inputDirectory, { recursive: true }, (eventType, fileName) => {
     if (fileName && path.extname(fileName) === '.wizz') {
@@ -107,4 +115,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { buildApplication, copyDocumentShell, createRequestHandler, startDevelopmentServer };
+module.exports = { assertDocumentShell, buildApplication, copyDocumentShell, createRequestHandler, startDevelopmentServer };

@@ -60,6 +60,7 @@ test('builds before serving generated output and supplies SPA fallback', async (
 test('rebuilds the project when a .wizz source change is observed', (t) => {
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), '<div id="app"></div>');
   const listeners = [];
   const builds = [];
   const logger = createLogger();
@@ -69,6 +70,7 @@ test('rebuilds the project when a .wizz source change is observed', (t) => {
     projectDirectory,
     logger,
     build(inputDirectory, outputDirectory) {
+      fs.mkdirSync(outputDirectory, { recursive: true });
       builds.push({ inputDirectory, outputDirectory });
       return { compiledCount: 1, failedCount: 0 };
     },
@@ -104,4 +106,15 @@ test('reports component compilation failures while continuing to start the serve
   assert.equal(logger.errors.length, 2);
   assert.match(logger.errors[0], /Compilation failed for .*App\.wizz:/);
   assert.equal(logger.errors[1], 'Build completed with 1 failed component(s).');
+});
+
+test('rejects a project without an index.html document shell before serving', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main><p>Ready</p></main>');
+
+  assert.throws(
+    () => startDevelopmentServer({ projectDirectory, logger: createLogger() }),
+    new RegExp(`Project document shell is missing: ${path.join(projectDirectory, 'dist', 'index.html').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)
+  );
 });
