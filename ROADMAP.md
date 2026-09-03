@@ -102,10 +102,10 @@ Every feature should include parser tests, generated-source tests, and a mounted
 
 - ~~Define compatibility and versioning policy for component syntax and generated output.~~
 - ~~Replace or substantially extend the limited script scanner and transformation layer with syntax-aware JavaScript handling.~~
-- Improve diagnostics with component file paths, source excerpts, and code frames.
-- Add source maps or another debug mapping strategy for generated modules.
-- Add benchmark fixtures and regression tests for repeated updates, teardown, and large trees.
-- Document browser support, security boundaries, and generated-code assumptions.
+- ~~Improve diagnostics with component file paths, source excerpts, and code frames.~~
+- ~~Add source maps or another debug mapping strategy for generated modules.~~
+- ~~Add benchmark fixtures and regression tests for repeated updates, teardown, and large trees.~~
+- ~~Document browser support, security boundaries, and generated-code assumptions.~~
 
 ## Later Ecosystem Work
 

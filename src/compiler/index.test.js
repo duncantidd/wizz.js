@@ -73,7 +73,7 @@ test('exposes the frozen compatibility versions and stamps them into the module'
 });
 
 test('returns the generated module source and its analyzed payload', () => {
-  const { source, payload } = compile(
+  const { source, payload, sourceMap } = compile(
     '<script>let count = 0; const title = "Total";</script><section><h1>{title}</h1><p>Count: {count + 1}</p></section>'
   );
 
@@ -95,6 +95,16 @@ test('returns the generated module source and its analyzed payload', () => {
     '1'
   );
   assert.equal(heading.attributes.find((attribute) => attribute.name === 'data-wizz-id'), undefined);
+  assert.equal(sourceMap, null);
+});
+
+test('returns a source map for file-backed components with author script', () => {
+  const componentSource = '<script>let count = 0;</script><p>{count}</p>';
+  const { sourceMap } = compile(componentSource, { filePath: 'src/components/Counter.wizz' });
+
+  assert.deepEqual(sourceMap.sources, ['src/components/Counter.wizz']);
+  assert.deepEqual(sourceMap.sourcesContent, [componentSource]);
+  assert.match(sourceMap.mappings, /EAAQ/);
 });
 
 test('emits intercepted mutations and targeted updates in the generated source', () => {
@@ -161,7 +171,16 @@ test('identifies the input file and source location when compiling from a file',
 
   assert.ok(unclosed instanceof SyntaxError);
   assert.equal(unclosed.filePath, 'src/pages/Home.wizz');
-  assert.equal(unclosed.message, 'Unclosed tag <main> starting at src/pages/Home.wizz:1:1.');
+  assert.equal(unclosed.sourceExcerpt, '<main><p>{count}</p>');
+  assert.equal(
+    unclosed.codeFrame,
+    'src/pages/Home.wizz:1:1\n1 | <main><p>{count}</p>\n  | ^'
+  );
+  assert.equal(
+    unclosed.message,
+    'Unclosed tag <main> starting at src/pages/Home.wizz:1:1.\n\n' +
+      'src/pages/Home.wizz:1:1\n1 | <main><p>{count}</p>\n  | ^'
+  );
 
   assert.throws(
     () => compile('<div></span>', { filePath: 'Home.wizz' }),

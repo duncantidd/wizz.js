@@ -12,6 +12,7 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 ├── test.js                              End-to-end compilation example
 ├── test/
 │   ├── componentImports.test.js          Builds and mounts nested imported Wizz components
+│   ├── benchmarks.test.js                 Benchmark-fixture operation-count regressions
 │   ├── dev.test.js                       Development server and SPA fallback tests
 │   ├── endToEnd.test.js                 Compiles fixture components and executes them against a minimal DOM
 │   └── fixtures/                        Representative .wizz components loaded from disk by the e2e suite
@@ -19,7 +20,8 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
   └── compiler/
       ├── index.js                     Public compile(source) entry point
       ├── version.js                   Compatibility contract versions (compiler, syntax, output)
-      ├── errorAugmenter.js            Qualifies compiler errors with the component file path
+	├── errorAugmenter.js            Adds file paths, source excerpts, and code frames to compiler errors
+	├── sourceMapGenerator.js        Maps copied author script lines back to Wizz source
       ├── parser/                      1. Component source -> parser handoff
 	  ├── README.md                 Parser contracts and module reference
 	  ├── index.js                  Public parseComponent() entry point
@@ -53,6 +55,8 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 
 `src/compiler/index.test.js` and `src/compiler/errorAugmenter.test.js` hold the focused Node tests for the public `compile()` contract and its file-path error behavior.
 
+`test/benchmarks.test.js` compiles representative benchmark fixtures and pins operation-count regressions for batched repeated updates, tracked-listener teardown, and a 121-element static tree. It reports local timings without enforcing machine-dependent time limits.
+
 `src/runtime/main.js` and `src/runtime/router.js` are copied to `dist/runtime/` by `build.js`. The entry module defines an explicit route table, finds `<div id="app"></div>`, and starts the router. The router dynamically imports the component for the current path, destroys the previously mounted component before replacement, renders a not-found view for unmatched paths, and rerenders after history navigation. The document shell loads the entry module rather than importing an application component itself.
 
 `node scripts/dev.js` runs a project build for `src` into `dist`, copies the document shell and stylesheet into `dist`, serves that directory at `http://localhost:3000`, and watches `.wizz` files for full rebuilds. It returns `index.html` for unknown extensionless paths so client-side routes can load directly, while missing asset paths return HTTP 404.
@@ -66,10 +70,12 @@ The generated component module contains its own small `create()` and `update()` 
 ```text
 Wizz component source
 	-> compile(source, { filePath })
-	-> { source, payload }
+	-> { source, payload, sourceMap }
 ```
 
-When `options.filePath` is supplied (for example by `build.js`, which compiles files read from disk), compiler failures identify the file as well as their source location: location references in the message become file-qualified (`Unclosed tag <main> starting at src/pages/Home.wizz:1:1.`), messages without a location are prefixed with the path, and the thrown error carries the path programmatically as `error.filePath`. Without the option, error messages keep their original source-only locations.
+When `options.filePath` is supplied (for example by `build.js`, which compiles files read from disk), compiler failures identify the file as well as their source location: location references in the message become file-qualified, followed by a source excerpt and caret code frame. The thrown error carries `error.filePath`, `error.sourceExcerpt`, and `error.codeFrame` programmatically when a location is available. Messages without a location are prefixed with the path and do not receive a frame. Without the option, error messages keep their original source-only locations.
+
+For a file-backed component with an author `<script>`, `compile()` also returns a v3 `sourceMap` that maps copied script lines to their original Wizz coordinates and embeds the original source. `build.js` writes the map beside the generated module and adds the corresponding `sourceMappingURL` directive. Framework scaffolding and template-generated code remain intentionally unmapped until the generator records precise per-emission locations.
 
 Internally it composes the three compiler stages in order:
 
@@ -92,7 +98,8 @@ Wizz component source
 ## Current Entry Points
 
 - `src/compiler/index.js` exports `compile(source, options)`, the single public entry point that runs parsing, analysis, ID assignment, and generation.
-- `src/compiler/errorAugmenter.js` exports `augmentErrorWithFile(error, filePath)`, which implements the file-path error contract used by `compile()`.
+- `src/compiler/errorAugmenter.js` exports `augmentErrorWithFile(error, filePath, source)`, which implements the file-aware diagnostic contract used by `compile()`.
+- `src/compiler/sourceMapGenerator.js` creates the author-script v3 source map returned by file-backed `compile()` calls.
 - `src/compiler/parser/index.js` exports `parseComponent(source)`.
 - `src/compiler/analyzer/dependencyAnalyzer.js` exports `analyzeDependencies(payload)`.
 - `src/compiler/analyzer/idAssigner.js` exports `assignNodeIds(payload)`.

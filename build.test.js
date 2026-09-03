@@ -188,9 +188,18 @@ test('builds nested components into missing output directories', (t) => {
     fs.readFileSync(path.join(outputDirectory, 'App.js'), 'utf8'),
     /^export default function mountComponent\(target\)/m
   );
+  assert.equal(fs.existsSync(path.join(outputDirectory, 'App.js.map')), false);
   assert.match(
     fs.readFileSync(path.join(outputDirectory, 'pages', 'Home.js'), 'utf8'),
     /^export default function mountComponent\(target\)/m
+  );
+  const homeSourceMap = JSON.parse(fs.readFileSync(path.join(outputDirectory, 'pages', 'Home.js.map'), 'utf8'));
+  assert.equal(homeSourceMap.file, 'Home.js');
+  assert.deepEqual(homeSourceMap.sources, [path.join(inputDirectory, 'pages', 'Home.wizz')]);
+  assert.equal(homeSourceMap.sourcesContent[0], '<script>let count = 0;</script><main><p>{count}</p></main>');
+  assert.match(
+    fs.readFileSync(path.join(outputDirectory, 'pages', 'Home.js'), 'utf8'),
+    /\/\/# sourceMappingURL=Home\.js\.map$/
   );
   assert.equal(fs.existsSync(path.join(outputDirectory, 'pages', 'ignored.js')), false);
   assert.equal(
@@ -223,6 +232,8 @@ test('continues after invalid components and reports every failure with its path
   assert.equal(logger.errors.length, 1);
   assert.match(logger.errors[0], new RegExp(`Compilation failed for ${invalidPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:`));
   assert.match(logger.errors[0], /Mismatched closing tag|Unclosed tag/);
+  assert.match(logger.errors[0], new RegExp(`${invalidPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:1:16`));
+  assert.match(logger.errors[0], /1 \| <main><p>Broken<\/main>\n  \|                \^/);
 });
 
 test('rejects a missing input directory and identical input and output directories', (t) => {

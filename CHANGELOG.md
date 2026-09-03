@@ -21,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Parameter shadowing: function, arrow, and `catch` parameters shadow component state, so mutations of parameter names inside their own bodies (`items.map(count => { count = 1; })`) are left alone; suppression ends when the body closes.
 - Automatic semicolon insertion: semicolon-less statements are intercepted correctly, including statements that end at a newline and prefix/postfix `++`/`--` across line breaks.
 - 67 interceptor tests and 25 lexer tests covering the capability and safety matrix, including executed generated scripts verifying `queueUpdate({ count: true })` dispatch.
+- Benchmark fixtures and deterministic regression tests: 1,000 repeated event updates must schedule one update and make one reactive DOM lookup/write; 25 listener-heavy mount/destroy cycles must remove every tracked listener; and a 121-element static tree must mount without reactive lookups. The tests report local durations without using unstable timing thresholds.
+- Browser support and deployment contract: Wizz documents its evergreen ES-module browser baseline, required browser APIs, no-polyfill/SSR boundary, and HTTP(S) serving requirement. Security guidance now makes the trusted-component-code boundary, dynamic-attribute validation responsibility, development-server limits, production hosting/CSP responsibility, and source-map source exposure explicit. Generated-code assumptions document DOM ownership, single-use destruction, cleanup responsibility, and the current document-wide reactive-ID limitation.
 
 #### Changed
 

@@ -293,3 +293,5 @@ node --test src/compiler/generator/*.test.js
 ```
 
 The tests verify source formatting, safe reactive-assignment interception, DOM construction, preservation of escaped source text, missing-root errors, dependency-specific text updates, no-query static output, ES module export shape, reactive context getters, initial rendering, and `destroy()` behavior. Update the nearest test whenever changing generated source or its runtime contract.
+
+`../../test/benchmarks.test.js` adds deterministic benchmark regressions using representative fixtures. It verifies that 1,000 synchronous event-driven mutations schedule one update and perform one lookup/write, that 25 listener-heavy mount/destroy cycles remove every tracked listener, and that a 121-element static tree mounts without reactive lookups. The tests report durations for local comparison but assert operation counts rather than elapsed-time limits, keeping the suite reliable across machines and CI environments.

@@ -31,6 +31,36 @@ test('prefixes errors that carry no source location', () => {
   assert.equal(error.message, 'Empty.wizz: Component template must contain a root element.');
 });
 
+test('includes the failing source line as a code frame', () => {
+  const error = augmentErrorWithFile(
+    new SyntaxError('Mismatched closing tag. Expected </div>, found </span> at 2:6.'),
+    'src/pages/Home.wizz',
+    '<main>\n<div></span>\n</main>'
+  );
+
+  assert.equal(error.sourceExcerpt, '<div></span>');
+  assert.equal(
+    error.codeFrame,
+    'src/pages/Home.wizz:2:6\n2 | <div></span>\n  |      ^'
+  );
+  assert.equal(
+    error.message,
+    'Mismatched closing tag. Expected </div>, found </span> at src/pages/Home.wizz:2:6.\n\n' +
+      'src/pages/Home.wizz:2:6\n2 | <div></span>\n  |      ^'
+  );
+});
+
+test('does not add a code frame when no source location is available', () => {
+  const error = augmentErrorWithFile(
+    new SyntaxError('Component template must contain a root element.'),
+    'Empty.wizz',
+    'Only text'
+  );
+
+  assert.equal(error.sourceExcerpt, undefined);
+  assert.equal(error.codeFrame, undefined);
+});
+
 test('returns errors untouched without a usable file path', () => {
   assert.equal(augmentErrorWithFile(new SyntaxError('Unclosed tag at 1:1.'), '').filePath, undefined);
   assert.equal(augmentErrorWithFile(new SyntaxError('Unclosed tag at 1:1.'), 42).filePath, undefined);

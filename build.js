@@ -56,9 +56,21 @@ function getOutputPath(inputDirectory, outputDirectory, inputPath) {
 
 function compileWizzFile(inputPath, outputPath) {
   const rawWizzCode = fs.readFileSync(inputPath, 'utf-8');
-  const { source: generatedModule } = compile(rawWizzCode, { filePath: inputPath });
+  const { source: generatedModule, sourceMap } = compile(rawWizzCode, { filePath: inputPath });
 
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  if (sourceMap) {
+    const sourceMapPath = `${outputPath}.map`;
+    sourceMap.file = path.basename(outputPath);
+    fs.writeFileSync(sourceMapPath, JSON.stringify(sourceMap), 'utf-8');
+    fs.writeFileSync(
+      outputPath,
+      `${generatedModule}\n//# sourceMappingURL=${path.basename(sourceMapPath)}`,
+      'utf-8'
+    );
+    return;
+  }
+
   fs.writeFileSync(outputPath, generatedModule, 'utf-8');
 }
 

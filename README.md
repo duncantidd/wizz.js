@@ -234,6 +234,30 @@ Always provide `filePath` when compiling a source file. Wizz then includes both 
 Unclosed tag <main> starting at src/App.wizz:4:1.
 ```
 
+## Browser Support
+
+Wizz targets current evergreen browsers that support native ES modules and dynamic `import()`. Generated components also require `queueMicrotask()`, standard DOM construction and mutation APIs (`createElement`, `createTextNode`, `appendChild`, `insertBefore`, and `removeChild`), DOM event listeners, and `document.querySelector()`. Applications using the included router additionally require the History API (`history.pushState`) and `popstate` events.
+
+The framework does not ship browser polyfills, transpiled legacy output, SSR, or hydration. Internet Explorer and browsers without native ES modules are unsupported. Serve built files over HTTP(S), with JavaScript served as `text/javascript`; opening modules from the filesystem is not a supported deployment mode.
+
+## Security Boundaries
+
+Treat every `.wizz` component as trusted application code. Wizz parses and rewrites component scripts during compilation but does not execute them at build time. Once its generated module loads in a browser, the component's `<script>` content, template expressions, and event-handler expressions execute with the same origin, DOM, storage, network, and browser permissions as the hosting application. Wizz is not a sandbox and must not compile user-submitted or otherwise untrusted component source.
+
+Template text is emitted with `document.createTextNode()`, and static text and attribute values are serialized into generated JavaScript rather than concatenated as source. This avoids HTML-string parsing for those values. It is not an application-level sanitization system: dynamic attributes and expressions are ordinary JavaScript, and URL-bearing attributes such as `href` or `src` need application-owned validation when their values originate from untrusted data.
+
+The development server is for local development only. It provides no authentication, TLS, access control, cache policy, security headers, or production error handling. Deploy the generated `dist` directory behind production hosting that supplies the required transport, headers, access controls, and Content Security Policy. Generated application modules are external ES modules, but their component code still needs a CSP compatible with application JavaScript and dynamic module imports.
+
+File-backed components with author scripts produce source maps containing the full original `.wizz` content in `sourcesContent`. Keep `.map` files private or disable their publication when component source should not be exposed to browser users.
+
+## Generated-Code Assumptions
+
+Generated modules require a browser-like global `document` when `mountComponent(target)` runs. The supplied `target` must be a live DOM node, and callers must call the returned `destroy()` handle exactly once. Destruction removes Wizz-tracked listeners and the root node; application-managed listeners, timers, subscriptions, and global resources remain the component author's responsibility and should be released from `onDestroy`.
+
+Wizz owns the DOM subtree it creates. Do not manually reorder, remove, or replace its nodes while a component is mounted: generated updates use `data-wizz-id` lookups and child-node indexes. Reactive IDs are currently allocated per component instance but looked up through `document.querySelector()`, so applications must not mount multiple reactive instances whose generated IDs can overlap at the same time. Static components and one active reactive instance are unaffected; instance-scoped lookup is future work.
+
+Generated output preserves author script text inside the component factory and adds scheduler calls only for the documented mutation forms. It assumes the preserved script is valid JavaScript in that lexical context; it is not a JavaScript sandbox or a complete JavaScript transformation pipeline. The supported component syntax and intentional rewrite boundaries are documented in the [compiler documentation](src/compiler/README.md) and [generator documentation](src/compiler/generator/README.md).
+
 ## Further Reading
 
 - [Compiler API and error contract](src/compiler/README.md)
