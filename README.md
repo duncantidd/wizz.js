@@ -231,15 +231,19 @@ If the document does not contain `<div id="app"></div>`, the entry module report
 
 ## Routing
 
-`src/runtime/main.js` defines an explicit route table. The initial application route is `/`, which loads the emitted `App.js` module:
+Routes are generated during every build from `src/App.wizz` and `.wizz` files below `src/pages`; do not edit `src/runtime/main.js` to add a route. The build writes `dist/runtime/routes.js`, and the runtime creates lazy route loaders from that manifest.
 
-```js
-const routes = {
-  '/': () => import('../App.js')
-};
+```text
+src/App.wizz                 -> /
+src/pages/index.wizz         -> /
+src/pages/Home.wizz          -> /home
+src/pages/Admin/Users.wizz   -> /admin/users
+src/pages/Docs/index.wizz    -> /docs
 ```
 
-Add routes explicitly as compiled component modules become available. The router loads the component matching `window.location.pathname`, destroys the previously mounted component before each replacement, and renders `Not found` for unmatched paths.
+Route paths are lowercased. `App.wizz` and `pages/index.wizz` both claim `/`, so a project may contain only one of them. A build also rejects duplicate normalized paths and any page path beginning with `/runtime`, which is reserved for Wizz runtime files. Errors identify the conflicting component paths.
+
+The router loads only the component matching `window.location.pathname`, destroys the previously mounted component before each replacement, and renders `Not found` for unmatched paths. Adding, renaming, nesting, or removing a page takes effect after the next `wizz build` or rebuild from `wizz dev`; a removed page is no longer present in the generated route manifest even if an older compiled module remains in `dist`.
 
 The router also exposes `navigate(pathname)`, which updates browser history with `pushState()` and rerenders. Browser Back and Forward navigation rerenders through the `popstate` listener.
 

@@ -41,6 +41,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - CLI stability contract: the installed `wizz` interface is the supported automation surface, while direct Node entry points remain implementation details. Build failures, invalid commands, invalid argument combinations, and missing development document shells exit non-zero with actionable errors; `wizz dev` validates `index.html` before it opens a server.
 - Command-level tests cover command parsing, the conventional default build, explicit build paths, development-server delegation, propagated build failures, missing document shells, and a managed local installation in an isolated home directory.
 
+### Milestone 9 — Generate File-Based Routes
+
+#### Added
+
+- File-based browser routing: every build generates `dist/runtime/routes.js` from `src/App.wizz` and `.wizz` files below `src/pages`. The browser runtime builds lazy dynamic imports from that manifest rather than using a repository-owned route table.
+- Route conventions: `App.wizz` or `pages/index.wizz` maps to `/`; nested page paths map to lowercase URL segments; nested `index.wizz` maps to its containing directory.
+- Build validation rejects duplicate normalized routes and `/runtime`-prefixed routes, reporting the component paths involved. Rebuilds regenerate the manifest, so deleted pages no longer claim a route.
+- Build and runtime tests cover manifest generation, root and nested paths, direct page loads, lazy imports, collisions, reserved paths, and page removal.
+
 ### Milestone 6 — Expand Core Component Features Deliberately
 
 #### Added

@@ -123,14 +123,14 @@ Every feature should include parser tests, generated-source tests, and a mounted
 
 **Goal:** Generate the browser route table from the application `src/pages` directory so authors do not maintain routes manually in `src/runtime/main.js`.
 
-- Make the project build discover page components below `src/pages` and emit a generated route manifest into `dist/runtime`.
-- Define stable path conventions, including `src/App.wizz` for `/`, `src/pages/index.wizz` for `/`, nested page paths, and case normalization.
-- Make the runtime consume the generated manifest rather than a repository-owned hard-coded route table.
-- Detect ambiguous paths, duplicate route claims, and reserved runtime paths during the build, with file-aware diagnostics.
-- Preserve explicit dynamic imports so only the route selected by the browser is loaded.
-- Add build, generated-manifest, and runtime tests for root pages, nested pages, direct route loads, collisions, and removal of a page after a rebuild.
+- ~~Make the project build discover page components below `src/pages` and emit a generated route manifest into `dist/runtime`.~~
+- ~~Define stable path conventions, including `src/App.wizz` for `/`, `src/pages/index.wizz` for `/`, nested page paths, and case normalization.~~
+- ~~Make the runtime consume the generated manifest rather than a repository-owned hard-coded route table.~~
+- ~~Detect ambiguous paths, duplicate route claims, and reserved runtime paths during the build, with file-aware diagnostics.~~
+- ~~Preserve explicit dynamic imports so only the route selected by the browser is loaded.~~
+- ~~Add build, generated-manifest, and runtime tests for root pages, nested pages, direct route loads, collisions, and removal of a page after a rebuild.~~
 
-**Done when:** adding, renaming, nesting, or removing a `.wizz` page changes its browser route after the next build without an edit to `src/runtime/main.js`.
+~~**Done when:** adding, renaming, nesting, or removing a `.wizz` page changes its browser route after the next build without an edit to `src/runtime/main.js`.~~
 
 ## 10. Add Component Props
 
