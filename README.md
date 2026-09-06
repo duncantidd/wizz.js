@@ -66,7 +66,7 @@ Start the development server with:
 wizz dev
 ```
 
-`wizz dev` uses the directory where you run the command as the application project: it builds that directory's `src` into `dist`, serves the result, and watches `.wizz` source files. The public CLI currently accepts only `build` and `dev`; `build` accepts either no directory arguments or both an input and an output directory.
+`wizz dev` uses the directory where you run the command as the application project: it builds that directory's `src` into `dist`, serves the result, and watches `.wizz` source files. It uses native file events with a 250 ms polling fallback, so changes on mounted filesystems such as WSL's `/mnt/c` still rebuild when an event is missed. Rebuilds update `dist`; refresh the browser to load the new module because live reload is not implemented yet. The public CLI currently accepts only `build` and `dev`; `build` accepts either no directory arguments or both an input and an output directory.
 
 `wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
 

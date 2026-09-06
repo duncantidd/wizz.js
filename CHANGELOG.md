@@ -50,6 +50,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Build validation rejects duplicate normalized routes and `/runtime`-prefixed routes, reporting the component paths involved. Rebuilds regenerate the manifest, so deleted pages no longer claim a route.
 - Build and runtime tests cover manifest generation, root and nested paths, direct page loads, lazy imports, collisions, reserved paths, and page removal.
 
+#### Fixed
+
+- Development watching now includes a 250 ms source-file polling fallback alongside native events. This keeps `wizz dev` rebuilds reliable on mounted filesystems such as WSL's `/mnt/c` when native file notifications are missed.
+
 ### Milestone 6 — Expand Core Component Features Deliberately
 
 #### Added
