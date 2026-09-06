@@ -54,3 +54,42 @@ test('does not duplicate IDs when called more than once for the same payload', (
     { name: 'data-wizz-id', value: '1' }
   ]);
 });
+test('assigns componentIds to imported component tags instead of data-wizz-id', () => {
+  const payload = analyzeDependencies(parseComponent(
+    "<script>\nimport Counter from './Counter.wizz';\nlet start = 0;\n</script>"
+    + '<main><Counter start={start} label="Total" /></main>'
+  ));
+  const assigned = assignNodeIds(payload);
+  const main = assigned.template.children[0];
+  const componentTag = main.children[0];
+
+  assert.equal(componentTag.name, 'Counter');
+  assert.equal(componentTag.componentId, 1);
+  assert.equal(getAttribute(componentTag, 'data-wizz-id'), undefined);
+
+  const sibling = analyzeDependencies(parseComponent(
+    "<script>\nimport A from './A.wizz';\nimport B from './B.wizz';\n</script><main><A /><B /></main>"
+  ));
+  const [tagA, tagB] = assignNodeIds(sibling).template.children[0].children;
+  assert.equal(tagA.componentId, 1);
+  assert.equal(tagB.componentId, 2);
+});
+
+test('keeps assigning element data-wizz-ids around component tags', () => {
+  const payload = analyzeDependencies(parseComponent(
+    "<script>\nimport Counter from './Counter.wizz';\nlet count = 0;\n</script>"
+    + '<main><Counter /><p>{count}</p></main>'
+  ));
+  const main = assignNodeIds(payload).template.children[0];
+  const [componentTag, paragraph] = main.children;
+
+  assert.equal(componentTag.componentId, 1);
+  assert.deepEqual(getAttribute(paragraph, 'data-wizz-id'), { name: 'data-wizz-id', value: '1' });
+});
+
+test('ignores same-named tags that were not imported', () => {
+  const payload = analyzeDependencies(parseComponent('<main><Counter /></main>'));
+  const counter = assignNodeIds(payload).template.children[0].children[0];
+
+  assert.equal(counter.componentId, undefined);
+});

@@ -134,16 +134,18 @@ Every feature should include parser tests, generated-source tests, and a mounted
 
 ## 10. Add Component Props
 
-**Goal:** Let parent components pass explicit inputs to imported child components through a stable render and update contract.
+~~**Goal:** Let parent components pass explicit inputs to imported child components through a stable render and update contract.~~
 
-- Define prop declaration and consumption syntax for child component scripts and template expressions.
-- Allow imported component tags to receive static and dynamic attributes as props while retaining clear native-attribute behavior.
-- Define prop values, defaults, missing-prop behavior, and whether prop bindings are read-only inside child components.
-- Update component mounting so child instances receive props without relying on ambient parent state.
-- Define reactive prop-update semantics, including parent updates, child rerenders, teardown, and component identity in lists.
-- Add parser, analyzer, generator, and mounted runtime tests for static props, reactive props, defaults, invalid prop syntax, nested components, and child teardown.
+- ~~Define prop declaration and consumption syntax for child component scripts and template expressions.~~
+- ~~Allow imported component tags to receive static and dynamic attributes as props while retaining clear native-attribute behavior.~~
+- ~~Define prop values, defaults, missing-prop behavior, and whether prop bindings are read-only inside child components.~~
+- ~~Update component mounting so child instances receive props without relying on ambient parent state.~~
+- ~~Define reactive prop-update semantics, including parent updates, child rerenders, teardown, and component identity in lists.~~
+- ~~Add parser, analyzer, generator, and mounted runtime tests for static props, reactive props, defaults, invalid prop syntax, nested components, and child teardown.~~
 
-**Done when:** an imported component receives documented static and reactive props, rerenders predictably as parent values change, and retains its independent teardown contract.
+~~**Done when:** an imported component receives documented static and reactive props, rerenders predictably as parent values change, and retains its independent teardown contract.~~
+
+Implementation notes: props are declared with `export let name = <default>;` in the child script and passed as attributes on imported component tags (static strings, bare attributes as `true`, dynamic expressions). The child factory receives an explicit props object — `mountComponent(target, props = {})` — and reactive changes flow from the parent's `update()` through guarded `setProps()` calls on mounted child instances, preserving child identity. Prop bindings are read-only (statement-level mutations are compile-time errors), missing props fall back to declared defaults, and components inside each blocks remain unsupported, so identity semantics are defined for directly nested components only. Documented in `src/compiler/generator/README.md` under "Component Props".
 
 ## 11. Add Server-Side Rendering
 

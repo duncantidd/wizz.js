@@ -216,3 +216,119 @@ test('rejects nested blocks inside each block bodies', () => {
   }]);
   assert.throws(() => generateCreateFunction(nestedEach), /Each block bodies do not support 'EachBlock' nodes yet\./);
 });
+test('emits component tags with attributes as mount calls carrying props', () => {
+  const source = generateCreateFunction({
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'main',
+      attributes: [],
+      children: [{
+        type: 'Element',
+        name: 'Counter',
+        componentId: 1,
+        attributes: [
+          { name: 'label', value: 'Total' },
+          { name: 'disabled', value: null },
+          { name: 'start', value: 'count', dynamic: true, dependencies: ['count'] }
+        ],
+        children: []
+      }]
+    }]
+  }, [{ name: 'Counter', source: './Counter.wizz' }]);
+
+  assert.match(source, /mountChildren\.push\(\(\) => \{/);
+  assert.match(source, /component_1 = Counter\(node_1, \{ "label": "Total", "disabled": true, "start": count \}\);/);
+  assert.match(source, /childComponents\.push\(component_1\);/);
+});
+
+test('mounts prop-less component tags with a single expression and no instance reference', () => {
+  const source = generateCreateFunction({
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'main',
+      attributes: [],
+      children: [{ type: 'Element', name: 'Counter', componentId: 1, attributes: [], children: [] }]
+    }]
+  }, [{ name: 'Counter', source: './Counter.wizz' }]);
+
+  assert.match(source, /mountChildren\.push\(\(\) => childComponents\.push\(Counter\(node_1, \{\}\)\)\);/);
+  assert.doesNotMatch(source, /component_1/);
+});
+
+test('passes reactive prop values to the child at mount time', () => {
+  const source = generateCreateFunction({
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'main',
+      attributes: [],
+      children: [{
+        type: 'Element',
+        name: 'Counter',
+        componentId: 1,
+        attributes: [{ name: 'start', value: 'count', dynamic: true, dependencies: ['count'] }],
+        children: []
+      }]
+    }]
+  }, [{ name: 'Counter', source: './Counter.wizz' }]);
+
+  const mounts = [];
+  const instance = { destroy() {} };
+  const Counter = (target, props) => {
+    mounts.push({ target, props });
+    return instance;
+  };
+  const create = new Function('document', 'Counter', 'count', `${source}\nreturn create;`)(
+    { createElement: (name) => ({ name, childNodes: [], appendChild() {}, setAttribute() {} }) },
+    Counter,
+    7
+  );
+  const root = create({});
+  root.__wizzMountChildren();
+
+  assert.equal(mounts.length, 1);
+  assert.deepEqual(mounts[0].props, { start: 7 });
+  // The mounted instance is registered for the parent-owned teardown cascade.
+  assert.deepEqual(root.__wizzChildComponents, [instance]);
+});
+
+test('collectComponentRefNames lists refs only for tags with reactive props', () => {
+  const { collectComponentRefNames } = require('./domGenerator');
+  const template = {
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'main',
+      attributes: [],
+      children: [
+        { type: 'Element', name: 'A', componentId: 1, attributes: [{ name: 'x', value: 'count', dynamic: true, dependencies: ['count'] }], children: [] },
+        { type: 'Element', name: 'B', componentId: 2, attributes: [{ name: 'label', value: 'Hi' }], children: [] }
+      ]
+    }]
+  };
+
+  assert.deepEqual(collectComponentRefNames(template, [{ name: 'A' }, { name: 'B' }]), ['component_1']);
+  assert.deepEqual(collectComponentRefNames(template, [{ name: 'A' }, { name: 'B' }]), collectComponentRefNames(template, [{ name: 'A' }, { name: 'B' }]));
+});
+
+test('rejects children, event directives, and prototype keys on component tags', () => {
+  const generate = (componentNode) => () => generateCreateFunction({
+    type: 'Root',
+    children: [{ type: 'Element', name: 'main', attributes: [], children: [componentNode] }]
+  }, [{ name: 'Counter', source: './Counter.wizz' }]);
+
+  assert.throws(
+    generate({ type: 'Element', name: 'Counter', componentId: 1, attributes: [], children: [{ type: 'Text', value: 'x' }] }),
+    /Component <Counter> does not support children\./
+  );
+  assert.throws(
+    generate({ type: 'Element', name: 'Counter', componentId: 1, attributes: [{ name: 'on:click', value: 'handle' }], children: [] }),
+    /Event directive 'on:click' is not supported on component <Counter>/
+  );
+  assert.throws(
+    generate({ type: 'Element', name: 'Counter', componentId: 1, attributes: [{ name: '__proto__', value: 'x' }], children: [] }),
+    /'__proto__' cannot be used as a prop name/
+  );
+});

@@ -95,3 +95,95 @@ test('does not emit DOM queries for templates without reactive expressions', () 
   assert.doesNotMatch(source, /querySelector/);
   assert.doesNotThrow(() => new Function(`${source}\nreturn update;`));
 });
+test('routes reactive prop changes to component instances through setProps', () => {
+  const calls = [];
+  const instance = { setProps(next) { calls.push({ ...next }); } };
+  const update = createUpdate({
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'main',
+      attributes: [],
+      children: [{
+        type: 'Element',
+        name: 'Counter',
+        componentId: 1,
+        attributes: [
+          { name: 'start', value: 'count', dynamic: true, dependencies: ['count'] },
+          { name: 'label', value: 'Total' }
+        ],
+        children: []
+      }]
+    }]
+  }, {}, { count: 9, component_1: instance });
+
+  update({}, { count: true });
+  update({}, { other: true });
+
+  assert.deepEqual(calls, [{ start: 9 }]);
+});
+
+test('skips setProps when the instance has not mounted or the attribute is static', () => {
+  const update = createUpdate({
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'main',
+      attributes: [],
+      children: [{
+        type: 'Element',
+        name: 'Counter',
+        componentId: 1,
+        attributes: [
+          { name: 'start', value: 'count', dynamic: true, dependencies: ['count'] },
+          { name: 'label', value: 'total', dynamic: true, dependencies: [] }
+        ],
+        children: []
+      }]
+    }]
+  }, {}, { count: 2, component_1: null });
+
+  // No mounted instance: the null guard makes this a no-op instead of a crash.
+  assert.doesNotThrow(() => update({}, { count: true }));
+
+  const source = generateUpdateFunction({
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'main',
+      attributes: [],
+      children: [{
+        type: 'Element',
+        name: 'Counter',
+        componentId: 1,
+        attributes: [{ name: 'label', value: 'total', dynamic: true, dependencies: [] }],
+        children: []
+      }]
+    }]
+  });
+  assert.doesNotMatch(source, /setProps/);
+});
+
+test('emits setProps for component tags inside conditional branches', () => {
+  const calls = [];
+  const instance = { setProps(next) { calls.push({ ...next }); } };
+  const update = createUpdate({
+    type: 'Root',
+    children: [{
+      type: 'IfBlock',
+      test: 'visible',
+      consequent: [{
+        type: 'Element',
+        name: 'Counter',
+        componentId: 1,
+        attributes: [{ name: 'start', value: 'count', dynamic: true, dependencies: ['count'] }],
+        children: []
+      }],
+      alternate: null
+    }]
+  }, {}, { count: 5, component_1: instance });
+
+  update({}, { count: true });
+
+  assert.deepEqual(calls, [{ start: 5 }]);
+});

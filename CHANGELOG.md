@@ -11,6 +11,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Milestone 10 — Add Component Props
+
+#### Added
+
+- Component props: a child declares inputs with `export let name = <default>;` (or a bare `export let count;` for `undefined`) and a parent passes them as attributes on an imported component tag. Static attributes pass their string, bare attributes pass `true`, and dynamic attributes pass the evaluated expression; the child factory receives an explicit props object — `mountComponent(target, props = {})` — so instances never read ambient parent state.
+- Reactive prop updates: the parent's generated `update()` delivers changes through guarded `component_<id>.setProps({ prop: value })` calls on factory-scope instance references, so children rerender in place through their own batched scheduler without remounting, and child identity is stable across parent rerenders. `setProps()` skips destroyed children, ignores undeclared keys, compares with `Object.is` so identical updates are free, and re-applies the declared default when the parent explicitly passes `undefined`.
+- Read-only props: any statement-level mutation of a prop name (`name = x`, `name++`, `name += x`, `name.prop = x`) is a compile-time error with a source location, enforced by a new `findReactiveMutations()` export from the assignment interceptor that shares the syntax-aware scanner. Function parameters and block-scoped `let`/`const`/`var` declarations now shadow reactive names for their scope, so locally shadowed names can be mutated without triggering the check or a spurious update notification.
+- Prop extraction: a new `src/compiler/parser/propExtractor.js` finds `export let` statements on the scriptLexer token stream, records `{ name, defaultValue }` in declaration order, and removes the statements from the raw script. Extents are syntax-aware, so strings, template literals, comments, and regex literals cannot hide a semicolon or a nested `export`; non-`let` exports, multi-declarator statements, missing semicolons, statement-swallowing extents, reserved names (`props`, `__proto__`, strict-mode reserved words, and the framework-reserved `__wizz` prefix) are all compile-time errors with locations.
+- Analyzer component identity: `assignNodeIds()` now assigns a sequential `componentId` to imported component tags (never `data-wizz-id`, since component tags create no DOM), giving the generated `create()` and `update()` a shared factory-scope instance reference.
+- Conditional-branch updates: the update generator now walks `{#if}` branches, so reactive text, dynamic attributes, and component props inside conditional branches participate in updates. Previously the analyzer assigned them `data-wizz-id` targets but no update code was ever emitted for them.
+- Tests: prop extraction and invalid-syntax coverage, prop dependency and componentId analyzer coverage, props-object emission and setProps routing in both generators, executed-module tests for the props contract (defaults, missing props, read-only enforcement, `Object.is` deduplication, undefined-default reapplication, teardown no-ops, a regression for a prop named `value` that once collided with a generated local), and mounted end-to-end tests in `test/componentProps.test.js` covering static/dynamic/boolean props, defaults, nested prop chains, identity preservation, teardown cascades, and build-time rejection of invalid prop syntax.
+
+#### Changed
+
+- Versions bumped under the documented policy: component syntax 1.0.0 → 1.1.0 (prop declarations and attributes on component tags are additive syntax), generated output 1.1.0 → 1.2.0 (`mountComponent(target, props)` signature, optional `setProps()` handle member, prop bindings, and component instance references are additive), compiler 1.1.0 → 1.2.0.
+- `scriptLexer.js` moved from `src/compiler/generator/` to `src/compiler/` as a shared compiler-root utility alongside `errorAugmenter.js` and `sourceMapGenerator.js`, because both the parser (prop extraction) and the generator (assignment interception) now consume it. Import paths updated; no behavior change.
+- Component tags previously rejected all attributes ("does not support attributes or children"); they now accept attributes as props and still reject children, `on:*` directives, and `__proto__` prop names.
+
 ### Milestone 7 — Production Hardening (in progress)
 
 #### Added
@@ -126,7 +144,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## Test status
 
-The suite stands at 219 passing tests (compiler, generator, build, dev server, and runtime) as of 2026-08-30. Run it with:
+The suite stands at 304 passing tests (compiler, generator, build, dev server, and runtime) as of 2026-09-06, with one pre-existing failure: `build.test.js`'s "rejects colliding page routes" writes `Home.wizz` and `home.wizz` into the same directory, which cannot coexist on a case-insensitive filesystem such as default macOS, so the collision never materializes there. Run it with:
 
 ```bash
 node --test "src/**/*.test.js" build.test.js "test/**/*.test.js"

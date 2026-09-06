@@ -1,4 +1,6 @@
-const { tokenizeScript, matchTemplateTokens } = require('./scriptLexer');
+// scriptLexer.js is a shared compiler utility (it also serves the parser's
+// prop extraction); it lives at the compiler root rather than in a stage.
+const { tokenizeScript, matchTemplateTokens } = require('../scriptLexer');
 
 const ASSIGNMENT_OPERATORS = new Set([
   '=', '+=', '-=', '*=', '/=', '%=', '**=', '&&=', '||=', '??=',
@@ -259,6 +261,59 @@ function collectCallBodyParameters(tokens, braceIndex) {
   return collectIdentifierNames(tokens, openIndex, closeIndex);
 }
 
+// Keywords that open a variable declaration and shadow component state for
+// their scope, so mutations of the declared name are left alone.
+const DECLARATION_KEYWORDS = new Set(['let', 'const', 'var']);
+
+/**
+ * Collects the binding names declared by a `let`/`const`/`var` statement,
+ * including destructuring patterns (`let { a, b } = obj;`) and comma-separated
+ * declarators, stopping at the statement's terminating `;` or a for-loop
+ * `of`/`in` keyword. Initializer expressions are skipped so their identifiers
+ * are never mistaken for bindings.
+ * @returns {{ names: string[], endIndex: number }} The declared names and the
+ *   token index where scanning stopped.
+ */
+function collectDeclaredNames(tokens, keywordIndex) {
+  const names = [];
+  let phase = 'pattern';
+  let depth = 0;
+  let index = keywordIndex + 1;
+
+  while (index < tokens.length) {
+    const token = tokens[index];
+    if (token.type === 'comment') { index += 1; continue; }
+
+    if (token.type === 'punctuator') {
+      const value = token.value;
+      if ('([{'.includes(value)) { depth += 1; index += 1; continue; }
+      if (')]}'.includes(value)) {
+        depth -= 1;
+        if (depth < 0) break;
+        index += 1;
+        continue;
+      }
+      if (depth === 0 && value === ';') break;
+      if (depth === 0 && value === ',') {
+        if (phase === 'initializer') phase = 'pattern'; // Next declarator in `let a = 1, b = 2;`.
+        index += 1;
+        continue;
+      }
+      if (depth === 0 && value === '=' && phase === 'pattern') phase = 'initializer';
+      index += 1;
+      continue;
+    }
+
+    if (token.type === 'identifier' && depth === 0 && phase === 'pattern'
+      && (token.value === 'of' || token.value === 'in')) break;
+
+    if (token.type === 'identifier' && phase === 'pattern') names.push(token.value);
+    index += 1;
+  }
+
+  return { names, endIndex: index };
+}
+
 /**
  * Rewrites reactive mutations in component script source so they notify the
  * component update dispatcher.
@@ -286,15 +341,32 @@ function collectCallBodyParameters(tokens, braceIndex) {
  * @param {Array<string>} reactiveVars - Reactive variable names.
  * @returns {string} The rewritten JavaScript string.
  */
-function interceptAssignments(rawScript, reactiveVars) {
-  if (!rawScript || !Array.isArray(reactiveVars) || reactiveVars.length === 0) return rawScript;
-
-  const reactiveNames = new Set(reactiveVars);
+/**
+ * Scans component script for statement-level mutations of the given reactive
+ * names and returns them without rewriting anything. Shared by the rewrite
+ * pass (interceptAssignments) and the read-only prop check (the component
+ * generator treats any mutation of a prop name as a compile-time error).
+ *
+ * Block-scoped `let`/`const`/`var` declarations shadow reactive names for
+ * their scope, exactly like function and arrow parameters already do, so a
+ * locally-declared name can be mutated without notifying the dispatcher.
+ * Component-scope declarations are the reactive state itself and never
+ * shadow. For-loop header declarations (`for (let item of items)`) shadow the
+ * braced body that immediately follows; a header whose body is a bare
+ * statement, and computed destructuring keys, pass through untracked.
+ * @param {string} rawScript - The raw JavaScript string from the <script> block.
+ * @param {Set<string>} reactiveNames - Reactive variable names.
+ * @returns {Array<{ name: string, at: number, insertAt: number, semicolonTerminated: boolean, nextIndex: number }>}
+ *   One record per detected mutation; `at` is the offset of the mutating
+ *   token, the rest describe where a notification insertion would go.
+ */
+function scanReactiveMutations(rawScript, reactiveNames) {
   const tokens = tokenizeScript(rawScript);
   const templatePairs = matchTemplateTokens(tokens);
-  const insertions = [];
+  const mutations = [];
   const contexts = [{ type: 'top' }];
   const shadowedDepths = new Map();
+  const pendingDeclared = [];
   let atStatementStart = true;
   let switchPending = false;
   let classPending = false;
@@ -315,16 +387,13 @@ function interceptAssignments(rawScript, reactiveVars) {
     }
   };
 
-  const buildMutation = (extent, name) => {
-    const notification = `queueUpdate({ ${name}: true });`;
-    return {
-      insertion: {
-        at: extent.insertAt,
-        text: extent.semicolonTerminated ? ` ${notification}` : `; ${notification}`
-      },
-      resumeAt: extent.semicolonTerminated ? -1 : extent.nextIndex
-    };
-  };
+  const buildMutation = (extent, name, at) => ({
+    name,
+    at,
+    insertAt: extent.insertAt,
+    semicolonTerminated: extent.semicolonTerminated,
+    nextIndex: extent.semicolonTerminated ? -1 : extent.nextIndex
+  });
 
   const detectMutation = (index) => {
     const token = tokens[index];
@@ -335,7 +404,7 @@ function interceptAssignments(rawScript, reactiveVars) {
       const target = tokens[targetIndex];
       if (!target || target.type !== 'identifier' || !reactiveNames.has(target.value) || isShadowed(target.value)) return null;
       const extent = findStatementExtent(tokens, targetIndex, templatePairs);
-      return extent ? buildMutation(extent, target.value) : null;
+      return extent ? buildMutation(extent, target.value, token.start) : null;
     }
 
     if (token.type !== 'identifier' || !reactiveNames.has(token.value) || isShadowed(token.value)) return null;
@@ -346,7 +415,7 @@ function interceptAssignments(rawScript, reactiveVars) {
     // Direct assignment: count = 1; count += 1;
     if (operatorToken && operatorToken.type === 'punctuator' && ASSIGNMENT_OPERATORS.has(operatorToken.value)) {
       const extent = findStatementExtent(tokens, operatorIndex + 1, templatePairs);
-      return extent ? buildMutation(extent, token.value) : null;
+      return extent ? buildMutation(extent, token.value, token.start) : null;
     }
 
     // Property or element chain: user.name = "Ada"; items[0] = 1; user.age++;
@@ -358,14 +427,14 @@ function interceptAssignments(rawScript, reactiveVars) {
       if (!operator || operator.type !== 'punctuator'
         || (!ASSIGNMENT_OPERATORS.has(operator.value) && !UPDATE_OPERATORS.has(operator.value))) return null;
       const extent = findStatementExtent(tokens, chain.endIndex + 1, templatePairs);
-      return extent ? buildMutation(extent, token.value) : null;
+      return extent ? buildMutation(extent, token.value, token.start) : null;
     }
 
     // Postfix update: count++; --total;
     if (operatorToken && operatorToken.type === 'punctuator' && UPDATE_OPERATORS.has(operatorToken.value)
       && !operatorToken.newlineBefore) {
       const extent = findStatementExtent(tokens, index, templatePairs);
-      return extent ? buildMutation(extent, token.value) : null;
+      return extent ? buildMutation(extent, token.value, token.start) : null;
     }
 
     return null;
@@ -396,8 +465,8 @@ function interceptAssignments(rawScript, reactiveVars) {
     if (detectionAllowed && isStatementContext()) {
       const mutation = detectMutation(index);
       if (mutation) {
-        insertions.push(mutation.insertion);
-        if (mutation.resumeAt > index) resumeStatementStartAt = mutation.resumeAt;
+        mutations.push(mutation);
+        if (mutation.nextIndex > index) resumeStatementStartAt = mutation.nextIndex;
       }
     }
 
@@ -407,6 +476,26 @@ function interceptAssignments(rawScript, reactiveVars) {
       if (token.type === 'identifier') {
         if (token.value === 'switch') switchPending = true;
         if (token.value === 'class') classPending = true;
+
+        // A declaration keyword shadows the names it binds for its scope, so
+        // mutations of the local name never notify the dispatcher. Nested
+        // block and switch bodies shadow immediately; for-loop headers carry
+        // their bindings into the braced body that follows. Component-scope
+        // declarations are the reactive state itself and never shadow.
+        if (DECLARATION_KEYWORDS.has(token.value)
+          && !isPunctuator(tokens[previousSignificantIndex(tokens, index - 1)], '.')) {
+          const { names } = collectDeclaredNames(tokens, index);
+          if (names.length > 0) {
+            const contextType = topContext().type;
+            if (contextType === 'block' || contextType === 'switchBody') {
+              const context = topContext();
+              context.declared = [...(context.declared || []), ...names];
+              pushShadowed(names);
+            } else if (contextType === 'paren') {
+              pendingDeclared.push(...names);
+            }
+          }
+        }
       }
       atStatementStart = false;
       continue;
@@ -455,6 +544,10 @@ function interceptAssignments(rawScript, reactiveVars) {
 
       contexts.push(context);
       if (context.parameters) pushShadowed(context.parameters);
+      if (pendingDeclared.length > 0 && ['block', 'switchBody'].includes(context.type)) {
+        context.declared = pendingDeclared.splice(0);
+        pushShadowed(context.declared);
+      }
       atStatementStart = true;
       continue;
     }
@@ -463,6 +556,7 @@ function interceptAssignments(rawScript, reactiveVars) {
       if (contexts.length > 1) {
         const closing = contexts.pop();
         if (closing.parameters) popShadowed(closing.parameters);
+        if (closing.declared) popShadowed(closing.declared);
         atStatementStart = ['block', 'switchBody'].includes(closing.type);
       } else {
         atStatementStart = false;
@@ -485,15 +579,51 @@ function interceptAssignments(rawScript, reactiveVars) {
       atStatementStart = true;
       switchPending = false;
       classPending = false;
+      pendingDeclared.length = 0;
       continue;
     }
 
     atStatementStart = false;
   }
 
-  if (insertions.length === 0) return rawScript;
+  return mutations;
+}
+
+function lineAndColumn(source, offset) {
+  let line = 1;
+  let lastNewline = -1;
+  for (let index = 0; index < offset; index += 1) {
+    if (source[index] === '\n') {
+      line += 1;
+      lastNewline = index;
+    }
+  }
+  return { line, column: offset - lastNewline };
+}
+
+/**
+ * Rewrites reactive mutations in component script source so they notify the
+ * component update dispatcher, inserting `queueUpdate({ name: true })` after
+ * each detected statement. See scanReactiveMutations() for the detection
+ * contract; valid source is never corrupted because unconfident extents pass
+ * through untransformed.
+ * @param {string} rawScript - The raw JavaScript string from the <script> block.
+ * @param {Array<string>} reactiveVars - Reactive variable names.
+ * @returns {string} The rewritten JavaScript string.
+ */
+function interceptAssignments(rawScript, reactiveVars) {
+  if (!rawScript || !Array.isArray(reactiveVars) || reactiveVars.length === 0) return rawScript;
+
+  const mutations = scanReactiveMutations(rawScript, new Set(reactiveVars));
+  if (mutations.length === 0) return rawScript;
 
   let output = rawScript;
+  const insertions = mutations.map((mutation) => ({
+    at: mutation.insertAt,
+    text: mutation.semicolonTerminated
+      ? ` queueUpdate({ ${mutation.name}: true });`
+      : `; queueUpdate({ ${mutation.name}: true });`
+  }));
   insertions.sort((left, right) => right.at - left.at);
   for (const insertion of insertions) {
     output = output.slice(0, insertion.at) + insertion.text + output.slice(insertion.at);
@@ -501,4 +631,24 @@ function interceptAssignments(rawScript, reactiveVars) {
   return output;
 }
 
-module.exports = { interceptAssignments };
+/**
+ * Reports statement-level mutations of the given names without rewriting
+ * anything. The component generator uses this to enforce read-only props:
+ * any detected mutation of a prop name is a compile-time error.
+ * @param {string} rawScript - The raw JavaScript string from the <script> block.
+ * @param {Iterable<string>} names - Names whose mutation is an error.
+ * @returns {Array<{ name: string, line: number, column: number }>} One entry
+ *   per detected mutation, located in the script source.
+ */
+function findReactiveMutations(rawScript, names) {
+  if (!rawScript) return [];
+  const nameSet = names instanceof Set ? names : new Set(names || []);
+  if (nameSet.size === 0) return [];
+
+  return scanReactiveMutations(rawScript, nameSet).map((mutation) => ({
+    name: mutation.name,
+    ...lineAndColumn(rawScript, mutation.at)
+  }));
+}
+
+module.exports = { interceptAssignments, findReactiveMutations };
