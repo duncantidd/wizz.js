@@ -41,7 +41,7 @@ Ensure the launcher directory is on your `PATH`. For Bash or Zsh using the defau
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Run `./scripts/install-cli.sh` again from an updated checkout to replace the managed local installation. To remove it, delete the launcher and installed runtime:
+The installed `wizz` command is a copy of this checkout, not a live link to it. Run `./scripts/install-cli.sh` again after pulling updates that change the compiler, runtime, build script, or CLI scripts; otherwise `wizz build` and `wizz dev` continue using the previously installed copy. Source-only `.wizz` component changes do not require reinstalling. To remove the managed installation, delete the launcher and installed runtime:
 
 ```bash
 rm -f "${XDG_BIN_HOME:-$HOME/.local/bin}/wizz"

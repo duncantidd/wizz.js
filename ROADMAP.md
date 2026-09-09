@@ -147,7 +147,20 @@ Every feature should include parser tests, generated-source tests, and a mounted
 
 Implementation notes: props are declared with `export let name = <default>;` in the child script and passed as attributes on imported component tags (static strings, bare attributes as `true`, dynamic expressions). The child factory receives an explicit props object — `mountComponent(target, props = {})` — and reactive changes flow from the parent's `update()` through guarded `setProps()` calls on mounted child instances, preserving child identity. Prop bindings are read-only (statement-level mutations are compile-time errors), missing props fall back to declared defaults, and components inside each blocks remain unsupported, so identity semantics are defined for directly nested components only. Documented in `src/compiler/generator/README.md` under "Component Props".
 
-## 11. Add Server-Side Rendering
+## 11. Build a VS Code Extension
+
+**Goal:** Provide first-party editor support for stable Wizz language and project workflows.
+
+- Add `.wizz` language registration, syntax highlighting, and editor language configuration.
+- Surface compiler diagnostics with file paths, source locations, excerpts, and code frames through VS Code diagnostics.
+- Provide component navigation for imports and route-aware page files.
+- Integrate stable `wizz build` and `wizz dev` commands without making the core compiler depend on VS Code APIs.
+- Document installation, supported editor features, and the extension's compatibility boundary with Wizz syntax and compiler versions.
+- Add focused extension tests for language registration, diagnostic conversion, navigation, and command integration.
+
+**Done when:** Wizz authors can install the extension and receive syntax highlighting, compiler diagnostics, component navigation, and build integration from VS Code.
+
+## 12. Add Server-Side Rendering
 
 **Goal:** Reuse the component AST for a distinct HTML string-rendering target and define how the browser hydrates its output.
 
@@ -162,7 +175,6 @@ Implementation notes: props are declared with `export let name = <default>;` in 
 
 ## Later Ecosystem Work
 
-- **VS Code extension:** Provide syntax highlighting, diagnostics, component navigation, and build integration after the language syntax is stable.
 - **MCP:** Expose the Wizz project structure, component language contract, compiler diagnostics, build command, and development workflow through a Model Context Protocol server so AI agents can inspect an application and safely create or update Wizz web applications autonomously. Keep filesystem permissions explicit and project-scoped; do not make the core compiler depend on an AI runtime.
 - **ORM:** Keep it separate from the core renderer/compiler so application persistence choices do not define component semantics.
 

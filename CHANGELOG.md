@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Docs
+
+- Clarified that the managed `wizz` CLI is a copied installation: rerun `./scripts/install-cli.sh` after pulling compiler, runtime, build, or CLI changes, while ordinary `.wizz` source edits do not require reinstalling.
+
 ### Milestone 10 — Add Component Props
 
 #### Added
