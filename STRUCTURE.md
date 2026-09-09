@@ -7,6 +7,14 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 ├── STRUCTURE.md                         Project map and compiler pipeline
 ├── ROADMAP.md                           Ordered development milestones
 ├── CHANGELOG.md                         Notable changes, grouped by milestone
+├── .vscode/launch.json                  Repository-root Extension Development Host debug profile
+├── vscode-extension/                    First-party VS Code language and project tooling
+│   ├── extension.js                      Extension-host activation, diagnostics, navigation, and commands
+│   ├── services.js                       Pure diagnostic/import utility functions
+│   ├── language-configuration.json      Wizz bracket, comment, and pairing behavior
+│   ├── syntaxes/wizz.tmLanguage.json    TextMate grammar for Wizz source
+│   ├── .vscode/launch.json              Extension Development Host debug profile
+│   └── test/services.test.js             Focused Node tests for extension utilities
 ├── scripts/
 │   ├── cli.js                            Public wizz build/dev command dispatcher
 │   ├── dev.js                            Builds, serves dist, and watches .wizz source files
