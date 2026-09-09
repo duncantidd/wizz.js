@@ -41,7 +41,7 @@ Ensure the launcher directory is on your `PATH`. For Bash or Zsh using the defau
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Run `./scripts/install-cli.sh` again from an updated checkout to replace the managed local installation. To remove it, delete the launcher and installed runtime:
+The installed `wizz` command is a copy of this checkout, not a live link to it. Run `./scripts/install-cli.sh` again after pulling updates that change the compiler, runtime, build script, or CLI scripts; otherwise `wizz build` and `wizz dev` continue using the previously installed copy. Source-only `.wizz` component changes do not require reinstalling. To remove the managed installation, delete the launcher and installed runtime:
 
 ```bash
 rm -f "${XDG_BIN_HOME:-$HOME/.local/bin}/wizz"
@@ -261,7 +261,35 @@ Import another Wizz component with a default `.wizz` import and render it with a
 </main>
 ```
 
-The build rewrites the import to `./components/Counter.js`, which follows the output-path mapping. Imported component tags must be nested inside a native element and cannot yet receive attributes or children. Destroying the parent component also destroys all imported child components.
+The build rewrites the import to `./components/Counter.js`, which follows the output-path mapping. Imported component tags must be nested inside a native element and cannot receive children or event directives. Destroying the parent component also destroys all imported child components.
+
+### Props
+
+The child declares its inputs with `export let` declarations; a bare declaration defaults to `undefined`:
+
+```wizz
+<script>
+  export let name = 'Guest';
+  export let count;
+</script>
+
+<p>Hello {name}, clicked {count} times</p>
+```
+
+The parent passes props as attributes on the component tag. Static attributes pass their string, bare attributes pass `true`, and dynamic attributes pass the expression — evaluated at mount and again whenever its reactive dependencies change:
+
+```wizz
+<script>
+  import Greeting from './components/Greeting.wizz';
+  let clicks = 0;
+</script>
+
+<main>
+  <Greeting name="Ada" count={clicks} emphasized />
+</main>
+```
+
+When `clicks` changes, the parent delivers the new value through the child instance's `setProps()` and the child rerenders in place — it is never remounted, so its DOM identity and internal state are preserved. Props are reactive inside the child exactly like `let` state. They are read-only: assigning to a prop in the child script is a compile-time error. A prop the parent does not pass keeps its declared default, and passing `undefined` explicitly restores that default. Attributes the child never declared are ignored.
 
 Serve the directory over HTTP when loading browser ES modules, for example:
 
@@ -279,7 +307,7 @@ Wizz's compatibility contract has three semver versions, defined in `src/compile
 
 As a component author, within one `syntax` major version any component that compiled before keeps compiling with the same meaning. New syntax may be added in a minor version, but existing syntax never changes meaning without a major bump.
 
-As a consumer of generated modules, within one `output` major version every generated module keeps its surface: the `mountComponent(target)` default export, the returned `{ destroy() }` handle, and the teardown behavior behind it.
+As a consumer of generated modules, within one `output` major version every generated module keeps its surface: the `mountComponent(target, props)` default export, the returned `{ setProps?, destroy() }` handle (`setProps(next)` exists on components that declare props), and the teardown behavior behind them.
 
 A breaking change to either contract bumps its major version and the compiler's major version. Every compiled module is stamped with all three versions on its first line, so build artifacts stay traceable to the compiler that produced them:
 
@@ -315,7 +343,7 @@ File-backed components with author scripts produce source maps containing the fu
 
 ## Generated-Code Assumptions
 
-Generated modules require a browser-like global `document` when `mountComponent(target)` runs. The supplied `target` must be a live DOM node, and callers must call the returned `destroy()` handle exactly once. Destruction removes Wizz-tracked listeners and the root node; application-managed listeners, timers, subscriptions, and global resources remain the component author's responsibility and should be released from `onDestroy`.
+Generated modules require a browser-like global `document` when `mountComponent(target, props)` runs. The supplied `target` must be a live DOM node, and callers must call the returned `destroy()` handle exactly once. Destruction removes Wizz-tracked listeners and the root node; application-managed listeners, timers, subscriptions, and global resources remain the component author's responsibility and should be released from `onDestroy`.
 
 Wizz owns the DOM subtree it creates. Do not manually reorder, remove, or replace its nodes while a component is mounted: generated updates use `data-wizz-id` lookups and child-node indexes. Reactive IDs are currently allocated per component instance but looked up through `document.querySelector()`, so applications must not mount multiple reactive instances whose generated IDs can overlap at the same time. Static components and one active reactive instance are unaffected; instance-scoped lookup is future work.
 

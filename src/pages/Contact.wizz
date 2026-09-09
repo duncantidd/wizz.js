@@ -1,3 +1,13 @@
+<script>
+  import TestProps from '../components/TestProps.wizz';
+  let myName = 'Paul';
+
+  setTimeout(() => {
+    myName = "Duncan";
+  }, 3000);
+</script>
+
 <main>
   <h1>Contact us if you like bestie!</h1>
+  <TestProps name={myName} />
 </main>

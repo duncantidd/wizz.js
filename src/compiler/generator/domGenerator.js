@@ -1,6 +1,57 @@
 // src/compiler/generator/domGenerator.js
 const { CodeBuilder } = require('./codeBuilder');
 
+// Component attributes are props, not DOM attributes: imported component tags
+// create no element, so native attribute semantics never apply to them.
+// Static attributes pass their string, bare attributes pass `true`, dynamic
+// attributes pass the evaluated expression.
+function buildComponentPropsSource(node) {
+  const entries = [];
+  for (const attribute of node.attributes || []) {
+    if (attribute.name === '__proto__') {
+      throw new SyntaxError(`'${attribute.name}' cannot be used as a prop name on <${node.name}>.`);
+    }
+    if (attribute.name.startsWith('on:')) {
+      throw new SyntaxError(`Event directive '${attribute.name}' is not supported on component <${node.name}>; component attributes become props.`);
+    }
+    if (attribute.dynamic) {
+      entries.push(`${JSON.stringify(attribute.name)}: ${attribute.value}`);
+    } else if (attribute.value === null) {
+      entries.push(`${JSON.stringify(attribute.name)}: true`);
+    } else {
+      entries.push(`${JSON.stringify(attribute.name)}: ${JSON.stringify(attribute.value)}`);
+    }
+  }
+  return entries.length === 0 ? '{}' : `{ ${entries.join(', ')} }`;
+}
+
+/**
+ * Collects the factory-scope reference variable names for component tags that
+ * carry reactive props. The generated create() assigns the mounted instance
+ * and the generated update() reads it to deliver prop updates.
+ * @param {Object} templateAST - The analyzed template AST.
+ * @param {Array<{name: string}>} componentImports - The component's imports.
+ * @returns {string[]} Reference variable names in template order.
+ */
+function collectComponentRefNames(templateAST, componentImports = []) {
+  const importedComponents = new Set(componentImports.map((component) => component.name));
+  const refNames = [];
+
+  function walk(node) {
+    if (node.type === 'Element' && importedComponents.has(node.name)
+      && (node.attributes || []).some((attribute) => attribute.dynamic && attribute.dependencies?.length > 0)) {
+      refNames.push(`component_${node.componentId}`);
+    }
+    // IfBlock.children aliases its consequent, so walking children plus
+    // alternate covers every branch exactly once.
+    (node.children || []).forEach(walk);
+    (node.alternate || []).forEach(walk);
+  }
+
+  walk(templateAST);
+  return refNames;
+}
+
 /**
  * Generates the create() lifecycle function for a component.
  * @param {Object} templateAST - The enriched template AST.
@@ -140,10 +191,25 @@ function generateCreateFunction(templateAST, componentImports = []) {
         if (!parentVarName) {
           throw new SyntaxError(`Component <${node.name}> must be nested inside an element.`);
         }
-        if (node.attributes.length > 0 || node.children.length > 0) {
-          throw new SyntaxError(`Component <${node.name}> does not support attributes or children.`);
+        if (node.children.length > 0) {
+          throw new SyntaxError(`Component <${node.name}> does not support children.`);
         }
-        builder.add(`mountChildren.push(() => childComponents.push(${node.name}(${parentVarName})));`);
+        const propsSource = buildComponentPropsSource(node);
+        const hasReactiveProps = (node.attributes || []).some((attribute) => attribute.dynamic && attribute.dependencies?.length > 0);
+        if (hasReactiveProps) {
+          // The mounted instance is kept in a factory-scope reference so
+          // update() can deliver prop changes without remounting.
+          if (node.componentId == null) {
+            throw new SyntaxError(`Component <${node.name}> is missing its componentId; run the analyzer before generation.`);
+          }
+          const refName = `component_${node.componentId}`;
+          builder.add('mountChildren.push(() => {').indent();
+          builder.add(`${refName} = ${node.name}(${parentVarName}, ${propsSource});`);
+          builder.add(`childComponents.push(${refName});`);
+          builder.dedent().add('});');
+        } else {
+          builder.add(`mountChildren.push(() => childComponents.push(${node.name}(${parentVarName}, ${propsSource})));`);
+        }
         return null;
       }
 
@@ -219,4 +285,4 @@ function generateCreateFunction(templateAST, componentImports = []) {
   return builder.generate();
 }
 
-module.exports = { generateCreateFunction };
+module.exports = { generateCreateFunction, collectComponentRefNames };

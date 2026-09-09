@@ -1,7 +1,7 @@
 // src/compiler/generator/assignmentInterceptor.test.js
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { interceptAssignments } = require('./assignmentInterceptor');
+const { interceptAssignments, findReactiveMutations } = require('./assignmentInterceptor');
 
 // Executes an intercepted script the way a component factory would: with a
 // queueUpdate dispatcher in scope, and captures the notifications it sends.
@@ -672,4 +672,71 @@ test('notification text matches the generated component dispatcher contract', ()
     interceptAssignments('count = 1;', ['count']),
     'count = 1; queueUpdate({ count: true });'
   );
+});
+test('locates statement-level mutations of the given names', () => {
+  const script = 'let clicks = 0;\nfunction bump() {\n  name = "Ada";\n  clicks++;\n}';
+  const mutations = findReactiveMutations(script, ['name']);
+
+  assert.deepEqual(mutations.map((mutation) => [mutation.name, mutation.line, mutation.column]), [
+    ['name', 3, 3]
+  ]);
+});
+
+test('reports every assignment operator and update form', () => {
+  const script = 'a = 1;\nb += 2;\nc++;\n++d;\ne.name = "x";';
+  const names = ['a', 'b', 'c', 'd', 'e'];
+  const mutations = findReactiveMutations(script, names);
+
+  assert.deepEqual(mutations.map((mutation) => mutation.name), ['a', 'b', 'c', 'd', 'e']);
+});
+
+test('respects function parameter shadowing for prop names', () => {
+  const script = 'function rename(name) { name = "local"; } rename("x");';
+  assert.deepEqual(findReactiveMutations(script, ['name']), []);
+});
+
+test('respects block-scoped let, const, and var shadowing for prop names', () => {
+  const blockShadow = '{ let name = "local"; name = "other"; }';
+  assert.deepEqual(findReactiveMutations(blockShadow, ['name']), []);
+
+  const constShadow = 'function f() { const total = 1; total = 2; }';
+  assert.deepEqual(findReactiveMutations(constShadow, ['total']), []);
+
+  const varShadow = 'if (ready) { var label = "x"; label = "y"; }';
+  assert.deepEqual(findReactiveMutations(varShadow, ['label']), []);
+});
+
+test('shadowing ends when the declaring block closes', () => {
+  const script = '{ let count = 1; }\ncount = 2;';
+  const mutations = findReactiveMutations(script, ['count']);
+
+  assert.deepEqual(mutations.map((mutation) => mutation.name), ['count']);
+});
+
+test('for-loop header declarations shadow the braced body', () => {
+  const script = 'for (const item of items) {\n  item = 1;\n}';
+  assert.deepEqual(findReactiveMutations(script, ['item']), []);
+});
+
+test('handles destructuring and multi-declarator shadow declarations', () => {
+  const destructuring = '{ let { name, role } = user; name = "x"; role = "y"; }';
+  assert.deepEqual(findReactiveMutations(destructuring, ['name', 'role']), []);
+
+  const multi = '{ let a = 1, b = 2; b = 3; }';
+  assert.deepEqual(findReactiveMutations(multi, ['b']), []);
+});
+
+test('accepts Set input and returns nothing for empty names or empty script', () => {
+  assert.deepEqual(findReactiveMutations('name = 1;', new Set(['name'])).map((m) => m.name), ['name']);
+  assert.deepEqual(findReactiveMutations('name = 1;', []), []);
+  assert.deepEqual(findReactiveMutations('', ['name']), []);
+});
+
+test('leaves mutations of block-local names unrewritten during interception', () => {
+  const script = 'let count = 0;\n{ let count = 1; count = 2; }\ncount = 3;';
+  const rewritten = interceptAssignments(script, ['count']);
+
+  // Only the outer component-state mutation is intercepted.
+  assert.equal(rewritten.split('queueUpdate({ count: true });').length - 1, 1);
+  assert.match(rewritten, /count = 3; queueUpdate\(\{ count: true \}\);/);
 });

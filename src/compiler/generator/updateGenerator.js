@@ -21,6 +21,21 @@ function generateUpdateFunction(templateAST) {
 
   function walk(node) {
     if (node.type === 'Element') {
+      // Imported component tags receive prop updates through their mounted
+      // instance, not through DOM attribute writes.
+      if (node.componentId != null) {
+        for (const attribute of node.attributes || []) {
+          if (!attribute.dynamic || !attribute.dependencies?.length) continue;
+          const guard = attribute.dependencies.map((dependencyName) => `changed.${dependencyName}`).join(' || ');
+          builder.add(`if (${guard}) {`)
+            .indent()
+            .add(`if (component_${node.componentId}) component_${node.componentId}.setProps({ ${JSON.stringify(attribute.name)}: ${attribute.value} });`)
+            .dedent()
+            .add('}');
+        }
+        return;
+      }
+
       // 1. Get the assigned data-wizz-id (if this element has reactive children)
       const idAttr = node.attributes && node.attributes.find(attr => attr.name === 'data-wizz-id');
       const wizzId = idAttr ? idAttr.value : null;
@@ -74,6 +89,11 @@ function generateUpdateFunction(templateAST) {
       if (node.children && Array.isArray(node.children)) {
         node.children.forEach(walk);
       }
+    } else if (node.type === 'IfBlock') {
+      // Conditional branches exist in the DOM after mount, so their reactive
+      // content and component props participate in updates like any other.
+      (node.consequent || []).forEach(walk);
+      (node.alternate || []).forEach(walk);
     }
   }
 

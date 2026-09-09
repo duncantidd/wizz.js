@@ -1,7 +1,7 @@
 const { CodeBuilder } = require('./codeBuilder');
-const { generateCreateFunction } = require('./domGenerator');
+const { generateCreateFunction, collectComponentRefNames } = require('./domGenerator');
 const { generateUpdateFunction } = require('./updateGenerator');
-const { interceptAssignments } = require('./assignmentInterceptor');
+const { interceptAssignments, findReactiveMutations } = require('./assignmentInterceptor');
 const { VERSIONS } = require('../version.js');
 
 /**
@@ -12,6 +12,17 @@ const { VERSIONS } = require('../version.js');
 function generateComponent(astPayload) {
   const builder = new CodeBuilder();
       const componentImports = astPayload.imports || [];
+  const props = astPayload.props || [];
+
+  // Prop bindings are parent-owned and read-only: any statement-level
+  // mutation of a prop name inside the child script is a compile-time error.
+  if (props.length > 0 && astPayload.rawScript) {
+    const propMutations = findReactiveMutations(astPayload.rawScript, props.map((prop) => prop.name));
+    if (propMutations.length > 0) {
+      const first = propMutations[0];
+      throw new SyntaxError(`Props are read-only: '${first.name}' cannot be assigned inside the component at ${first.line}:${first.column}.`);
+    }
+  }
 
   // Generated modules self-identify so artifacts stay traceable to the
   // compiler and contract versions that produced them.
@@ -23,8 +34,9 @@ function generateComponent(astPayload) {
       });
       if (componentImports.length > 0) builder.add('');
 
-  // 1. Factory Function Signature
-  builder.add('export default function mountComponent(target) {')
+  // 1. Factory Function Signature. `props` carries the values the parent
+  // passed to the component tag; missing keys fall back to declared defaults.
+  builder.add('export default function mountComponent(target, props = {}) {')
         .indent();
 
       const reactiveVars = astPayload.script.filter(decl => decl.isReactive);
@@ -64,6 +76,15 @@ function generateComponent(astPayload) {
 
   // 2. Paste the developer's original logic so it forms the lexical environment
   builder.add('// --- Developer Logic ---');
+
+  // Prop bindings replace the removed `export let` statements, in declaration
+  // order. `undefined` means "not provided", so the declared default applies.
+  props.forEach(({ name, defaultValue }) => {
+    builder.add(defaultValue === null
+      ? `let ${name} = props.${name};`
+      : `let ${name} = props.${name} !== undefined ? props.${name} : (${defaultValue});`);
+  });
+
   if (astPayload.rawScript) {
     // Split by newline and add to builder to maintain proper indentation
             const interceptedScript = interceptAssignments(
@@ -89,6 +110,13 @@ function generateComponent(astPayload) {
   // 4. Inject the generated DOM create() function
   builder.add('\n// --- DOM Creation ---');
       const createCode = generateCreateFunction(astPayload.template, componentImports);
+
+  // Component instances with reactive props live in factory-scope references
+  // shared by create() (which assigns them) and update() (which reads them).
+  const componentRefNames = collectComponentRefNames(astPayload.template, componentImports);
+  componentRefNames.forEach((refName) => builder.add(`let ${refName} = null;`));
+  if (componentRefNames.length > 0) builder.add('');
+
   createCode.split('\n').forEach(line => builder.add(line));
 
   // 5. Inject the generated Reactivity Engine update() function
@@ -111,8 +139,47 @@ function generateComponent(astPayload) {
 
   // 7. Return the public API (e.g., a way to unmount/destroy the component)
   builder.add('\nreturn {')
-        .indent()
-        .add('destroy() {')
+        .indent();
+
+  if (props.length > 0) {
+    // Receives new prop values from the parent. A missing key keeps the
+    // current binding; an explicit `undefined` re-applies the declared
+    // default, matching the mount-time contract. Values are compared with
+    // Object.is so identical updates never rerender the child. The local
+    // names use the reserved `__wizz` prefix, which prop names cannot use,
+    // so a prop can never shadow the accumulator.
+    builder.add('setProps(next) {')
+          .indent()
+          .add('if (isDestroyed) return;')
+          .add('const __wizzChanges = {};');
+    props.forEach(({ name, defaultValue }) => {
+      builder.add(`if (${JSON.stringify(name)} in next) {`)
+            .indent();
+      if (defaultValue === null) {
+        builder.add(`if (!Object.is(${name}, next.${name})) {`)
+              .indent()
+              .add(`${name} = next.${name};`)
+              .add(`__wizzChanges.${name} = true;`)
+              .dedent()
+              .add('}');
+      } else {
+        builder.add(`const __wizzNext = next.${name} !== undefined ? next.${name} : (${defaultValue});`)
+              .add(`if (!Object.is(${name}, __wizzNext)) {`)
+              .indent()
+              .add(`${name} = __wizzNext;`)
+              .add(`__wizzChanges.${name} = true;`)
+              .dedent()
+              .add('}');
+      }
+      builder.dedent()
+            .add('}');
+    });
+    builder.add('if (Object.keys(__wizzChanges).length > 0) queueUpdate(__wizzChanges);')
+          .dedent()
+          .add('},');
+  }
+
+  builder.add('destroy() {')
         .indent()
       .add('isDestroyed = true;')
       .add('destroyHooks.forEach((hook) => hook());')

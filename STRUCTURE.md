@@ -24,6 +24,7 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
       ├── version.js                   Compatibility contract versions (compiler, syntax, output)
 	├── errorAugmenter.js            Adds file paths, source excerpts, and code frames to compiler errors
 	├── sourceMapGenerator.js        Maps copied author script lines back to Wizz source
+	├── scriptLexer.js               Shared script tokenizer for syntax-aware statement extents
       ├── parser/                      1. Component source -> parser handoff
 	  ├── README.md                 Parser contracts and module reference
 	  ├── index.js                  Public parseComponent() entry point
@@ -34,19 +35,19 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 	  ├── integrator.js             Attaches expression ASTs to template nodes
 	  ├── extractor.js              Extracts and removes <script> from template AST
 	  ├── componentImportExtractor.js Extracts default .wizz imports from component scripts
+	  ├── propExtractor.js          Extracts export let prop declarations from component scripts
 	  ├── stateScanner.js           Recognizes script declarations
 	  └── *.test.js                 Focused Node tests for each parser module
 	├── analyzer/                    2. Parser handoff -> reactive metadata
 	│   ├── README.md                 Analyzer contracts and module reference
 	│   ├── dependencyAnalyzer.js     Tags expressions with reactive dependencies
-	│   ├── idAssigner.js             Adds data-wizz-id to reactive DOM targets
+	│   ├── idAssigner.js             Adds data-wizz-id to reactive DOM targets and componentId to component tags
 	│   └── *.test.js                 Focused Node tests for analyzer modules
 	├── generator/                   3. Analyzed payload -> ES module source
 	  ├── README.md                 Generator contracts and module reference
 	  ├── codeBuilder.js            Indented source-code builder
 	  ├── domGenerator.js           Emits create() DOM construction function
-	  ├── updateGenerator.js        Emits update() reactive text function
-	  ├── scriptLexer.js            Tokenizes component script for syntax-aware rewriting
+	  ├── updateGenerator.js        Emits update() reactive text and prop-update functions
 	  ├── assignmentInterceptor.js  Syntax-aware rewriter for reactive script mutations
 	  ├── componentGenerator.js     Emits the mountable default-export module
 	  └── *.test.js                 Focused Node tests for generator modules
@@ -63,7 +64,7 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 
 `scripts/install-cli.sh` provides the managed local installation path without npm. It copies the runtime to `${XDG_DATA_HOME:-~/.local/share}/wizz` and installs a `wizz` launcher in `${XDG_BIN_HOME:-~/.local/bin}`. The launcher delegates to `scripts/cli.js`: `wizz build` compiles the conventional `src` directory into `dist`, `wizz build <input-directory> <output-directory>` passes both explicit directories to the project compiler, and `wizz dev` starts the existing development workflow in the directory where the command is invoked. The public CLI validates commands and directory-argument combinations, propagates build failures through a non-zero exit code, and requires the project's `index.html` before opening a development server. `node scripts/dev.js` runs a project build for `src` into `dist`, copies the document shell and stylesheet into `dist`, serves that directory at `http://localhost:3000`, and watches `.wizz` files with native events plus a 250 ms polling fallback for mounted filesystems. It returns `index.html` for unknown extensionless paths so client-side routes can load directly, while missing asset paths return HTTP 404.
 
-The generated component module contains its own small `create()` and `update()` functions, alongside the component author's script and a `destroy()` API.
+The generated component module contains its own small `create()` and `update()` functions, alongside the component author's script and a `{ setProps?, destroy() }` API. Imported components are mounted with an explicit props object (`mountComponent(target, props = {})`); reactive prop changes are delivered to mounted child instances through `setProps()`.
 
 ## Compilation Pipeline
 

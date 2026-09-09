@@ -96,7 +96,7 @@ test('emits an ES module default export and creates framework context getters', 
   )));
   const source = generateComponent(payload);
 
-  assert.match(source, /^export default function mountComponent\(target\)/m);
+  assert.match(source, /^export default function mountComponent\(target, props = \{\}\)/m);
   assert.match(source, /get count\(\) \{ return count; \}/);
   assert.doesNotMatch(source, /get title\(\)/);
 });
@@ -121,7 +121,7 @@ test('stamps the version header as the first line of every generated module', ()
   }
 });
 
-test('generated modules keep the output contract surface pinned to output 1.1.0', () => {
+test('generated modules keep the output contract surface pinned to output 1.2.0', () => {
   // This is the concrete meaning of VERSIONS.output within its major version:
   // the module surface and teardown behavior generated modules guarantee.
   // Breaking any assertion here requires bumping VERSIONS.output and the
@@ -131,7 +131,9 @@ test('generated modules keep the output contract surface pinned to output 1.1.0'
   )));
   const source = generateComponent(payload);
 
-  assert.match(source, /export default function mountComponent\(target\) \{/);
+  assert.match(source, /export default function mountComponent\(target, props = \{\}\) \{/);
+  // Components without declared props expose no setProps member.
+  assert.doesNotMatch(source, /setProps/);
   assert.match(source, /return \{\n    destroy\(\) \{/);
   assert.match(source, /target\.removeChild\(rootNode\);/);
   assert.match(source, /\.__wizzChildComponents = childComponents;/);
@@ -504,7 +506,7 @@ test('emits top-level component imports and mounts imported self-closing compone
   const source = generateComponent(payload);
 
   assert.match(source, /^import Counter from "\.\/Counter\.js";/m);
-  assert.match(source, /mountChildren\.push\(\(\) => childComponents\.push\(Counter\(node_1\)\)\);/);
+  assert.match(source, /mountChildren\.push\(\(\) => childComponents\.push\(Counter\(node_1, \{\}\)\)\);/);
   assert.match(
     source,
     /target\.appendChild\(rootNode\);\n  rootNode\.__wizzMountChildren\(\);\n  update\(ctx, \{  \}\);/
@@ -513,15 +515,202 @@ test('emits top-level component imports and mounts imported self-closing compone
   assert.doesNotMatch(source, /document\.createElement\("Counter"\)/);
 });
 
-test('rejects component attributes, children, and root-level component tags', () => {
+test('passes component tag attributes as props and still rejects children and root-level tags', () => {
   const generate = (template) => generateComponent(assignNodeIds(analyzeDependencies(parseComponent(template))));
 
+  const source = generate("<script>import Counter from './Counter.wizz';</script><main><Counter label=\"Count\" /></main>");
+  assert.match(source, /mountChildren\.push\(\(\) => childComponents\.push\(Counter\(node_1, \{ "label": "Count" \}\)\)\);/);
   assert.throws(
-    () => generate("<script>import Counter from './Counter.wizz';</script><main><Counter label=\"Count\" /></main>"),
-    /Component <Counter> does not support attributes or children\./
+    () => generate("<script>import Counter from './Counter.wizz';</script><main><Counter>ignored</Counter></main>"),
+    /Component <Counter> does not support children\./
   );
   assert.throws(
     () => generate("<script>import Counter from './Counter.wizz';</script><Counter />"),
     /Component <Counter> must be nested inside an element\./
   );
+  assert.throws(
+    () => generate("<script>import Counter from './Counter.wizz';</script><main><Counter on:click={handle} /></main>"),
+    /Event directive 'on:click' is not supported on component <Counter>/
+  );
+});
+test('emits prop bindings, the props parameter, and a setProps member for prop components', () => {
+  const source = generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
+    "<script>export let name = 'Guest'; export let count;</script><p>{name} {count}</p>"
+  ))));
+
+  assert.match(source, /export default function mountComponent\(target, props = \{\}\) \{/);
+  assert.match(source, /let name = props\.name !== undefined \? props\.name : \('Guest'\);/);
+  assert.match(source, /let count = props\.count;/);
+  assert.match(source, /setProps\(next\) \{/);
+  assert.match(source, /if \(!Object\.is\(name, __wizzNext\)\) \{/);
+  assert.match(source, /if \(!Object\.is\(count, next\.count\)\) \{/);
+});
+
+test('rejects statement-level mutation of props with a located read-only error', () => {
+  const generate = (script) => () => generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
+    `<script>export let name = 'Guest'; ${script}</script><p>{name}</p>`
+  ))));
+
+  assert.throws(generate('name = "Ada";'), /Props are read-only: 'name' cannot be assigned inside the component at 1:\d+\./);
+  assert.throws(generate('name++;'), /Props are read-only/);
+  assert.throws(generate('name += "!";'), /Props are read-only/);
+  assert.throws(generate('name.first = "Ada";'), /Props are read-only/);
+});
+
+test('allows shadowed prop names inside functions and blocks', () => {
+  const generate = (script) => generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
+    `<script>export let name = 'Guest'; ${script}</script><p>{name}</p>`
+  ))));
+
+  assert.doesNotThrow(() => generate('function rename(name) { name = "local"; }'));
+  assert.doesNotThrow(() => generate('{ let name = "local"; name = "other"; }'));
+});
+
+test('renders with parent props, defaults, and missing-prop behavior at mount', () => {
+  const source = generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
+    "<script>export let name = 'Guest'; export let count;</script><p>{name}:{count}</p>"
+  ))));
+  const mount = (props) => {
+    const document = createDocument();
+    const target = { childNodes: [], appendChild(node) { this.childNodes.push(node); }, removeChild(node) { this.childNodes.splice(this.childNodes.indexOf(node), 1); } };
+    const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
+    const component = mountComponent(target, props);
+    return { component, text: () => target.childNodes[0].childNodes.map((node) => node.nodeValue).join('') };
+  };
+
+  assert.equal(mount({ name: 'Ada', count: 3 }).text(), 'Ada:3');
+  // Missing props fall back to defaults; a prop without a default is undefined.
+  assert.equal(mount({}).text(), 'Guest:undefined');
+  assert.equal(mount().text(), 'Guest:undefined');
+});
+
+test('rerenders when setProps delivers changed values and deduplicates identical values', async () => {
+  const source = generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
+    "<script>export let count = 0;</script><p>{count}</p>"
+  ))));
+  const document = createDocument();
+  const target = { childNodes: [], appendChild(node) { this.childNodes.push(node); }, removeChild(node) { this.childNodes.splice(this.childNodes.indexOf(node), 1); } };
+  const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
+  const component = mountComponent(target, { count: 1 });
+  const paragraph = target.childNodes[0];
+
+  component.setProps({ count: 5 });
+  await flushUpdates();
+  assert.equal(paragraph.childNodes[0].nodeValue, '5');
+
+  // Identical values must not schedule a child update.
+  const before = paragraph.childNodes[0].nodeValue;
+  component.setProps({ count: 5 });
+  await flushUpdates();
+  assert.equal(paragraph.childNodes[0].nodeValue, before);
+
+  // Unknown props are ignored; a destroyed child ignores late prop updates.
+  assert.doesNotThrow(() => component.setProps({ undeclared: 1 }));
+  component.destroy();
+  assert.doesNotThrow(() => component.setProps({ count: 99 }));
+  await flushUpdates();
+  assert.equal(paragraph.childNodes[0].nodeValue, '5');
+});
+
+test('re-applies declared defaults when setProps receives undefined', async () => {
+  const source = generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
+    "<script>export let name = 'Guest';</script><p>{name}</p>"
+  ))));
+  const document = createDocument();
+  const target = { childNodes: [], appendChild(node) { this.childNodes.push(node); }, removeChild(node) { this.childNodes.splice(this.childNodes.indexOf(node), 1); } };
+  const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
+  const component = mountComponent(target, { name: 'Ada' });
+
+  component.setProps({ name: undefined });
+  await flushUpdates();
+  assert.equal(target.childNodes[0].childNodes[0].nodeValue, 'Guest');
+});
+
+test('does not expose setProps on components without declared props', () => {
+  const source = generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
+    '<script>let count = 0;</script><p>{count}</p>'
+  ))));
+
+  assert.doesNotMatch(source, /setProps/);
+});
+
+test('delivers updates for a prop whose name collides with generated local names', async () => {
+  // Regression: the setProps accumulator once shadowed a prop named `value`,
+  // silently making Object.is compare the shadow to itself.
+  const source = generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
+    '<script>export let value = 0;</script><p>{value}</p>'
+  ))));
+  const document = createDocument();
+  const target = { childNodes: [], appendChild(node) { this.childNodes.push(node); }, removeChild(node) { this.childNodes.splice(this.childNodes.indexOf(node), 1); } };
+  const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
+  const component = mountComponent(target, { value: 1 });
+
+  component.setProps({ value: 2 });
+  await flushUpdates();
+  assert.equal(target.childNodes[0].childNodes[0].nodeValue, '2');
+});
+
+test('rejects prop names using the reserved __wizz framework prefix', () => {
+  assert.throws(
+    () => generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
+      '<script>export let __wizzNext = 1;</script><p>{__wizzNext}</p>'
+    )))),
+    /reserved '__wizz' framework prefix/
+  );
+});
+
+test('emits factory-scope component references and guarded setProps calls for reactive parent props', () => {
+  const source = generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
+    "<script>\nimport Counter from './Counter.wizz';\nlet start = 0;\n</script><main><Counter start={start} label=\"Total\" /></main>"
+  ))));
+
+  assert.match(source, /let component_1 = null;/);
+  assert.match(source, /component_1 = Counter\(node_1, \{ "start": start, "label": "Total" \}\);/);
+  assert.match(source, /if \(changed\.start\) \{\n      if \(component_1\) component_1\.setProps\(\{ "start": start \}\);\n    \}/);
+});
+
+test('keeps child component identity across parent prop updates', async () => {
+  const counterSource = generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
+    '<script>export let start = 0;</script><p>{start}</p>'
+  ))));
+  const parentSource = generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
+    "<script>\nimport Counter from './Counter.wizz';\nlet start = 1;\nfunction bump() {\n  start = 2;\n}\n</script><main><button on:click={bump}>Bump</button><Counter start={start} /></main>"
+  ))));
+
+  const document = createDocument();
+  const counterMount = new Function('document', `${counterSource.replace('export default ', '')}\nreturn mountComponent;`)(document);
+  const mountedChildren = [];
+  const target = {
+    childNodes: [],
+    appendChild(node) { this.childNodes.push(node); },
+    removeChild(node) { this.childNodes.splice(this.childNodes.indexOf(node), 1); }
+  };
+  const mountComponent = new Function(
+    'document',
+    'Counter',
+    `${parentSource.replace(/^import .*$/m, '').replace('export default ', '')}\nreturn mountComponent;`
+  )(document, (target_, props) => {
+    const instance = counterMount(target_, props);
+    mountedChildren.push(instance);
+    return instance;
+  });
+  const parent = mountComponent(target);
+  const main = target.childNodes[0];
+  const paragraphBeforeUpdate = main.childNodes.find((node) => node.name === 'p');
+
+  assert.equal(paragraphBeforeUpdate.childNodes[0].nodeValue, '1');
+
+  const button = main.childNodes.find((node) => node.name === 'button');
+  button.dispatchEvent('click');
+  await flushUpdates();
+
+  // The child paragraph is the same node object: updated in place, not remounted.
+  const paragraphAfterUpdate = main.childNodes.find((node) => node.name === 'p');
+  assert.equal(paragraphAfterUpdate, paragraphBeforeUpdate);
+  assert.equal(paragraphAfterUpdate.childNodes[0].nodeValue, '2');
+  assert.equal(mountedChildren.length, 1);
+
+  // The parent-owned teardown cascade destroys the child instance.
+  parent.destroy();
+  assert.deepEqual(target.childNodes, []);
 });

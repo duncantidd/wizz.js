@@ -7,13 +7,15 @@ test('exposes exactly the compiler, syntax, and output versions', () => {
 });
 
 test('pins the current contract versions so bumps are deliberate', () => {
-  // 1.1.0: the assignment interceptor became syntax-aware and now rewrites
-  // mutations inside function and arrow callback bodies — an additive
-  // generated-output capability, so compiler and output minors bump together.
+  // 1.2.0 / syntax 1.1.0 / output 1.2.0: component props. `export let name`
+  // prop declarations and attributes on imported component tags are additive
+  // syntax; the generated module gains the `mountComponent(target, props)`
+  // signature and the `setProps()` handle member, also additive. All three
+  // minors bump together.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.1.0',
-    syntax: '1.0.0',
-    output: '1.1.0'
+    compiler: '1.2.0',
+    syntax: '1.1.0',
+    output: '1.2.0'
   });
 });
 
@@ -30,7 +32,7 @@ test('the version table is frozen so callers cannot mutate the contract', () => 
     'use strict';
     VERSIONS.syntax = '9.9.9';
   }, TypeError);
-  assert.equal(VERSIONS.syntax, '1.0.0');
+  assert.equal(VERSIONS.syntax, '1.1.0');
 });
 
 test('the compiler major version leads or matches every contract major version', () => {

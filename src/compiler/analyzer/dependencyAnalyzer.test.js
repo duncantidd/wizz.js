@@ -33,3 +33,20 @@ test('leaves non-expression template nodes unchanged', () => {
   assert.equal(paragraph.dependencies, undefined);
   assert.equal(paragraph.children[0].dependencies, undefined);
 });
+test('treats declared props as reactive dependencies', () => {
+  const payload = analyzeDependencies(parseComponent(
+    "<script>export let name = 'Guest';</script><h1>Hello {name}</h1>"
+  ));
+  const heading = payload.template.children[0];
+
+  assert.deepEqual(heading.children[1].dependencies, ['name']);
+});
+
+test('tracks prop dependencies in dynamic attributes', () => {
+  const payload = analyzeDependencies(parseComponent(
+    "<script>export let start = 0;</script><p class={start}>x</p>"
+  ));
+  const paragraph = payload.template.children[0];
+
+  assert.deepEqual(paragraph.attributes[0].dependencies, ['start']);
+});
