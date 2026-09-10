@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { buildProject, discoverWizzFiles } = require('../build');
 
 const MIME_TYPES = {
@@ -36,9 +37,79 @@ function buildApplication(inputDirectory, outputDirectory, projectDirectory, log
   return result;
 }
 
-function createRequestHandler(outputDirectory) {
+// The route manifest is generated as `export const pageModules = <JSON>`, so
+// the array literal can be extracted and parsed directly. Reading it per
+// document request keeps route eligibility in lockstep with the build that
+// produced it: after a watch rebuild the new manifest is served immediately
+// and the previous build's server modules can never be rendered again.
+function readRouteTable(outputDirectory) {
+  const manifestPath = path.join(path.resolve(outputDirectory), 'runtime', 'routes.js');
+  if (!fs.existsSync(manifestPath)) return null;
+
+  try {
+    const manifestSource = fs.readFileSync(manifestPath, 'utf8');
+    const arrayStart = manifestSource.indexOf('[');
+    const arrayEnd = manifestSource.lastIndexOf(']');
+    if (arrayStart === -1 || arrayEnd <= arrayStart) return null;
+
+    const pageModules = JSON.parse(manifestSource.slice(arrayStart, arrayEnd + 1));
+    if (!Array.isArray(pageModules)) return null;
+
+    const runtimeDirectory = path.join(path.resolve(outputDirectory), 'runtime');
+    const routeTable = new Map();
+    for (const pageModule of pageModules) {
+      if (!pageModule || typeof pageModule.routePath !== 'string') continue;
+      // The manifest field is the single authority on eligibility; the server
+      // module file itself is resolved lazily at render time.
+      routeTable.set(pageModule.routePath, {
+        routePath: pageModule.routePath,
+        serverModulePath: typeof pageModule.serverModulePath === 'string'
+          ? path.resolve(runtimeDirectory, pageModule.serverModulePath)
+          : null,
+        hydratableModulePath: typeof pageModule.hydratableModulePath === 'string'
+          ? path.resolve(runtimeDirectory, pageModule.hydratableModulePath)
+          : null
+      });
+    }
+    return routeTable;
+  } catch {
+    return null;
+  }
+}
+
+function sendDocumentShell(indexPath, response) {
+  response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  fs.createReadStream(indexPath).pipe(response);
+}
+
+async function renderServerRoute(routeEntry, indexPath, response) {
+  // Cache-bust by file mtime: a rebuild rewrites the server module, so the
+  // new mtime forms a fresh module URL and the in-process ESM cache can
+  // never deliver a stale render after an edit.
+  const { mtimeMs } = fs.statSync(routeEntry.serverModulePath);
+  const serverModule = await import(`${pathToFileURL(routeEntry.serverModulePath).href}?v=${mtimeMs}`);
+  const { html, state } = serverModule.renderComponent();
+  const stateScript = serverModule.serializeInitialState(state);
+  const shell = fs.readFileSync(indexPath, 'utf8');
+  const mountPoint = '<div id="app"></div>';
+
+  if (!shell.includes(mountPoint)) {
+    throw new Error(`Document shell has no <div id="app"></div> mount point: ${indexPath}`);
+  }
+
+  // Function-form replacement: rendered HTML may contain `$` sequences
+  // (`$&`, `$'`, `$$`) that string-form replacement would expand.
+  const document = shell.replace(mountPoint, () => `<div id="app">${html}</div>\n  ${stateScript}`);
+
+  response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  response.end(document);
+}
+
+function createRequestHandler(outputDirectory, options = {}) {
   const resolvedOutputDirectory = path.resolve(outputDirectory);
   const indexPath = path.join(resolvedOutputDirectory, 'index.html');
+  const getRouteTable = options.getRouteTable || (() => readRouteTable(resolvedOutputDirectory));
+  const logger = options.logger || console;
 
   return (request, response) => {
     const requestPath = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
@@ -59,8 +130,26 @@ function createRequestHandler(outputDirectory) {
       return;
     }
 
-    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    fs.createReadStream(indexPath).pipe(response);
+    // Route documents: extensionless paths matching a manifest route with a
+    // server module render server-side. Route matching mirrors the client
+    // router exactly (exact pathname lookup), so the server never delivers
+    // markup the router would not claim. Every other extensionless path
+    // keeps the SPA fallback shell.
+    const routeTable = getRouteTable();
+    const routeEntry = routeTable instanceof Map ? routeTable.get(requestPath) : undefined;
+    if (routeEntry && routeEntry.serverModulePath) {
+      renderServerRoute(routeEntry, indexPath, response).catch((error) => {
+        logger.error(`Server rendering failed for ${routeEntry.routePath}: ${error.message}`);
+        try {
+          sendDocumentShell(indexPath, response);
+        } catch {
+          response.destroy();
+        }
+      });
+      return;
+    }
+
+    sendDocumentShell(indexPath, response);
   };
 }
 
@@ -109,7 +198,7 @@ function startDevelopmentServer(options = {}) {
 
   buildApplication(inputDirectory, outputDirectory, projectDirectory, logger, build);
   assertDocumentShell(outputDirectory);
-  const server = http.createServer(createRequestHandler(outputDirectory));
+  const server = http.createServer(createRequestHandler(outputDirectory, { logger }));
   const watcher = watchSourceFiles(inputDirectory, (eventType, fileName) => {
     logger.log(`Rebuilding after ${eventType}: ${fileName}`);
     buildApplication(inputDirectory, outputDirectory, projectDirectory, logger, build);
@@ -157,6 +246,7 @@ module.exports = {
   copyDocumentShell,
   createRequestHandler,
   createSourceSnapshot,
+  readRouteTable,
   startDevelopmentServer,
   watchSourceFiles
 };
