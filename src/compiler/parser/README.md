@@ -5,7 +5,8 @@
 This directory is the first stage of the Wizz compiler. It converts a component source string into a compiler handoff object containing:
 
 - a renderable template AST, with each `{expression}` parsed into its own expression AST;
-- declarations discovered in the component's `<script>` block; and
+- declarations discovered in the component's `<script>` block;
+- declared component props; and
 - the original script source for later compiler stages that need it.
 
 `parseComponent()` in `index.js` is the public entry point. Its pipeline is:
@@ -16,8 +17,10 @@ component source
   -> parseTemplate
   -> integrateExpressions
   -> extractScriptBlock
+  -> extractComponentImports
+  -> extractProps
   -> scanState
-  -> { template, script, rawScript }
+  -> { template, script, rawScript, imports, props }
 ```
 
 The parser is build-time Node.js code. It does not execute component JavaScript or create DOM nodes. Its job is to preserve enough source structure and location data for the analyzer and generator to make correct later decisions.
@@ -57,9 +60,13 @@ The result has this shape:
       name: 'increment'
     }
   ],
-  rawScript: '\n    let count = 0;\n    function increment() { count += 1; }\n  '
+  rawScript: '\n    let count = 0;\n    function increment() { count += 1; }\n  ',
+  imports: [],
+  props: []
 }
 ```
+
+Prop declarations (`export let name = 'Guest';`) appear in `props` as `{ name, defaultValue }` in declaration order, with `defaultValue: null` when the declaration has no initializer. They also join `script` as `VariableDeclaration` entries with `isReactive: true` and `isProp: true`, so the analyzer treats them like reactive state, and they are removed from `rawScript` entirely — `export` inside the generated factory function would be invalid JavaScript.
 
 `template` intentionally excludes the `<script>` element. A script block supplies component logic, not renderable DOM. `rawScript` is always a string, including when there is no script block; `script` is always an array.
 
@@ -103,8 +110,11 @@ The current implementation is intentionally small. Documentation should distingu
 | Elements | Named opening, closing, and self-closing tags | Tag names begin with a letter and continue with letters, digits, `:`, `_`, or `-`. |
 | Attributes | Boolean attributes, single- or double-quoted values, event directives, and dynamic brace-delimited values such as `value={name}` | Dynamic values use the current expression grammar. Their reactive dependencies are analyzed like text interpolations. |
 | Interpolations | `{...}` in template text, nested braces, quotes, and escapes while locating the end brace | The expression grammar below determines which interpolation contents can be compiled. |
-| Expressions | Identifiers, integer literals, `+`, `-`, `*`, `/`, `.`, and parentheses | No strings, booleans, calls, arrays, objects, assignments, comparisons, optional chaining, or unary operators. |
+| Conditionals | `{#if condition}...{:else}...{/if}` | Conditions are evaluated during mounting; reactive branch replacement is not supported yet. |
+| Lists | `{#each items as item (item.id)}...{/each}` and `{#each items as item}...{/each}` | Each blocks require an identifier collection and an item alias; the `item.key` parentheses are optional. Keyed and keyless forms both require exactly one native root element in their body. |
+| Expressions | Identifiers, integer and string literals, `+`, `-`, `*`, `/`, `.`, `===`, and parentheses | No booleans, calls, arrays, objects, assignments, non-strict comparisons, optional chaining, or unary operators. |
 | Component imports | Default imports ending in `.wizz`, such as `import Counter from './Counter.wizz';` | Imported modules are rewritten to `.js` in generated output. Named, namespace, dynamic, and non-Wizz imports are outside this contract. |
+| Component props | `export let name = 'Guest';` and bare `export let count;` declarations | One prop per statement, terminated with a semicolon. `export` followed by anything other than `let` is an error. Prop names cannot be reserved words, `props`, `__proto__`, or use the reserved `__wizz` prefix. |
 | Script scanning | Semicolon-terminated `let`/`const` assignments and named `function` declarations | It is a targeted regex scanner, not a JavaScript parser. `var`, classes, arrow functions, and syntax without the recognized forms are not reported. |
 
 ## Files
@@ -119,9 +129,11 @@ This is the module downstream compiler stages should use. It owns the ordering o
 2. `parseTemplate()` verifies nesting and builds the template tree.
 3. `integrateExpressions()` adds expression ASTs to interpolation nodes.
 4. `extractScriptBlock()` removes script content from the render tree while returning that content.
-5. `scanState()` turns recognized declarations into lightweight metadata.
+5. `extractComponentImports()` lifts `.wizz` imports out of the script.
+6. `extractProps()` lifts `export let` prop declarations out of the script and records them.
+7. `scanState()` turns recognized declarations into lightweight metadata.
 
-It throws `TypeError` unless `source` is a string. A component without `<script>` receives `script: []` and `rawScript: ''`, keeping the compiler handoff stable and avoiding special cases downstream.
+It throws `TypeError` unless `source` is a string. A component without `<script>` receives `script: []`, `rawScript: ''`, `imports: []`, and `props: []`, keeping the compiler handoff stable and avoiding special cases downstream.
 
 ### `tokenizer.js` - Markup State Machine
 
@@ -221,6 +233,24 @@ That translation ensures a developer can find a bad expression from the original
 Traversal visits children in reverse order. That allows `splice()` to remove a child safely while iteration continues and means multiple script blocks, if present, are all pruned. Because `scriptContent` is overwritten on each match, the returned value is the earliest script in source order after reverse traversal completes. The component facade normalizes `null` to `rawScript: ''`.
 
 Script reconstruction handles both `Text` and `Expression` children. Normally the tokenizer's `SCRIPT` state makes a script entirely `Text`; wrapping an expression child back in `{}` keeps reconstruction resilient if an AST is supplied from another source or transformed before extraction.
+
+### `componentImportExtractor.js` - Component Import Extraction
+
+**Export:** `extractComponentImports(scriptContent)`
+
+`extractComponentImports()` scans the script for default imports ending in `.wizz`, records `{ name, source }` pairs in source order, and removes the statements from the returned script. Only imports that are alone on their line are recognized (the regex anchors to the line), so `import` inside larger statements passes through untouched. Missing or non-string input returns `{ imports: [], script }` unchanged.
+
+### `propExtractor.js` - Prop Declaration Extraction
+
+**Exports:** `extractProps(scriptContent)`, `RESERVED_PROP_NAMES`
+
+`extractProps()` finds `export let` prop declarations, records `{ name, defaultValue }` in declaration order, and removes the statements from the returned script so the generator can emit the prop bindings in their place. `defaultValue` is the trimmed source text of the initializer, or `null` for a bare `export let count;`.
+
+Statement extents are resolved on the shared scriptLexer token stream (`../scriptLexer.js`, a compiler-root utility also used by the generator's assignment interceptor), so strings, template literals, comments, and regex literals cannot hide a semicolon, a nested `export`, or a statement boundary. The scan runs at top level only — `export` inside a nested block is an error, while `config.export` property access and `export`-looking text inside strings or comments are ignored.
+
+The default expression runs to the first `;` back at the declaration's own nesting depth; a terminating semicolon is required, and an identifier directly after a completed operand (the start of a new statement) or a bare comma (a second declarator) is rejected rather than silently absorbed. Defaults are author-script expressions — full JavaScript — not the narrower template expression grammar.
+
+`RESERVED_PROP_NAMES` is the set of names that cannot be props: strict-mode reserved words, the generated closure's `props` parameter, `__proto__`, and every `__wizz`-prefixed name, which the framework reserves for generated identifiers.
 
 ### `stateScanner.js` - Lightweight Script Declaration Scanner
 

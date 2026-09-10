@@ -68,3 +68,61 @@ test('rejects non-string component source', () => {
     /Component source must be a string\./
   );
 });
+test('hands props to the payload as reactive, parent-owned declarations', () => {
+  const component = parseComponent(
+    "<script>export let name = 'Guest'; export let count; let clicks = 0;</script><p>{name}</p>"
+  );
+
+  assert.deepEqual(component.props, [
+    { name: 'name', defaultValue: "'Guest'" },
+    { name: 'count', defaultValue: null }
+  ]);
+  // Props join the reactive declaration set so template expressions track them.
+  assert.deepEqual(component.script.slice(0, 2), [
+    {
+      type: 'VariableDeclaration',
+      kind: 'let',
+      name: 'name',
+      initialValue: null,
+      isReactive: true,
+      isProp: true
+    },
+    {
+      type: 'VariableDeclaration',
+      kind: 'let',
+      name: 'count',
+      initialValue: null,
+      isReactive: true,
+      isProp: true
+    }
+  ]);
+  // The raw script no longer contains the prop statements; `export` inside a
+  // function body would be invalid generated JavaScript.
+  assert.equal(component.rawScript.includes('export'), false);
+  assert.equal(component.rawScript.includes('let clicks = 0;'), true);
+  assert.deepEqual(component.imports, []);
+});
+
+test('rejects invalid prop syntax during parsing', () => {
+  assert.throws(
+    () => parseComponent('<script>export const name = 1;</script><p>Hi</p>'),
+    /Unsupported export syntax/
+  );
+  assert.throws(
+    () => parseComponent("<script>export let name = 'a'</script><p>Hi</p>"),
+    /must end with a semicolon/
+  );
+});
+
+test('rejects duplicate prop declarations but keeps legal block-scoped shadowing', () => {
+  assert.throws(
+    () => parseComponent('<script>export let count = 1; export let count = 2;</script><p>{count}</p>'),
+    /declared more than once/
+  );
+  // The parser cannot distinguish a component-scope redeclaration from a
+  // legal block-scoped shadow without a real JavaScript parser, so only the
+  // generated factory would surface that error.
+  assert.doesNotThrow(() => parseComponent(
+    '<script>export let name = "x"; { let name = "local"; }</script><p>{name}</p>'
+  ));
+});

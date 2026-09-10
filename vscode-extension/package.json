@@ -1,0 +1,70 @@
+{
+  "name": "wizz-vscode",
+  "displayName": "Wizz",
+  "description": "Language support and project tooling for Wizz components.",
+  "version": "0.1.0",
+  "publisher": "wizzjs",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "wizz",
+        "aliases": ["Wizz", "wizz"],
+        "extensions": [".wizz"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "wizz",
+        "scopeName": "source.wizz",
+        "path": "./syntaxes/wizz.tmLanguage.json",
+        "embeddedLanguages": {
+          "meta.embedded.block.javascript": "javascript"
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "wizz.build",
+        "title": "Wizz: Build Project",
+        "category": "Wizz"
+      },
+      {
+        "command": "wizz.dev",
+        "title": "Wizz: Start Development Server",
+        "category": "Wizz"
+      },
+      {
+        "command": "wizz.openPage",
+        "title": "Wizz: Open Page",
+        "category": "Wizz"
+      }
+    ],
+    "configuration": {
+      "title": "Wizz",
+      "properties": {
+        "wizz.compilerPath": {
+          "type": "string",
+          "default": "wizz",
+          "description": "Path to the installed Wizz CLI executable."
+        },
+        "wizz.diagnostics.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run Wizz builds to update component diagnostics after .wizz files change."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\""
+  }
+}

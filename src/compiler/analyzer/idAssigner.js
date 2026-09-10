@@ -1,28 +1,37 @@
 /**
  * Traverses the AST and injects unique IDs into elements that contain reactive bindings.
+ * Imported component tags receive a stable `componentId` instead so the
+ * generated create() and update() code can share one instance reference; they
+ * create no DOM and are updated through props, never `data-wizz-id` lookups.
  * @param {Object} astPayload - The enriched payload from the Dependency Analyzer.
  * @returns {Object} The mutated payload with targetable DOM nodes.
  */
 function assignNodeIds(astPayload) {
   const { template } = astPayload;
-  
+  const importedNames = new Set((astPayload.imports || []).map((component) => component.name));
+
   // We use a simple counter for unique IDs
   let nextId = 1;
+  let nextComponentId = 1;
 
   function walk(node) {
     if (node.type === 'Element') {
+      if (importedNames.has(node.name)) {
+        node.componentId = nextComponentId;
+        nextComponentId += 1;
+        // Component tags have no children of their own to target.
+        return;
+      }
+
       // 1. Check if this element has any reactive children
-      const hasReactiveChildren = node.children && node.children.some(child => 
-        child.type === 'Expression' && 
-        child.dependencies && 
+      const hasReactiveChildren = node.children && node.children.some(child =>
+        child.type === 'Expression' &&
+        child.dependencies &&
         child.dependencies.length > 0
       );
       const hasReactiveAttributes = node.attributes && node.attributes.some(attribute =>
         attribute.dynamic && attribute.dependencies && attribute.dependencies.length > 0
       );
-
-      // (Note: Later, when I add support for dynamic attributes like `<div class={dynamicClass}>`, 
-      // I would also check for reactive attributes here).
 
       // 2. If it is reactive, give it a unique ID so the generated JS can find it
       if (hasReactiveChildren || hasReactiveAttributes) {

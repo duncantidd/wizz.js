@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { startDevelopmentServer } = require('../scripts/dev');
+const { createSourceSnapshot, startDevelopmentServer, watchSourceFiles } = require('../scripts/dev');
 
 function createTemporaryDirectory() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-dev-test-'));
@@ -27,6 +27,7 @@ test('builds before serving generated output and supplies SPA fallback', async (
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
   writeFile(path.join(projectDirectory, 'index.html'), '<div id="app"></div>');
+  fs.mkdirSync(path.join(projectDirectory, 'src'), { recursive: true });
   writeFile(path.join(projectDirectory, 'App.css'), 'main { color: red; }');
   writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main><p>Ready</p></main>');
 
@@ -47,7 +48,7 @@ test('builds before serving generated output and supplies SPA fallback', async (
 
   const component = await fetch(`${url}/App.js`);
   assert.equal(component.status, 200);
-  assert.match(await component.text(), /^export default function mountComponent\(target\)/);
+  assert.match(await component.text(), /^export default function mountComponent\(target, props = \{\}\)/m);
 
   const stylesheet = await fetch(`${url}/App.css`);
   assert.equal(stylesheet.status, 200);
@@ -60,6 +61,8 @@ test('builds before serving generated output and supplies SPA fallback', async (
 test('rebuilds the project when a .wizz source change is observed', (t) => {
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), '<div id="app"></div>');
+  fs.mkdirSync(path.join(projectDirectory, 'src'), { recursive: true });
   const listeners = [];
   const builds = [];
   const logger = createLogger();
@@ -69,6 +72,7 @@ test('rebuilds the project when a .wizz source change is observed', (t) => {
     projectDirectory,
     logger,
     build(inputDirectory, outputDirectory) {
+      fs.mkdirSync(outputDirectory, { recursive: true });
       builds.push({ inputDirectory, outputDirectory });
       return { compiledCount: 1, failedCount: 0 };
     },
@@ -90,6 +94,34 @@ test('rebuilds the project when a .wizz source change is observed', (t) => {
   return developmentServer.close();
 });
 
+test('polling watcher rebuilds after a source file changes without a native watch event', (t) => {
+  const inputDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(inputDirectory, { recursive: true, force: true }));
+  const sourceFile = path.join(inputDirectory, 'pages', 'Home.wizz');
+  writeFile(sourceFile, '<main>Before</main>');
+  const callbacks = [];
+  const changes = [];
+  let clearedTimer;
+  const watcher = watchSourceFiles(inputDirectory, (eventType, fileName) => changes.push({ eventType, fileName }), {
+    watch(directory, options, listener) {
+      callbacks.push({ directory, options, listener });
+      return { close() {} };
+    },
+    setInterval(callback) {
+      callbacks.push({ poll: callback });
+      return 'poller';
+    },
+    clearInterval(timer) { clearedTimer = timer; }
+  });
+
+  assert.equal(createSourceSnapshot(inputDirectory).includes('Home.wizz'), true);
+  writeFile(sourceFile, '<main>After the polling rebuild</main>');
+  callbacks[1].poll();
+  assert.deepEqual(changes, [{ eventType: 'change', fileName: 'source files' }]);
+  watcher.close();
+  assert.equal(clearedTimer, 'poller');
+});
+
 test('reports component compilation failures while continuing to start the server', async (t) => {
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
@@ -104,4 +136,15 @@ test('reports component compilation failures while continuing to start the serve
   assert.equal(logger.errors.length, 2);
   assert.match(logger.errors[0], /Compilation failed for .*App\.wizz:/);
   assert.equal(logger.errors[1], 'Build completed with 1 failed component(s).');
+});
+
+test('rejects a project without an index.html document shell before serving', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main><p>Ready</p></main>');
+
+  assert.throws(
+    () => startDevelopmentServer({ projectDirectory, logger: createLogger() }),
+    new RegExp(`Project document shell is missing: ${path.join(projectDirectory, 'dist', 'index.html').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)
+  );
 });

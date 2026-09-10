@@ -29,11 +29,25 @@ function createDocument() {
             elements.set(`[data-wizz-id="${value}"]`, this);
           }
         },
+        getAttribute(attributeName) {
+          return this.attributes[attributeName] ?? null;
+        },
+        querySelector(selector) {
+          for (const child of this.childNodes) {
+            if (child.attributes?.['data-wizz-id'] && selector === `[data-wizz-id="${child.attributes['data-wizz-id']}"]`) return child;
+            const match = child.querySelector?.(selector);
+            if (match) return match;
+          }
+          return null;
+        },
         appendChild(node) {
           this.childNodes.push(node);
         },
         addEventListener(eventName, listener) {
           this.listeners[eventName] = listener;
+        },
+        removeEventListener(eventName, listener) {
+          if (this.listeners[eventName] === listener) delete this.listeners[eventName];
         },
         dispatchEvent(eventName) {
           this.listeners[eventName]?.({ type: eventName, target: this });
@@ -47,6 +61,10 @@ function createDocument() {
       return elements.get(selector) || null;
     }
   };
+}
+
+async function flushUpdates() {
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 function mountFixture(name) {
@@ -78,7 +96,7 @@ function findElement(root, name) {
   return null;
 }
 
-test('counter fixture mounts, updates through events, and unmounts', () => {
+test('counter fixture mounts, updates through events, and unmounts', async () => {
   const { source, document, target, component } = mountFixture('counter');
 
   assert.match(source, /count \+= 1; queueUpdate\(\{ count: true \}\);/);
@@ -90,13 +108,14 @@ test('counter fixture mounts, updates through events, and unmounts', () => {
 
   button.dispatchEvent('click');
   button.dispatchEvent('click');
+  await flushUpdates();
   assert.equal(button.childNodes[1].nodeValue, '2');
 
   component.destroy();
   assert.deepEqual(target.childNodes, []);
 });
 
-test('profile fixture renders constants once and reactive state through events', () => {
+test('profile fixture renders constants once and reactive state through events', async () => {
   const { document, component } = mountFixture('profile');
 
   const heading = document.querySelector('[data-wizz-id="1"]');
@@ -110,12 +129,28 @@ test('profile fixture renders constants once and reactive state through events',
 
   button.dispatchEvent('click');
 
-  // One event mutates two pieces of state; every dependent expression updates.
+  // One event mutates two pieces of state; the scheduler coalesces both
+  // queueUpdate calls into one batch, and every dependent expression updates.
+  await flushUpdates();
   assert.equal(heading.childNodes[0].nodeValue, 'Grace');
   assert.equal(paragraph.childNodes[2].nodeValue, '1');
   assert.equal(button.childNodes[1].nodeValue, '1');
 
   component.destroy();
+});
+
+test('lifecycle fixture runs mount hooks after mounting and destroy hooks before teardown', async () => {
+  const { document, target, component } = mountFixture('lifecycle');
+
+  // The hook has run by the time mountComponent returns, but its state
+  // assignment flows through the batched scheduler and renders on a microtask.
+  assert.equal(document.querySelector('[data-wizz-id="1"]').childNodes[0].nodeValue, 'created');
+  await flushUpdates();
+  assert.equal(document.querySelector('[data-wizz-id="1"]').childNodes[0].nodeValue, 'mounted');
+
+  component.destroy();
+  assert.equal(document.title, 'destroyed');
+  assert.deepEqual(target.childNodes, []);
 });
 
 test('static fixture mounts without any reactive machinery', () => {

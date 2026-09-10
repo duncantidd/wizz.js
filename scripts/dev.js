@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
-const { buildProject } = require('../build');
+const { buildProject, discoverWizzFiles } = require('../build');
 
 const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -15,6 +15,13 @@ function copyDocumentShell(projectDirectory, outputDirectory) {
     if (fs.existsSync(sourcePath)) {
       fs.copyFileSync(sourcePath, path.join(outputDirectory, fileName));
     }
+  }
+}
+
+function assertDocumentShell(outputDirectory) {
+  const indexPath = path.join(outputDirectory, 'index.html');
+  if (!fs.existsSync(indexPath) || !fs.statSync(indexPath).isFile()) {
+    throw new Error(`Project document shell is missing: ${indexPath}`);
   }
 }
 
@@ -57,6 +64,41 @@ function createRequestHandler(outputDirectory) {
   };
 }
 
+function createSourceSnapshot(inputDirectory) {
+  return discoverWizzFiles(inputDirectory)
+    .map((filePath) => {
+      const stats = fs.statSync(filePath);
+      return `${filePath}:${stats.size}:${stats.mtimeMs}`;
+    })
+    .join('|');
+}
+
+function watchSourceFiles(inputDirectory, onChange, options = {}) {
+  const watch = options.watch || fs.watch;
+  const setIntervalFn = options.setInterval || setInterval;
+  const clearIntervalFn = options.clearInterval || clearInterval;
+  let snapshot = createSourceSnapshot(inputDirectory);
+  const watcher = watch(inputDirectory, { recursive: true }, (eventType, fileName) => {
+    if (fileName && path.extname(fileName) === '.wizz') {
+      snapshot = createSourceSnapshot(inputDirectory);
+      onChange(eventType, fileName);
+    }
+  });
+  const poller = setIntervalFn(() => {
+    const nextSnapshot = createSourceSnapshot(inputDirectory);
+    if (nextSnapshot === snapshot) return;
+    snapshot = nextSnapshot;
+    onChange('change', 'source files');
+  }, 250);
+
+  return {
+    close() {
+      watcher.close();
+      if (poller) clearIntervalFn(poller);
+    }
+  };
+}
+
 function startDevelopmentServer(options = {}) {
   const projectDirectory = path.resolve(options.projectDirectory || path.join(__dirname, '..'));
   const inputDirectory = path.resolve(options.inputDirectory || path.join(projectDirectory, 'src'));
@@ -64,15 +106,17 @@ function startDevelopmentServer(options = {}) {
   const port = options.port ?? 3000;
   const logger = options.logger || console;
   const build = options.build || buildProject;
-  const watch = options.watch || fs.watch;
 
   buildApplication(inputDirectory, outputDirectory, projectDirectory, logger, build);
+  assertDocumentShell(outputDirectory);
   const server = http.createServer(createRequestHandler(outputDirectory));
-  const watcher = watch(inputDirectory, { recursive: true }, (eventType, fileName) => {
-    if (fileName && path.extname(fileName) === '.wizz') {
-      logger.log(`Rebuilding after ${eventType}: ${fileName}`);
-      buildApplication(inputDirectory, outputDirectory, projectDirectory, logger, build);
-    }
+  const watcher = watchSourceFiles(inputDirectory, (eventType, fileName) => {
+    logger.log(`Rebuilding after ${eventType}: ${fileName}`);
+    buildApplication(inputDirectory, outputDirectory, projectDirectory, logger, build);
+  }, {
+    watch: options.watch,
+    setInterval: options.setInterval,
+    clearInterval: options.clearInterval
   });
 
   return {
@@ -107,4 +151,12 @@ if (require.main === module) {
   }
 }
 
-module.exports = { buildApplication, copyDocumentShell, createRequestHandler, startDevelopmentServer };
+module.exports = {
+  assertDocumentShell,
+  buildApplication,
+  copyDocumentShell,
+  createRequestHandler,
+  createSourceSnapshot,
+  startDevelopmentServer,
+  watchSourceFiles
+};

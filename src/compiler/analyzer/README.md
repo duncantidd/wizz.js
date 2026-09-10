@@ -4,14 +4,14 @@
 
 This directory is the second stage of the Wizz compiler. It enriches the parsed component handoff with the information needed to generate targeted DOM updates:
 
-- `dependencyAnalyzer.js` records which reactive `let` declarations each template interpolation reads.
-- `idAssigner.js` adds a stable-in-the-payload `data-wizz-id` attribute to elements that directly contain reactive interpolations.
+- `dependencyAnalyzer.js` records which reactive `let` declarations each template interpolation reads. Declared props (`export let`) are reactive declarations too, so template expressions and dynamic attributes depending on a prop are tracked identically to state.
+- `idAssigner.js` adds a stable-in-the-payload `data-wizz-id` attribute to elements that directly contain reactive interpolations, and a `componentId` to imported component tags so the generated create() and update() code can share one instance reference.
 
 The analyzer runs after `parseComponent()` and before code generation:
 
 ```text
 component source
-  -> parser: { template, script, rawScript }
+  -> parser: { template, script, rawScript, imports, props }
   -> analyzeDependencies()
   -> assignNodeIds()
   -> generator
@@ -142,6 +142,8 @@ It then walks `children` when present. Text nodes, regular elements, and express
 
 `assignNodeIds()` receives the dependency-enriched payload and returns the same object after adding `data-wizz-id` attributes to eligible elements. IDs begin at `'1'` for each invocation and are stored as strings because they are HTML attribute values.
 
+Imported component tags (element names matching `astPayload.imports`) take a separate path: each tag receives `node.componentId`, a sequential integer, and is never given `data-wizz-id`. Component tags create no DOM element, so they cannot be located by attribute lookup — the generated code uses the componentId to build the factory-scope instance reference (`component_<id>`) that both mounting and prop updates read.
+
 #### `walk(node)`
 
 The nested walker is responsible for deciding whether each element needs a generated target ID and then traversing its children.
@@ -177,6 +179,7 @@ The current scope deliberately has several limits:
 - Dependency analysis handles the parser's `Identifier`, `BinaryExpression`, and `MemberExpression` nodes only. Adding expression grammar requires extending this visitor for any new AST node that can contain state references.
 - The parser's script scanner determines which declarations exist and which are reactive. It is not a full JavaScript semantic analyzer.
 - Dynamic brace-valued attributes are analyzed using their parsed expression AST and receive an ID when they read reactive state.
+- Declared props participate in dependency tracking like `let` state because the parser records them as reactive declarations with `isProp: true`; the analyzer does not distinguish them.
 - An element is marked only for direct reactive expression children. Parent elements and elements containing only non-reactive expressions remain unmarked.
 - Existing `data-wizz-id` attributes are preserved. Because ID generation restarts from `1` for each call, callers should treat assignment as a one-time stage on a newly parsed payload rather than merge independently assigned AST fragments.
 

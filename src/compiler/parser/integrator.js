@@ -60,6 +60,11 @@ function integrateExpressions(node) {
     return node;
   }
 
+  if (node.type === 'EachBlock') {
+    node.children.forEach(integrateExpressions);
+    return node;
+  }
+
   // 2. Recursive Step: If the node has children, walk through all of them
   if (node.children && Array.isArray(node.children)) {
     for (let i = 0; i < node.children.length; i++) {

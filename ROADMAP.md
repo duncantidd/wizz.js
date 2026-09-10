@@ -83,16 +83,16 @@ This roadmap orders work by dependency. Each milestone should have focused tests
 
 ## 6. Expand Core Component Features Deliberately
 
-**Goal:** Add language features only when their parser, analyzer, generator, and runtime behavior are designed together.
+~~**Goal:** Add language features only when their parser, analyzer, generator, and runtime behavior are designed together.~~
 
 Suggested order:
 
 1. ~~More event directives and event arguments.~~
 2. ~~Dynamic attributes and properties.~~
 3. ~~Conditional rendering.~~
-4. Lists and keyed reconciliation semantics.
+4. ~~Lists and keyed reconciliation semantics.~~
 5. ~~Component imports and nested components.~~
-6. Lifecycle hooks, cleanup, and scheduler batching.
+6. ~~Lifecycle hooks, cleanup, and scheduler batching.~~
 
 Every feature should include parser tests, generated-source tests, and a mounted runtime test.
 
@@ -100,18 +100,82 @@ Every feature should include parser tests, generated-source tests, and a mounted
 
 **Goal:** Make framework behavior dependable for real applications.
 
-- Define compatibility and versioning policy for component syntax and generated output.
-- Replace or substantially extend the limited script scanner and transformation layer with syntax-aware JavaScript handling.
-- Improve diagnostics with component file paths, source excerpts, and code frames.
-- Add source maps or another debug mapping strategy for generated modules.
-- Add benchmark fixtures and regression tests for repeated updates, teardown, and large trees.
-- Document browser support, security boundaries, and generated-code assumptions.
+- ~~Define compatibility and versioning policy for component syntax and generated output.~~
+- ~~Replace or substantially extend the limited script scanner and transformation layer with syntax-aware JavaScript handling.~~
+- ~~Improve diagnostics with component file paths, source excerpts, and code frames.~~
+- ~~Add source maps or another debug mapping strategy for generated modules.~~
+- ~~Add benchmark fixtures and regression tests for repeated updates, teardown, and large trees.~~
+- ~~Document browser support, security boundaries, and generated-code assumptions.~~
+
+## 8. Promote a Public CLI
+
+**Goal:** Make the project compiler and development server available through a stable `wizz` command.
+
+- ~~Define an installable `wizz` command that exposes `wizz build <input-directory> <output-directory>` and `wizz dev`, with `src` and `dist` defaults when build paths are omitted, without requiring npm or a package registry.~~
+- ~~Reuse the existing build and development-server implementations rather than duplicating their behavior in the CLI layer.~~
+- ~~Validate commands and arguments with actionable usage errors and non-zero exit codes on failures.~~
+- ~~Document installation, command usage, defaults, and the public stability boundary.~~
+- ~~Add focused command-level tests for successful execution, invalid arguments, and propagated build failures.~~
+
+~~**Done when:** application authors can install and run documented `wizz build` and `wizz dev` commands with the same reliable behavior as the current Node entry points.~~
+
+## 9. Generate File-Based Routes
+
+**Goal:** Generate the browser route table from the application `src/pages` directory so authors do not maintain routes manually in `src/runtime/main.js`.
+
+- ~~Make the project build discover page components below `src/pages` and emit a generated route manifest into `dist/runtime`.~~
+- ~~Define stable path conventions, including `src/App.wizz` for `/`, `src/pages/index.wizz` for `/`, nested page paths, and case normalization.~~
+- ~~Make the runtime consume the generated manifest rather than a repository-owned hard-coded route table.~~
+- ~~Detect ambiguous paths, duplicate route claims, and reserved runtime paths during the build, with file-aware diagnostics.~~
+- ~~Preserve explicit dynamic imports so only the route selected by the browser is loaded.~~
+- ~~Add build, generated-manifest, and runtime tests for root pages, nested pages, direct route loads, collisions, and removal of a page after a rebuild.~~
+
+~~**Done when:** adding, renaming, nesting, or removing a `.wizz` page changes its browser route after the next build without an edit to `src/runtime/main.js`.~~
+
+## 10. Add Component Props
+
+~~**Goal:** Let parent components pass explicit inputs to imported child components through a stable render and update contract.~~
+
+- ~~Define prop declaration and consumption syntax for child component scripts and template expressions.~~
+- ~~Allow imported component tags to receive static and dynamic attributes as props while retaining clear native-attribute behavior.~~
+- ~~Define prop values, defaults, missing-prop behavior, and whether prop bindings are read-only inside child components.~~
+- ~~Update component mounting so child instances receive props without relying on ambient parent state.~~
+- ~~Define reactive prop-update semantics, including parent updates, child rerenders, teardown, and component identity in lists.~~
+- ~~Add parser, analyzer, generator, and mounted runtime tests for static props, reactive props, defaults, invalid prop syntax, nested components, and child teardown.~~
+
+~~**Done when:** an imported component receives documented static and reactive props, rerenders predictably as parent values change, and retains its independent teardown contract.~~
+
+Implementation notes: props are declared with `export let name = <default>;` in the child script and passed as attributes on imported component tags (static strings, bare attributes as `true`, dynamic expressions). The child factory receives an explicit props object — `mountComponent(target, props = {})` — and reactive changes flow from the parent's `update()` through guarded `setProps()` calls on mounted child instances, preserving child identity. Prop bindings are read-only (statement-level mutations are compile-time errors), missing props fall back to declared defaults, and components inside each blocks remain unsupported, so identity semantics are defined for directly nested components only. Documented in `src/compiler/generator/README.md` under "Component Props".
+
+## 11. Build a VS Code Extension
+
+**Goal:** Provide first-party editor support for stable Wizz language and project workflows.
+
+- Add `.wizz` language registration, syntax highlighting, and editor language configuration.
+- Surface compiler diagnostics with file paths, source locations, excerpts, and code frames through VS Code diagnostics.
+- Provide component navigation for imports and route-aware page files.
+- Integrate stable `wizz build` and `wizz dev` commands without making the core compiler depend on VS Code APIs.
+- Document installation, supported editor features, and the extension's compatibility boundary with Wizz syntax and compiler versions.
+- Add focused extension tests for language registration, diagnostic conversion, navigation, and command integration.
+
+**Done when:** Wizz authors can install the extension and receive syntax highlighting, compiler diagnostics, component navigation, and build integration from VS Code.
+
+## 12. Add Server-Side Rendering
+
+**Goal:** Reuse the component AST for a distinct HTML string-rendering target and define how the browser hydrates its output.
+
+- Define an explicit server compilation or rendering API without changing the current browser-module contract implicitly.
+- Render an initial, deliberately narrow supported component surface to HTML strings without creating DOM nodes.
+- Define trusted-component execution, initial-state serialization, escaping, and source-map exposure boundaries for server output.
+- Define deterministic hydration markers or traversal rules so browser code can attach to server-rendered DOM without recreating it.
+- Specify mismatch reporting and fallback behavior before broadening the supported feature set.
+- Add end-to-end tests that render on the server, hydrate in a minimal browser DOM, preserve initial markup, attach events, and update reactive state.
+
+**Done when:** a documented server-rendered component can be delivered as HTML and hydrated by its client module without duplicate DOM or divergent initial state.
 
 ## Later Ecosystem Work
 
-- **CLI:** Promote the project compiler and dev command into the public `wizz` interface.
-- **VS Code extension:** Provide syntax highlighting, diagnostics, component navigation, and build integration after the language syntax is stable.
-- **SSR:** Reuse the component AST but add a distinct string-rendering target and hydration contract.
+- **MCP:** Expose the Wizz project structure, component language contract, compiler diagnostics, build command, and development workflow through a Model Context Protocol server so AI agents can inspect an application and safely create or update Wizz web applications autonomously. Keep filesystem permissions explicit and project-scoped; do not make the core compiler depend on an AI runtime.
 - **ORM:** Keep it separate from the core renderer/compiler so application persistence choices do not define component semantics.
 
 ## Development Server Decision

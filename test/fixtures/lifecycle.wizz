@@ -1,0 +1,16 @@
+<script>
+  let status = "created";
+
+  function initialize() {
+    status = "mounted";
+  }
+
+  function teardown() {
+    document.title = "destroyed";
+  }
+
+  onMount(initialize);
+  onDestroy(teardown);
+</script>
+
+<main><p>{status}</p></main>

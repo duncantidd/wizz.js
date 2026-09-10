@@ -29,6 +29,15 @@ function createDocument(target) {
   };
 }
 
+async function waitFor(condition, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(condition(), 'expected condition was not met before the timeout');
+}
+
 function createWindow(pathname = '/') {
   const listeners = new Map();
 
@@ -69,6 +78,14 @@ test('the document shell supplies #app and loads only the emitted runtime entry'
   assert.doesNotMatch(documentShell, /import mountComponent/);
 });
 
+test('runtime entry builds lazy routes from the generated page manifest', () => {
+  const runtimeEntry = fs.readFileSync(path.join(__dirname, '..', 'src', 'runtime', 'main.js'), 'utf8');
+
+  assert.match(runtimeEntry, /import \{ pageModules \} from '\.\/routes\.js';/);
+  assert.match(runtimeEntry, /pageModules\.map\(\(\{ routePath, modulePath \}.*import\(modulePath\)/);
+  assert.doesNotMatch(runtimeEntry, /import\('\.\.\/pages\/Home\.js'\)/);
+});
+
 test('emitted runtime mounts the compiled App component into #app', async (t) => {
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
@@ -88,10 +105,67 @@ test('emitted runtime mounts the compiled App component into #app', async (t) =>
   t.after(() => { global.window = originalWindow; });
 
   await import(`${pathToFileURL(path.join(outputDirectory, 'runtime', 'main.js')).href}?test=${Date.now()}`);
-  await new Promise((resolve) => setImmediate(resolve));
+  await waitFor(() => target.childNodes.length === 1);
 
   assert.equal(target.childNodes.length, 1);
   assert.equal(target.childNodes[0].name, 'main');
+});
+
+test('generated routes load only the page selected by the current path', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'App.wizz'), '<main><p>Home</p></main>');
+  writeFile(
+    path.join(inputDirectory, 'pages', 'Deferred.wizz'),
+    '<script>document.loadedDeferredPage = true;</script><main><p>Deferred</p></main>'
+  );
+  buildProject(inputDirectory, outputDirectory, { log() {}, error() {} });
+  writeFile(path.join(outputDirectory, 'package.json'), '{"type":"module"}');
+
+  const target = { childNodes: [], appendChild(node) { this.childNodes.push(node); }, removeChild() {} };
+  const originalDocument = global.document;
+  const originalWindow = global.window;
+  global.document = createDocument(target);
+  global.window = createWindow('/');
+  t.after(() => { global.document = originalDocument; });
+  t.after(() => { global.window = originalWindow; });
+
+  await import(`${pathToFileURL(path.join(outputDirectory, 'runtime', 'main.js')).href}?test=${Date.now()}`);
+  await waitFor(() => target.childNodes.length === 1);
+  assert.equal(global.document.loadedDeferredPage, undefined);
+
+  global.window.dispatchPopState('/deferred');
+  await waitFor(() => global.document.loadedDeferredPage === true);
+  assert.equal(target.childNodes[0].name, 'main');
+});
+
+test('generated nested routes mount on a direct browser load', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'App.wizz'), '<main><p>App</p></main>');
+  writeFile(path.join(inputDirectory, 'pages', 'Admin', 'Users.wizz'), '<main><p>Users</p></main>');
+  buildProject(inputDirectory, outputDirectory, { log() {}, error() {} });
+  writeFile(path.join(outputDirectory, 'package.json'), '{"type":"module"}');
+
+  const target = { childNodes: [], appendChild(node) { this.childNodes.push(node); }, removeChild() {} };
+  const originalDocument = global.document;
+  const originalWindow = global.window;
+  global.document = createDocument(target);
+  global.window = createWindow('/admin/users');
+  t.after(() => { global.document = originalDocument; });
+  t.after(() => { global.window = originalWindow; });
+
+  await import(`${pathToFileURL(path.join(outputDirectory, 'runtime', 'main.js')).href}?test=${Date.now()}`);
+  await waitFor(() => target.childNodes.length === 1);
+
+  assert.equal(target.childNodes[0].name, 'main');
+  assert.equal(target.childNodes[0].childNodes[0].childNodes[0].nodeValue, 'Users');
 });
 
 test('emitted runtime reports a missing #app mount target', async (t) => {

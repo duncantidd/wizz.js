@@ -92,3 +92,40 @@ test('parses if blocks with an optional else branch', () => {
   assert.equal(block.consequent[0].name, 'p');
   assert.equal(block.alternate[0].name, 'p');
 });
+
+test('parses keyed each blocks', () => {
+  const root = parseTemplate(tokenize('<ul>{#each items as item (item.id)}<li>{item.name}</li>{/each}</ul>'));
+  const block = root.children[0].children[0];
+
+  assert.deepEqual(
+    { type: block.type, collection: block.collection, item: block.item, key: block.key },
+    { type: 'EachBlock', collection: 'items', item: 'item', key: 'id' }
+  );
+  assert.equal(block.children[0].name, 'li');
+});
+
+test('parses keyless each blocks without an item key', () => {
+  const root = parseTemplate(tokenize('<ul>{#each items as item}<li>{item}</li>{/each}</ul>'));
+  const block = root.children[0].children[0];
+
+  assert.deepEqual(
+    { type: block.type, collection: block.collection, item: block.item, key: block.key },
+    { type: 'EachBlock', collection: 'items', item: 'item', key: null }
+  );
+  assert.equal(block.children[0].name, 'li');
+});
+
+test('rejects each blocks with malformed syntax', () => {
+  assert.throws(
+    () => parseTemplate(tokenize('<ul>{#each items as}<li></li>{/each}</ul>')),
+    /Each blocks require `collection as item` or `collection as item \(item\.key\)` syntax\./
+  );
+  assert.throws(
+    () => parseTemplate(tokenize('<ul>{#each items as item (item)}<li></li>{/each}</ul>')),
+    /Each blocks require `collection as item` or `collection as item \(item\.key\)` syntax\./
+  );
+  assert.throws(
+    () => parseTemplate(tokenize('<ul>{#each items}<li></li>{/each}</ul>')),
+    /Each blocks require `collection as item` or `collection as item \(item\.key\)` syntax\./
+  );
+});

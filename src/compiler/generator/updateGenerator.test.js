@@ -8,9 +8,18 @@ function createUpdate(template, elements, scope = {}) {
       return elements[selector] || null;
     }
   };
+  const rootNode = {
+    getAttribute() {
+      return null;
+    },
+    querySelector(selector) {
+      return elements[selector] || null;
+    }
+  };
   const names = Object.keys(scope);
-  const update = new Function('document', ...names, `${generateUpdateFunction(template)}\nreturn update;`)(
+  const update = new Function('document', 'rootNode', ...names, `${generateUpdateFunction(template)}\nreturn update;`)(
     document,
+    rootNode,
     ...names.map((name) => scope[name])
   );
 
@@ -93,5 +102,112 @@ test('does not emit DOM queries for templates without reactive expressions', () 
   });
 
   assert.doesNotMatch(source, /querySelector/);
-  assert.doesNotThrow(() => new Function(`${source}\nreturn update;`));
+  assert.doesNotThrow(() => new Function('rootNode', `${source}\nreturn update;`));
+});
+
+test('scopes reactive DOM queries to the component root', () => {
+  const source = generateUpdateFunction({
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'p',
+      attributes: [{ name: 'data-wizz-id', value: '1' }],
+      children: [{ type: 'Expression', value: 'count', dependencies: ['count'] }]
+    }]
+  });
+
+  assert.match(source, /rootNode\.getAttribute\('data-wizz-id'\) === '1' \? rootNode : rootNode\.querySelector\('\[data-wizz-id="1"\]'\)/);
+  assert.doesNotMatch(source, /document\.querySelector/);
+});
+test('routes reactive prop changes to component instances through setProps', () => {
+  const calls = [];
+  const instance = { setProps(next) { calls.push({ ...next }); } };
+  const update = createUpdate({
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'main',
+      attributes: [],
+      children: [{
+        type: 'Element',
+        name: 'Counter',
+        componentId: 1,
+        attributes: [
+          { name: 'start', value: 'count', dynamic: true, dependencies: ['count'] },
+          { name: 'label', value: 'Total' }
+        ],
+        children: []
+      }]
+    }]
+  }, {}, { count: 9, component_1: instance });
+
+  update({}, { count: true });
+  update({}, { other: true });
+
+  assert.deepEqual(calls, [{ start: 9 }]);
+});
+
+test('skips setProps when the instance has not mounted or the attribute is static', () => {
+  const update = createUpdate({
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'main',
+      attributes: [],
+      children: [{
+        type: 'Element',
+        name: 'Counter',
+        componentId: 1,
+        attributes: [
+          { name: 'start', value: 'count', dynamic: true, dependencies: ['count'] },
+          { name: 'label', value: 'total', dynamic: true, dependencies: [] }
+        ],
+        children: []
+      }]
+    }]
+  }, {}, { count: 2, component_1: null });
+
+  // No mounted instance: the null guard makes this a no-op instead of a crash.
+  assert.doesNotThrow(() => update({}, { count: true }));
+
+  const source = generateUpdateFunction({
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'main',
+      attributes: [],
+      children: [{
+        type: 'Element',
+        name: 'Counter',
+        componentId: 1,
+        attributes: [{ name: 'label', value: 'total', dynamic: true, dependencies: [] }],
+        children: []
+      }]
+    }]
+  });
+  assert.doesNotMatch(source, /setProps/);
+});
+
+test('emits setProps for component tags inside conditional branches', () => {
+  const calls = [];
+  const instance = { setProps(next) { calls.push({ ...next }); } };
+  const update = createUpdate({
+    type: 'Root',
+    children: [{
+      type: 'IfBlock',
+      test: 'visible',
+      consequent: [{
+        type: 'Element',
+        name: 'Counter',
+        componentId: 1,
+        attributes: [{ name: 'start', value: 'count', dynamic: true, dependencies: ['count'] }],
+        children: []
+      }],
+      alternate: null
+    }]
+  }, {}, { count: 5, component_1: instance });
+
+  update({}, { count: true });
+
+  assert.deepEqual(calls, [{ start: 5 }]);
 });

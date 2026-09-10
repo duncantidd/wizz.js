@@ -7,12 +7,35 @@ const { CodeBuilder } = require('./codeBuilder');
  */
 function generateUpdateFunction(templateAST) {
   const builder = new CodeBuilder();
+  const hasEachBlock = (node) => node.type === 'EachBlock'
+    || (node.children || []).some(hasEachBlock)
+    || (node.consequent || []).some(hasEachBlock)
+    || (node.alternate || []).some(hasEachBlock);
 
   builder.add('function update(ctx, changed) {')
         .indent();
 
+  if (hasEachBlock(templateAST)) {
+    builder.add('listUpdates.forEach((updateList) => updateList(changed));');
+  }
+
   function walk(node) {
     if (node.type === 'Element') {
+      // Imported component tags receive prop updates through their mounted
+      // instance, not through DOM attribute writes.
+      if (node.componentId != null) {
+        for (const attribute of node.attributes || []) {
+          if (!attribute.dynamic || !attribute.dependencies?.length) continue;
+          const guard = attribute.dependencies.map((dependencyName) => `changed.${dependencyName}`).join(' || ');
+          builder.add(`if (${guard}) {`)
+            .indent()
+            .add(`if (component_${node.componentId}) component_${node.componentId}.setProps({ ${JSON.stringify(attribute.name)}: ${attribute.value} });`)
+            .dedent()
+            .add('}');
+        }
+        return;
+      }
+
       // 1. Get the assigned data-wizz-id (if this element has reactive children)
       const idAttr = node.attributes && node.attributes.find(attr => attr.name === 'data-wizz-id');
       const wizzId = idAttr ? idAttr.value : null;
@@ -22,7 +45,7 @@ function generateUpdateFunction(templateAST) {
         for (const dependencyName of attribute.dependencies) {
           builder.add(`if (changed.${dependencyName}) {`)
             .indent()
-            .add(`const target_${wizzId} = document.querySelector('[data-wizz-id="${wizzId}"]');`);
+            .add(`const target_${wizzId} = rootNode.getAttribute('data-wizz-id') === '${wizzId}' ? rootNode : rootNode.querySelector('[data-wizz-id="${wizzId}"]');`);
           if (['value', 'checked', 'disabled'].includes(attribute.name)) {
             builder.add(`target_${wizzId}.${attribute.name} = ${attribute.value};`);
           } else {
@@ -45,7 +68,7 @@ function generateUpdateFunction(templateAST) {
                     .indent();
               
               // Target the exact DOM element via the unique ID
-              builder.add(`const target_${wizzId} = document.querySelector('[data-wizz-id="${wizzId}"]');`);
+              builder.add(`const target_${wizzId} = rootNode.getAttribute('data-wizz-id') === '${wizzId}' ? rootNode : rootNode.querySelector('[data-wizz-id="${wizzId}"]');`);
               
               // Update the specific text node at the exact child index.
               // We pull the raw string (e.g., "count + 1") directly from child.value.
@@ -66,6 +89,11 @@ function generateUpdateFunction(templateAST) {
       if (node.children && Array.isArray(node.children)) {
         node.children.forEach(walk);
       }
+    } else if (node.type === 'IfBlock') {
+      // Conditional branches exist in the DOM after mount, so their reactive
+      // content and component props participate in updates like any other.
+      (node.consequent || []).forEach(walk);
+      (node.alternate || []).forEach(walk);
     }
   }
 

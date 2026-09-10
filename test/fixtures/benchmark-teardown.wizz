@@ -1,0 +1,14 @@
+<script>
+  function handleClick() {}
+</script>
+
+<main>
+  <button on:click={handleClick}>One</button>
+  <button on:click={handleClick}>Two</button>
+  <button on:click={handleClick}>Three</button>
+  <button on:click={handleClick}>Four</button>
+  <button on:click={handleClick}>Five</button>
+  <button on:click={handleClick}>Six</button>
+  <button on:click={handleClick}>Seven</button>
+  <button on:click={handleClick}>Eight</button>
+</main>
