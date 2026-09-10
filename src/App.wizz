@@ -1,14 +1,6 @@
 <script>
+  import Counter from "./components/Counter.wizz";
   const frameworkName = "wizz.js";
-  let clicks = 0;
-  
-  function handleClick() {
-    clicks++;
-  }
-
-  function clickme() {
-    alert('Hello ' + name + '\n There have been ' + clicks + ' clicks');
-  }
   
   let params = new URLSearchParams(document.location.search);
   let name = params.get("name");
@@ -19,7 +11,7 @@
 </script>
 
 <main>
-  <h1 on:click={clickme}>Hello {name} Welcome to {frameworkName}!</h1>
+  <h1>Hello {name} Welcome to {frameworkName}!</h1>
   <p>Zero dependencies. 100% compiled.</p>
-  <button on:click={handleClick}>Clicks: {clicks}</button>
+  <Counter />
 </main>

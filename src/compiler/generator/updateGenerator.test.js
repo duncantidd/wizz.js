@@ -8,9 +8,18 @@ function createUpdate(template, elements, scope = {}) {
       return elements[selector] || null;
     }
   };
+  const rootNode = {
+    getAttribute() {
+      return null;
+    },
+    querySelector(selector) {
+      return elements[selector] || null;
+    }
+  };
   const names = Object.keys(scope);
-  const update = new Function('document', ...names, `${generateUpdateFunction(template)}\nreturn update;`)(
+  const update = new Function('document', 'rootNode', ...names, `${generateUpdateFunction(template)}\nreturn update;`)(
     document,
+    rootNode,
     ...names.map((name) => scope[name])
   );
 
@@ -93,7 +102,22 @@ test('does not emit DOM queries for templates without reactive expressions', () 
   });
 
   assert.doesNotMatch(source, /querySelector/);
-  assert.doesNotThrow(() => new Function(`${source}\nreturn update;`));
+  assert.doesNotThrow(() => new Function('rootNode', `${source}\nreturn update;`));
+});
+
+test('scopes reactive DOM queries to the component root', () => {
+  const source = generateUpdateFunction({
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'p',
+      attributes: [{ name: 'data-wizz-id', value: '1' }],
+      children: [{ type: 'Expression', value: 'count', dependencies: ['count'] }]
+    }]
+  });
+
+  assert.match(source, /rootNode\.getAttribute\('data-wizz-id'\) === '1' \? rootNode : rootNode\.querySelector\('\[data-wizz-id="1"\]'\)/);
+  assert.doesNotMatch(source, /document\.querySelector/);
 });
 test('routes reactive prop changes to component instances through setProps', () => {
   const calls = [];

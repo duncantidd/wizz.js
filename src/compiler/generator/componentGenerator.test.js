@@ -26,6 +26,17 @@ function createDocument() {
             elements.set(`[data-wizz-id="${value}"]`, this);
           }
         },
+        getAttribute(attributeName) {
+          return this.attributes[attributeName] ?? null;
+        },
+        querySelector(selector) {
+          for (const child of this.childNodes) {
+            if (child.attributes?.['data-wizz-id'] && selector === `[data-wizz-id="${child.attributes['data-wizz-id']}"]`) return child;
+            const match = child.querySelector?.(selector);
+            if (match) return match;
+          }
+          return null;
+        },
         appendChild(node) {
           this.childNodes.push(node);
         },
