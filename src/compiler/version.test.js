@@ -7,15 +7,17 @@ test('exposes exactly the compiler, syntax, and output versions', () => {
 });
 
 test('pins the current contract versions so bumps are deliberate', () => {
-  // 1.2.1 / syntax 1.1.0 / output 1.2.1: component props and instance-scoped DOM updates. `export let name`
-  // prop declarations and attributes on imported component tags are additive
-  // syntax; the generated module gains the `mountComponent(target, props)`
-  // signature and the `setProps()` handle member, also additive. All three
-  // minors bump together.
+  // 1.3.0 / syntax 1.1.0 / output 1.3.0: server-side rendering and hydration.
+  // The compiler gains an explicit `compileServer()` target and an opt-in
+  // `hydratable` compile flag; the output contract additively gains the
+  // optional `hydrateComponent(target, props, state)` export and its
+  // hydration traversal on hydratable modules. Default `mountComponent`
+  // behavior is unchanged and component syntax is untouched, so both minors
+  // bump together with syntax pinned.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.2.1',
+    compiler: '1.3.0',
     syntax: '1.1.0',
-    output: '1.2.1'
+    output: '1.3.0'
   });
 });
 

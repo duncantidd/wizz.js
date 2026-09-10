@@ -2,14 +2,27 @@ const { CodeBuilder } = require('./codeBuilder');
 const { generateCreateFunction, collectComponentRefNames } = require('./domGenerator');
 const { generateUpdateFunction } = require('./updateGenerator');
 const { interceptAssignments, findReactiveMutations } = require('./assignmentInterceptor');
+const { assertServerRenderable } = require('./serverGenerator');
+const { generateHydrationFunction } = require('./hydrationGenerator');
 const { VERSIONS } = require('../version.js');
 
 /**
  * Wraps the parsed component into a single, importable Factory Closure.
  * @param {Object} astPayload - The Final Handoff Object (must include rawScript).
+ * @param {Object} [options] - Generation options.
+ * @param {boolean} [options.hydratable] - When true, the module additionally
+ *   exports hydrateComponent(target, props, state), which adopts server-rendered
+ *   markup instead of recreating it. Hydratable modules are restricted to the
+ *   server-renderable component surface. Default generation is unchanged.
  * @returns {string} The final compiled JavaScript module.
  */
-function generateComponent(astPayload) {
+function generateComponent(astPayload, options = {}) {
+  const hydratable = options.hydratable === true;
+  if (hydratable) {
+    // The hydration walk cannot adopt component tags or block constructs, so
+    // hydratable modules are held to the same surface as the server target.
+    assertServerRenderable(astPayload);
+  }
   const builder = new CodeBuilder();
       const componentImports = astPayload.imports || [];
   const props = astPayload.props || [];
@@ -36,8 +49,27 @@ function generateComponent(astPayload) {
 
   // 1. Factory Function Signature. `props` carries the values the parent
   // passed to the component tag; missing keys fall back to declared defaults.
-  builder.add('export default function mountComponent(target, props = {}) {')
-        .indent();
+  // Hydratable modules route both public entries through one mountInstance
+  // closure; the default emission is unchanged.
+  if (hydratable) {
+    builder.add('export default function mountComponent(target, props = {}) {')
+          .indent()
+          .add('return mountInstance(target, props, false, null);')
+          .dedent()
+          .add('}')
+          .add('')
+          .add('export function hydrateComponent(target, props = {}, state = null) {')
+          .indent()
+          .add('return mountInstance(target, props, true, state);')
+          .dedent()
+          .add('}')
+          .add('')
+          .add('function mountInstance(target, props, hydrate, state) {')
+          .indent();
+  } else {
+    builder.add('export default function mountComponent(target, props = {}) {')
+          .indent();
+  }
 
       const reactiveVars = astPayload.script.filter(decl => decl.isReactive);
 
@@ -94,6 +126,25 @@ function generateComponent(astPayload) {
             interceptedScript.split('\n').forEach(line => builder.add(line));
   }
 
+  // Hydration: server-rendered initial state overrides the script-computed
+  // values. Props always win (they are re-applied by the parent), so prop
+  // bindings are never seeded. The hasOwnProperty + bracket access pattern
+  // means a hostile `__proto__` key in the serialized state cannot pollute
+  // Object.prototype.
+  if (hydratable) {
+    const seedableVars = reactiveVars.filter(decl => !decl.isProp);
+    if (seedableVars.length > 0) {
+      builder.add('\n// --- Initial State ---');
+      builder.add("if (hydrate && state && typeof state === 'object' && !Array.isArray(state)) {")
+            .indent();
+      seedableVars.forEach((declaration) => {
+        builder.add(`if (Object.prototype.hasOwnProperty.call(state, ${JSON.stringify(declaration.name)})) ${declaration.name} = state[${JSON.stringify(declaration.name)}];`);
+      });
+      builder.dedent()
+            .add('}');
+    }
+  }
+
   // 3. Build the Context Object dynamically
   // We use getters so the create() function always reads the latest memory reference
   builder.add('\n// --- Framework Context ---');
@@ -119,18 +170,39 @@ function generateComponent(astPayload) {
 
   createCode.split('\n').forEach(line => builder.add(line));
 
+  // 4b. Inject the hydration adoption walk for hydratable modules.
+  if (hydratable) {
+    const hydrationCode = generateHydrationFunction(astPayload.template);
+    hydrationCode.split('\n').forEach(line => builder.add(line));
+  }
+
   // 5. Inject the generated Reactivity Engine update() function
   builder.add('\n// --- Reactivity Engine ---');
   const updateCode = generateUpdateFunction(astPayload.template);
   updateCode.split('\n').forEach(line => builder.add(line));
 
-  // 6. Mount the component to the DOM
-  builder.add('\n// --- Initialization ---')
-        .add('const rootNode = create(ctx);')
-        .add('const childComponents = rootNode.__wizzChildComponents;')
-      .add('const listUpdates = rootNode.__wizzListUpdates;')
-        .add('target.appendChild(rootNode);')
-        .add('rootNode.__wizzMountChildren();');
+  // 6. Mount the component to the DOM. Hydration adopts the server-rendered
+  // root instead of creating one and falls back to a full client mount when
+  // the walk reports any mismatch.
+  builder.add('\n// --- Initialization ---');
+  if (!hydratable) {
+    builder.add('const rootNode = create(ctx);')
+          .add('const childComponents = rootNode.__wizzChildComponents;')
+          .add('const listUpdates = rootNode.__wizzListUpdates;')
+          .add('target.appendChild(rootNode);')
+          .add('rootNode.__wizzMountChildren();');
+  } else {
+    builder.add('const rootNode = hydrate ? hydrateCreate(target, state) : create(ctx);')
+          .add('if (!rootNode) return mountComponent(target, props);')
+          .add('const childComponents = hydrate ? [] : rootNode.__wizzChildComponents;')
+          .add('const listUpdates = hydrate ? [] : rootNode.__wizzListUpdates;')
+          .add('if (!hydrate) {')
+          .indent()
+          .add('target.appendChild(rootNode);')
+          .add('rootNode.__wizzMountChildren();')
+          .dedent()
+          .add('}');
+  }
 
   const initialChanges = reactiveVars.map(decl => `${decl.name}: true`).join(', ');
       builder.add(`update(ctx, { ${initialChanges} });`)
