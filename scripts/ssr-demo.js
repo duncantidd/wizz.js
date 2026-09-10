@@ -3,10 +3,12 @@
 //
 //   node scripts/ssr-demo.js            (then open http://localhost:3001)
 //
-// Milestone 12 delivered the compiler API + hydration runtime, not server
-// integration: `wizz dev` still serves static build output only (see the
-// Development Server Decision in ROADMAP.md). This script shows the delivery
-// recipe an application server would follow:
+// Milestone 13 made `wizz dev` deliver server-rendered routes natively — this
+// script is kept as a standalone manual reference for the same delivery recipe
+// when serving from an application-owned Node backend instead.
+//
+// Milestone 12 delivered the compiler API + hydration runtime. This script
+// shows the delivery recipe an application server would follow:
 //
 //   1. compileServer() the component into an HTML string renderer.
 //   2. renderComponent() produces { html, state } at request time.

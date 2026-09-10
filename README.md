@@ -299,7 +299,7 @@ node scripts/dev.js
 
 The development command builds `src` into `dist`, copies `index.html` and `App.css` into the output directory, serves it at `http://localhost:3000`, and watches `.wizz` files for changes. It reports compiler errors while keeping the server available for subsequent fixes.
 
-Requests for browser routes such as `http://localhost:3000/Home` receive the document shell, allowing the client router to select the matching component. Existing output files such as `/runtime/main.js` and `/pages/Home.js` are served directly; missing asset paths return HTTP 404.
+Requests for browser routes such as `http://localhost:3000/Home` receive the document shell, allowing the client router to select the matching component. Server-renderable routes (see below) instead receive the shell with the rendered markup already inside the mount point plus the serialized state script, and the router hydrates it on first load. Existing output files such as `/runtime/main.js` and `/pages/Home.js` are served directly; missing asset paths return HTTP 404.
 
 ## Compatibility and Versioning
 
@@ -342,9 +342,19 @@ The generated module keeps its default `mountComponent(target, props)` export an
 
 The v1 server-renderable surface is deliberately narrow: static markup, text interpolations, dynamic attributes, and top-level props. `{#if}`, `{#each}`, and imported component tags fail the server compile with located diagnostics; event handlers and lifecycle hooks are client-only. Server output produces no source map.
 
+### Delivery from the development server
+
+`wizz dev` performs this delivery natively, per route:
+
+- At build time, every server-renderable **page** (`App.wizz` and `src/pages/*` — not component files) additionally emits `<page>.server.js` and `<page>.hydrate.js` beside the client module, and the generated route manifest advertises both (`serverModulePath`, `hydratableModulePath`). Eligibility is a build-time artifact: a page that fails the server gate keeps `null` fields and is served exactly as before. Pages that flip eligibility on rebuild are governed by the fresh manifest, never by leftover files from earlier builds.
+- When a document request matches a manifest route with a server module, the dev server renders it per request: `renderComponent()` HTML goes inside `#app` and the state script is emitted as its sibling, in the same document shell the SPA fallback uses. Route matching mirrors the client router exactly (exact pathname lookup, routes lowercased at build time), so unmatched paths, ineligible routes, and unknown assets behave byte-for-byte as they did before server rendering. Watch rebuilds rewrite both builds, and the server module is imported cache-busted by its file mtime, so a render can never be stale after an edit.
+- The delivered document boots through the standard runtime entry. On the first render the router looks for `script[type="application/wizz-state"]` beside the mount point; when present and the route has a hydratable build, it imports `hydrateComponent` and adopts the markup (the regular client module is not loaded at all). If the state payload is unreadable, the route has no hydratable build, or adoption fails, the server markup is dropped and the route mounts fresh — never a duplicate DOM. Client-side navigation and browser history always mount fresh.
+
+`scripts/ssr-demo.js` remains a standalone reference for application-owned delivery of the same recipe (for example from your own Node backend).
+
 ## Browser Support
 
-Wizz targets current evergreen browsers that support native ES modules and dynamic `import()`. Generated components also require `queueMicrotask()`, standard DOM construction and mutation APIs (`createElement`, `createTextNode`, `appendChild`, `insertBefore`, and `removeChild`), DOM event listeners, and `Element.prototype.querySelector()`. Hydrating modules additionally require `firstElementChild`, `nodeType`, `tagName`, and comment-node access for the adoption walk. Applications using the included router additionally require the History API (`history.pushState`) and `popstate` events.
+Wizz targets current evergreen browsers that support native ES modules and dynamic `import()`. Generated components also require `queueMicrotask()`, standard DOM construction and mutation APIs (`createElement`, `createTextNode`, `appendChild`, `insertBefore`, and `removeChild`), DOM event listeners, and `Element.prototype.querySelector()`. Hydrating modules additionally require `firstElementChild`, `nodeType`, `tagName`, and comment-node access for the adoption walk, and the runtime router's first-render hydration requires `Document.querySelector()` and `Element.remove()`. Applications using the included router additionally require the History API (`history.pushState`) and `popstate` events.
 
 The framework does not ship browser polyfills or transpiled legacy output. Internet Explorer and browsers without native ES modules are unsupported. Serve built files over HTTP(S), with JavaScript served as `text/javascript`; opening modules from the filesystem is not a supported deployment mode.
 
@@ -355,12 +365,6 @@ Always provide `filePath` when compiling a source file. Wizz then includes both 
 ```text
 Unclosed tag <main> starting at src/App.wizz:4:1.
 ```
-
-## Browser Support
-
-Wizz targets current evergreen browsers that support native ES modules and dynamic `import()`. Generated components also require `queueMicrotask()`, standard DOM construction and mutation APIs (`createElement`, `createTextNode`, `appendChild`, `insertBefore`, and `removeChild`), DOM event listeners, and `Element.prototype.querySelector()`. Applications using the included router additionally require the History API (`history.pushState`) and `popstate` events.
-
-The framework does not ship browser polyfills, transpiled legacy output, SSR, or hydration. Internet Explorer and browsers without native ES modules are unsupported. Serve built files over HTTP(S), with JavaScript served as `text/javascript`; opening modules from the filesystem is not a supported deployment mode.
 
 ## Security Boundaries
 
