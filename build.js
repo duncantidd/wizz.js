@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 // Single public compiler entry point: parsing, analysis, ID assignment, generation.
-const { compile } = require('./src/compiler');
+const { compile, compileServer } = require('./src/compiler');
 
 function parseBuildArguments(argv) {
   if (!Array.isArray(argv)) {
@@ -54,11 +54,7 @@ function getOutputPath(inputDirectory, outputDirectory, inputPath) {
   return path.join(outputDirectory, relativePath.replace(/\.wizz$/, '.js'));
 }
 
-function compileWizzFile(inputPath, outputPath) {
-  const rawWizzCode = fs.readFileSync(inputPath, 'utf-8');
-  const { source: generatedModule, sourceMap } = compile(rawWizzCode, { filePath: inputPath });
-
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+function writeGeneratedModule(outputPath, generatedModule, sourceMap) {
   if (sourceMap) {
     const sourceMapPath = `${outputPath}.map`;
     sourceMap.file = path.basename(outputPath);
@@ -72,6 +68,42 @@ function compileWizzFile(inputPath, outputPath) {
   }
 
   fs.writeFileSync(outputPath, generatedModule, 'utf-8');
+}
+
+function compileWizzFile(inputPath, outputPath, options = {}) {
+  const rawWizzCode = fs.readFileSync(inputPath, 'utf-8');
+  const { source: generatedModule, sourceMap } = compile(rawWizzCode, { filePath: inputPath });
+
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  writeGeneratedModule(outputPath, generatedModule, sourceMap);
+
+  if (!options.isRoutePage) {
+    return { serverRenderable: false, ineligibilityReason: null };
+  }
+
+  // A route page server-renders only when it compiles through the server
+  // target. Both server targets are compiled before either file is written,
+  // so a page never ships a server module without its hydratable client
+  // build. After a successful client compile, a server-target failure is by
+  // construction the server-renderability gate (both targets share the same
+  // parse/analyze pipeline), so it is treated as ineligibility rather than a
+  // build failure; the reason is surfaced to the caller for logging.
+  try {
+    const serverResult = compileServer(rawWizzCode, { filePath: inputPath });
+    const hydratableResult = compile(rawWizzCode, { filePath: inputPath, hydratable: true });
+
+    // Server output carries no source map (HTML string rendering, not
+    // positional DOM artifacts).
+    writeGeneratedModule(outputPath.replace(/\.js$/, '.server.js'), serverResult.source, null);
+    writeGeneratedModule(outputPath.replace(/\.js$/, '.hydrate.js'), hydratableResult.source, hydratableResult.sourceMap);
+
+    return { serverRenderable: true, ineligibilityReason: null };
+  } catch (error) {
+    return {
+      serverRenderable: false,
+      ineligibilityReason: String(error.message).split('\n', 1)[0]
+    };
+  }
 }
 
 function copyRuntimeModules(outputDirectory) {
@@ -117,7 +149,7 @@ function validateRouteEntries(routeEntries) {
   }
 }
 
-function emitRouteManifest(inputDirectory, outputDirectory, inputFiles) {
+function emitRouteManifest(inputDirectory, outputDirectory, inputFiles, serverRenderableByInputPath = new Map()) {
   const routeFiles = inputFiles.filter((inputPath) => getRoutePath(inputDirectory, inputPath));
   const routeEntries = routeFiles.map((inputPath) => {
     const outputPath = getOutputPath(inputDirectory, outputDirectory, inputPath);
@@ -129,7 +161,19 @@ function emitRouteManifest(inputDirectory, outputDirectory, inputFiles) {
     };
   });
   validateRouteEntries(routeEntries);
-  const pageModules = routeEntries.map(({ filePath, modulePath, routePath }) => ({ filePath, modulePath, routePath }));
+  const pageModules = routeEntries.map(({ filePath, modulePath, routePath, inputPath }) => {
+    // Eligibility is a build-time artifact: the manifest field is the single
+    // authority on whether a route server-renders, so the dev server never
+    // probes the filesystem for stale server modules from earlier builds.
+    const serverRenderable = serverRenderableByInputPath.get(inputPath) === true;
+    return {
+      filePath,
+      modulePath,
+      routePath,
+      serverModulePath: serverRenderable ? modulePath.replace(/\.js$/, '.server.js') : null,
+      hydratableModulePath: serverRenderable ? modulePath.replace(/\.js$/, '.hydrate.js') : null
+    };
+  });
   const manifestPath = path.join(outputDirectory, 'runtime', 'routes.js');
 
   fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
@@ -154,13 +198,20 @@ function buildProject(inputDirectory, outputDirectory, logger = console) {
 
   const inputFiles = discoverWizzFiles(resolvedInputDirectory);
   let failedCount = 0;
+  const serverRenderableByInputPath = new Map();
 
   for (const inputPath of inputFiles) {
     const outputPath = getOutputPath(resolvedInputDirectory, resolvedOutputDirectory, inputPath);
+    const isRoutePage = getRoutePath(resolvedInputDirectory, inputPath) !== null;
 
     try {
-      compileWizzFile(inputPath, outputPath);
+      const result = compileWizzFile(inputPath, outputPath, { isRoutePage });
       logger.log(`Compiled ${inputPath} -> ${outputPath}`);
+      serverRenderableByInputPath.set(inputPath, result.serverRenderable);
+
+      if (result.ineligibilityReason) {
+        logger.log(`Server rendering unavailable for ${inputPath}: ${result.ineligibilityReason}`);
+      }
     } catch (error) {
       failedCount++;
       logger.error(`Compilation failed for ${inputPath}: ${error.message}`);
@@ -168,7 +219,7 @@ function buildProject(inputDirectory, outputDirectory, logger = console) {
   }
 
   copyRuntimeModules(resolvedOutputDirectory);
-  emitRouteManifest(resolvedInputDirectory, resolvedOutputDirectory, inputFiles);
+  emitRouteManifest(resolvedInputDirectory, resolvedOutputDirectory, inputFiles, serverRenderableByInputPath);
 
   return {
     compiledCount: inputFiles.length - failedCount,
