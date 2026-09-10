@@ -210,7 +210,7 @@ function buildProject(inputDirectory, outputDirectory, logger = console) {
       serverRenderableByInputPath.set(inputPath, result.serverRenderable);
 
       if (result.ineligibilityReason) {
-        logger.log(`Server rendering unavailable for ${inputPath}: ${result.ineligibilityReason}`);
+        logger.log(`Note: server rendering skipped for ${inputPath} — ${result.ineligibilityReason} Serving the client build only.`);
       }
     } catch (error) {
       failedCount++;

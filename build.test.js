@@ -378,10 +378,11 @@ test('keeps pages that fail the server-renderability gate client-only without fa
     ].join('\n')
   );
   assert.equal(logger.errors.length, 0);
-  const notices = logger.messages.filter((message) => message.startsWith('Server rendering unavailable for'));
+  const notices = logger.messages.filter((message) => message.startsWith('Note: server rendering skipped for'));
   assert.equal(notices.length, 1);
-  assert.match(notices[0], new RegExp(`Server rendering unavailable for ${path.join(inputDirectory, 'pages', 'Static.wizz').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:`));
+  assert.match(notices[0], new RegExp(`Note: server rendering skipped for ${path.join(inputDirectory, 'pages', 'Static.wizz').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} —`));
   assert.match(notices[0], /Server rendering does not support \{#if\} conditional blocks at .*1:\d+\./);
+  assert.match(notices[0], /Serving the client build only\.$/);
 });
 
 test('does not emit server builds for non-route component files', (t) => {

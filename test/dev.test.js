@@ -427,7 +427,7 @@ test('an eligibility flip stops server rendering despite stale build artifacts',
   );
   watchListeners[0]('change', 'App.wizz');
   assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'App.server.js')), true);
-  assert.match(logger.messages[logger.messages.length - 1], /Server rendering unavailable for .*App\.wizz:/);
+  assert.match(logger.messages[logger.messages.length - 1], /Note: server rendering skipped for .*App\.wizz/);
 
   const response = await fetch(`${url}/`);
   assert.equal(response.status, 200);
