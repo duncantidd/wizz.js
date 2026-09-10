@@ -64,7 +64,7 @@ function parseTemplate(tokens) {
       case 'Expression': {
         const directive = token.value.trim();
         if (directive.startsWith('#if ')) {
-          const block = { type: 'IfBlock', test: directive.slice(4).trim(), consequent: [], alternate: null, children: [] };
+          const block = { type: 'IfBlock', test: directive.slice(4).trim(), consequent: [], alternate: null, children: [], loc: token.loc };
           currentParent.children.push(block);
           stack.push(block);
           block.children = block.consequent;
@@ -85,7 +85,7 @@ function parseTemplate(tokens) {
           const match = directive.match(/^#each\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)(?:\s+\(\2\.([A-Za-z_$][A-Za-z0-9_$]*)\))?$/);
           if (!match) throw new SyntaxError('Each blocks require `collection as item` or `collection as item (item.key)` syntax.');
           const [, collection, item, key] = match;
-          const block = { type: 'EachBlock', collection, item, key: key ?? null, children: [] };
+          const block = { type: 'EachBlock', collection, item, key: key ?? null, children: [], loc: token.loc };
           currentParent.children.push(block);
           stack.push(block);
           break;
