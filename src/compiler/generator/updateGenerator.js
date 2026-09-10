@@ -45,7 +45,7 @@ function generateUpdateFunction(templateAST) {
         for (const dependencyName of attribute.dependencies) {
           builder.add(`if (changed.${dependencyName}) {`)
             .indent()
-            .add(`const target_${wizzId} = document.querySelector('[data-wizz-id="${wizzId}"]');`);
+            .add(`const target_${wizzId} = rootNode.getAttribute('data-wizz-id') === '${wizzId}' ? rootNode : rootNode.querySelector('[data-wizz-id="${wizzId}"]');`);
           if (['value', 'checked', 'disabled'].includes(attribute.name)) {
             builder.add(`target_${wizzId}.${attribute.name} = ${attribute.value};`);
           } else {
@@ -68,7 +68,7 @@ function generateUpdateFunction(templateAST) {
                     .indent();
               
               // Target the exact DOM element via the unique ID
-              builder.add(`const target_${wizzId} = document.querySelector('[data-wizz-id="${wizzId}"]');`);
+              builder.add(`const target_${wizzId} = rootNode.getAttribute('data-wizz-id') === '${wizzId}' ? rootNode : rootNode.querySelector('[data-wizz-id="${wizzId}"]');`);
               
               // Update the specific text node at the exact child index.
               // We pull the raw string (e.g., "count + 1") directly from child.value.

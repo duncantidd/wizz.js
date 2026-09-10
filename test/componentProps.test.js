@@ -29,6 +29,7 @@ function createDocument() {
       return {
         childNodes: [],
         name,
+        attributes: {},
         listeners: {},
         appendChild(node) { this.childNodes.push(node); },
         insertBefore(node, referenceNode) {
@@ -39,9 +40,21 @@ function createDocument() {
         },
         removeChild(node) { this.childNodes.splice(this.childNodes.indexOf(node), 1); },
         setAttribute(attributeName, value) {
+          this.attributes[attributeName] = value;
           if (attributeName === 'data-wizz-id') {
             elements.set(`[data-wizz-id="${value}"]`, this);
           }
+        },
+        getAttribute(attributeName) {
+          return this.attributes[attributeName] ?? null;
+        },
+        querySelector(selector) {
+          for (const child of this.childNodes) {
+            if (child.attributes?.['data-wizz-id'] && selector === `[data-wizz-id="${child.attributes['data-wizz-id']}"]`) return child;
+            const match = child.querySelector?.(selector);
+            if (match) return match;
+          }
+          return null;
         },
         addEventListener(eventName, listener) { this.listeners[eventName] = listener; },
         removeEventListener(eventName, listener) {

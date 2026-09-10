@@ -327,7 +327,7 @@ Unclosed tag <main> starting at src/App.wizz:4:1.
 
 ## Browser Support
 
-Wizz targets current evergreen browsers that support native ES modules and dynamic `import()`. Generated components also require `queueMicrotask()`, standard DOM construction and mutation APIs (`createElement`, `createTextNode`, `appendChild`, `insertBefore`, and `removeChild`), DOM event listeners, and `document.querySelector()`. Applications using the included router additionally require the History API (`history.pushState`) and `popstate` events.
+Wizz targets current evergreen browsers that support native ES modules and dynamic `import()`. Generated components also require `queueMicrotask()`, standard DOM construction and mutation APIs (`createElement`, `createTextNode`, `appendChild`, `insertBefore`, and `removeChild`), DOM event listeners, and `Element.prototype.querySelector()`. Applications using the included router additionally require the History API (`history.pushState`) and `popstate` events.
 
 The framework does not ship browser polyfills, transpiled legacy output, SSR, or hydration. Internet Explorer and browsers without native ES modules are unsupported. Serve built files over HTTP(S), with JavaScript served as `text/javascript`; opening modules from the filesystem is not a supported deployment mode.
 
@@ -345,7 +345,7 @@ File-backed components with author scripts produce source maps containing the fu
 
 Generated modules require a browser-like global `document` when `mountComponent(target, props)` runs. The supplied `target` must be a live DOM node, and callers must call the returned `destroy()` handle exactly once. Destruction removes Wizz-tracked listeners and the root node; application-managed listeners, timers, subscriptions, and global resources remain the component author's responsibility and should be released from `onDestroy`.
 
-Wizz owns the DOM subtree it creates. Do not manually reorder, remove, or replace its nodes while a component is mounted: generated updates use `data-wizz-id` lookups and child-node indexes. Reactive IDs are currently allocated per component instance but looked up through `document.querySelector()`, so applications must not mount multiple reactive instances whose generated IDs can overlap at the same time. Static components and one active reactive instance are unaffected; instance-scoped lookup is future work.
+Wizz owns the DOM subtree it creates. Do not manually reorder, remove, or replace its nodes while a component is mounted: generated updates use `data-wizz-id` lookups scoped to the component root and child-node indexes.
 
 Generated output preserves author script text inside the component factory and adds scheduler calls only for the documented mutation forms. It assumes the preserved script is valid JavaScript in that lexical context; it is not a JavaScript sandbox or a complete JavaScript transformation pipeline. The supported component syntax and intentional rewrite boundaries are documented in the [compiler documentation](src/compiler/README.md) and [generator documentation](src/compiler/generator/README.md).
 

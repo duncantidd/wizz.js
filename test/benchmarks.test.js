@@ -28,6 +28,21 @@ function createInstrumentedDocument() {
           this.attributes[attributeName] = value;
           if (attributeName === 'data-wizz-id') elements.set(`[data-wizz-id="${value}"]`, this);
         },
+        getAttribute(attributeName) {
+          return this.attributes[attributeName] ?? null;
+        },
+        querySelector(selector) {
+          metrics.queries++;
+          const find = (node) => {
+            for (const child of node.childNodes || []) {
+              if (child.attributes?.['data-wizz-id'] && selector === `[data-wizz-id="${child.attributes['data-wizz-id']}"]`) return child;
+              const match = find(child);
+              if (match) return match;
+            }
+            return null;
+          };
+          return find(this);
+        },
         appendChild(node) { this.childNodes.push(node); },
         removeChild(node) { this.childNodes.splice(this.childNodes.indexOf(node), 1); },
         addEventListener(eventName, listener) {

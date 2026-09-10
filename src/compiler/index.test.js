@@ -18,6 +18,17 @@ function createDocument() {
             elements.set(`[data-wizz-id="${value}"]`, this);
           }
         },
+        getAttribute(attributeName) {
+          return this.attributes[attributeName] ?? null;
+        },
+        querySelector(selector) {
+          for (const child of this.childNodes) {
+            if (child.attributes?.['data-wizz-id'] && selector === `[data-wizz-id="${child.attributes['data-wizz-id']}"]`) return child;
+            const match = child.querySelector?.(selector);
+            if (match) return match;
+          }
+          return null;
+        },
         appendChild(node) {
           this.childNodes.push(node);
         },
@@ -113,7 +124,7 @@ test('emits intercepted mutations and targeted updates in the generated source',
   );
 
   assert.match(source, /count \+= 1; queueUpdate\(\{ count: true \}\);/);
-  assert.match(source, /document\.querySelector\('\[data-wizz-id="1"\]'\)/);
+  assert.match(source, /rootNode\.querySelector\('\[data-wizz-id="1"\]'\)/);
 });
 
 test('mounts, updates through events, and destroys against a minimal DOM', async () => {

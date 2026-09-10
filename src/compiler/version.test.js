@@ -7,15 +7,15 @@ test('exposes exactly the compiler, syntax, and output versions', () => {
 });
 
 test('pins the current contract versions so bumps are deliberate', () => {
-  // 1.2.0 / syntax 1.1.0 / output 1.2.0: component props. `export let name`
+  // 1.2.1 / syntax 1.1.0 / output 1.2.1: component props and instance-scoped DOM updates. `export let name`
   // prop declarations and attributes on imported component tags are additive
   // syntax; the generated module gains the `mountComponent(target, props)`
   // signature and the `setProps()` handle member, also additive. All three
   // minors bump together.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.2.0',
+    compiler: '1.2.1',
     syntax: '1.1.0',
-    output: '1.2.0'
+    output: '1.2.1'
   });
 });
 

@@ -11,6 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- Reactive DOM updates are now scoped to each mounted component root rather than the whole document. Imported components can therefore reuse local `data-wizz-id` values without their event-driven updates overwriting reactive nodes in a parent or sibling component.
+
 ### Milestone 11 — Build a VS Code Extension (in progress)
 
 #### Added
