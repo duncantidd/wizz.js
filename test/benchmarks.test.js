@@ -21,6 +21,8 @@ function createInstrumentedDocument() {
       metrics.elements++;
       return {
         name,
+        nodeType: 1,
+        tagName: name.toUpperCase(),
         attributes: {},
         childNodes: [],
         listeners: {},
@@ -61,6 +63,7 @@ function createInstrumentedDocument() {
     createTextNode(initialValue) {
       metrics.textNodes++;
       return {
+        nodeType: 3,
         _nodeValue: initialValue,
         get nodeValue() { return this._nodeValue; },
         set nodeValue(value) {
@@ -68,6 +71,9 @@ function createInstrumentedDocument() {
           metrics.textWrites++;
         }
       };
+    },
+    createComment(nodeValue) {
+      return { nodeType: 8, nodeValue };
     },
     querySelector(selector) {
       metrics.queries++;
@@ -159,4 +165,76 @@ test('benchmark fixture mounts and tears down a 121-element static tree without 
   assert.deepEqual(target.childNodes, []);
   assert.ok(mountDuration >= 0);
   t.diagnostic(`121-element static tree mounted in ${mountDuration.toFixed(2)} ms`);
+});
+test('hydration adopts delivered markup with zero DOM creation and exact reactive writes', async (t) => {
+  const document = createInstrumentedDocument();
+  // The hydratable module carries a second named export alongside the
+  // default mount, so both export forms are stripped for execution.
+  const source = compile(loadFixture('hydration'), { hydratable: true }).source;
+  const module = new Function(
+    'document',
+    'queueMicrotask',
+    `${source
+      .replace('export default function mountComponent(', 'function mountComponent(')
+      .replace('export function hydrateComponent(', 'function hydrateComponent(')
+    }\nreturn { hydrateComponent };`
+  )(document, queueMicrotask);
+
+  // Stand-in for delivered markup, built through the instrumented document
+  // exactly as the server target renders the hydration fixture. The p
+  // element is the only node the analyzer stamps with a data-wizz-id.
+  const section = document.createElement('section');
+  section.setAttribute('class', 'panel');
+  const whitespace = (value) => section.appendChild(document.createTextNode(value));
+  whitespace('\n  ');
+  const heading = document.createElement('h1');
+  heading.appendChild(document.createTextNode('Hydration'));
+  section.appendChild(heading);
+  whitespace('\n  ');
+  const paragraph = document.createElement('p');
+  paragraph.setAttribute('data-note', 'ready');
+  paragraph.setAttribute('data-wizz-id', '1');
+  paragraph.appendChild(document.createTextNode('Visits: '));
+  paragraph.appendChild(document.createComment(''));
+  paragraph.appendChild(document.createTextNode('0'));
+  section.appendChild(paragraph);
+  whitespace('\n  ');
+  const button = document.createElement('button');
+  button.appendChild(document.createTextNode('Increment'));
+  section.appendChild(button);
+  whitespace('\n');
+  const target = {
+    childNodes: [section],
+    get firstElementChild() { return this.childNodes.find((node) => node.nodeType === 1) ?? null; },
+    appendChild(node) { this.childNodes.push(node); },
+    removeChild(node) { this.childNodes.splice(this.childNodes.indexOf(node), 1); }
+  };
+
+  // Delivered-markup construction is done; hydration itself must create
+  // nothing — the walk only reads attributes. The initial update then issues
+  // one targeted lookup per reactive variable (count and note share a
+  // data-wizz-id target).
+  const before = { ...document.metrics };
+  const component = module.hydrateComponent(target, {}, { count: 0, note: 'ready' });
+  const hydration = {
+    elements: document.metrics.elements - before.elements,
+    textNodes: document.metrics.textNodes - before.textNodes,
+    queries: document.metrics.queries - before.queries
+  };
+  assert.deepEqual(hydration, { elements: 0, textNodes: 0, queries: 2 });
+
+  // The initial update converges with exactly one reactive text write.
+  assert.equal(document.metrics.textWrites - before.textWrites, 1);
+
+  // A dispatched event produces exactly one batched write on adopted nodes.
+  button.dispatchEvent('click');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(paragraph.childNodes[1].nodeValue, '1');
+  assert.equal(paragraph.attributes['data-note'], 'clicked');
+  assert.equal(document.metrics.textWrites - before.textWrites, 2);
+  assert.equal(document.metrics.queries - before.queries, 4);
+
+  component.destroy();
+  assert.deepEqual(target.childNodes, []);
+  assert.equal(document.metrics.removedListeners, 1);
 });

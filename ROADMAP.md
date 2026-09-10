@@ -149,29 +149,46 @@ Implementation notes: props are declared with `export let name = <default>;` in 
 
 ## 11. Build a VS Code Extension
 
-**Goal:** Provide first-party editor support for stable Wizz language and project workflows.
+~~**Goal:** Provide first-party editor support for stable Wizz language and project workflows.~~
 
-- Add `.wizz` language registration, syntax highlighting, and editor language configuration.
-- Surface compiler diagnostics with file paths, source locations, excerpts, and code frames through VS Code diagnostics.
-- Provide component navigation for imports and route-aware page files.
-- Integrate stable `wizz build` and `wizz dev` commands without making the core compiler depend on VS Code APIs.
-- Document installation, supported editor features, and the extension's compatibility boundary with Wizz syntax and compiler versions.
-- Add focused extension tests for language registration, diagnostic conversion, navigation, and command integration.
+- ~~Add `.wizz` language registration, syntax highlighting, and editor language configuration.~~
+- ~~Surface compiler diagnostics with file paths, source locations, excerpts, and code frames through VS Code diagnostics.~~
+- ~~Provide component navigation for imports and route-aware page files.~~
+- ~~Integrate stable `wizz build` and `wizz dev` commands without making the core compiler depend on VS Code APIs.~~
+- ~~Document installation, supported editor features, and the extension's compatibility boundary with Wizz syntax and compiler versions.~~
+- ~~Add focused extension tests for language registration, diagnostic conversion, navigation, and command integration.~~
 
-**Done when:** Wizz authors can install the extension and receive syntax highlighting, compiler diagnostics, component navigation, and build integration from VS Code.
+~~**Done when:** Wizz authors can install the extension and receive syntax highlighting, compiler diagnostics, component navigation, and build integration from VS Code.~~
 
 ## 12. Add Server-Side Rendering
 
 **Goal:** Reuse the component AST for a distinct HTML string-rendering target and define how the browser hydrates its output.
 
-- Define an explicit server compilation or rendering API without changing the current browser-module contract implicitly.
-- Render an initial, deliberately narrow supported component surface to HTML strings without creating DOM nodes.
-- Define trusted-component execution, initial-state serialization, escaping, and source-map exposure boundaries for server output.
-- Define deterministic hydration markers or traversal rules so browser code can attach to server-rendered DOM without recreating it.
-- Specify mismatch reporting and fallback behavior before broadening the supported feature set.
-- Add end-to-end tests that render on the server, hydrate in a minimal browser DOM, preserve initial markup, attach events, and update reactive state.
+- ~~Define an explicit server compilation or rendering API without changing the current browser-module contract implicitly.~~
+- ~~Render an initial, deliberately narrow supported component surface to HTML strings without creating DOM nodes.~~
+- ~~Define trusted-component execution, initial-state serialization, escaping, and source-map exposure boundaries for server output.~~
+- ~~Define deterministic hydration markers or traversal rules so browser code can attach to server-rendered DOM without recreating it.~~
+- ~~Specify mismatch reporting and fallback behavior before broadening the supported feature set.~~
+- ~~Add end-to-end tests that render on the server, hydrate in a minimal browser DOM, preserve initial markup, attach events, and update reactive state.~~
 
-**Done when:** a documented server-rendered component can be delivered as HTML and hydrated by its client module without duplicate DOM or divergent initial state.
+**~~Done when:~~** ~~a documented server-rendered component can be delivered as HTML and hydrated by its client module without duplicate DOM or divergent initial state.~~
+
+Implementation notes: server rendering is an explicit `compileServer(source)` compiler target producing a self-contained ESM that exports `renderComponent(props)` returning `{ html, state }` and `serializeInitialState(state)`. The v1 surface is static markup, text interpolations, dynamic attributes, and top-level props; `{#if}`, `{#each}`, component tags, and event-driven features fail the compile with located diagnostics. Text is escaped (`& < >`), attributes additionally escape `"`; adjacent text nodes carry `<!-- -->` markers so browser parsing preserves the exact positional node layout `update()` targets. Client modules compiled with `compile(source, { hydratable: true })` additionally export `hydrateComponent(target, props, state)`, which adopts the server DOM through a verifying traversal (tag, `data-wizz-id`, and text checks) seeded by the serialized state, reports any mismatch once via `console.warn`, and falls back to a full client mount. Server output carries no source map (HTML strings, not positional DOM artifacts). State serializes inside `<script type="application/wizz-state">` with all `<` escaped; the script is a sibling of the mount point, and seeding uses `hasOwnProperty` + bracket access so a hostile `__proto__` key cannot pollute prototypes. No build, dev-server, or prerender integration yet — the dev server still serves static build output only; delivery today is application-owned, as demonstrated by `scripts/ssr-demo.js`.
+
+## 13. Serve Server-Rendered Routes from the Development Server
+
+**Goal:** Extend the development workflow so document requests for routes resolve to server-rendered HTML — rendered by the milestone 12 `compileServer()` target and hydrated in the browser by `hydratable` client builds — while keeping the development server zero-dependency and free of any application-backend role.
+
+- Extend the project compiler output so each eligible page also emits its `compileServer()` server module and a `hydratable` client build alongside the existing client module, without changing either generated module contract or recompiling pages that already failed the server-renderable gate.
+- Define route eligibility deliberately: a page server-renders only when it compiles through the server target. Pages using `{#if}`, `{#each}`, or component tags (for example `Contact.wizz`, `About.wizz`) keep today's behavior — the empty document shell with the client router mounting them — so eligibility changes only when the server surface broadens, never per request.
+- Render per request in the development server: resolve the route's server module, call `renderComponent()` with no props, inject the HTML into the `#app` mount point, and emit `serializeInitialState()` output as a sibling script tag of the mount point, exactly per the documented delivery boundaries.
+- Replace the SPA fallback only where server rendering applies: eligible routes receive the rendered document; ineligible routes, unmatched paths, and unknown asset paths (HTTP 404) behave exactly as they do today.
+- Keep watch recompilation consistent: when a watched page changes, the dev server rebuilds both targets and serves fresh server modules, so the in-process module cache (which currently caches compiled compiler modules) can never deliver a stale render after an edit.
+- Keep the browser entry framework-owned: the delivered document still boots through the standard runtime entry contract (the runtime mounts or hydrates the route component), not through an inline bootstrap script authored by the server.
+- Add end-to-end tests proving an eligible route request returns a document whose mount point already contains the rendered markup and the sibling state script, the hydratable client build is served, and ineligible routes and asset 404s are byte-for-byte unchanged.
+- Document the delivery recipe in the README's server-rendering section, keep `scripts/ssr-demo.js` as the manual reference, and record the decision that static prerendering at build time and request-time data fetching remain out of scope.
+
+**Done when:** requesting a server-renderable route from `wizz dev` returns a document whose mount point already contains the page's markup with its serialized initial state, the browser hydrates it without duplicate DOM or mismatch warnings, and non-eligible routes behave exactly as they do today.
 
 ## Later Ecosystem Work
 
@@ -182,4 +199,4 @@ Implementation notes: props are declared with `export let name = <default>;` in 
 
 ~~Keep using Python's `python3 -m http.server` for the current single-example demo. It is dependency-free, adequate for ES module loading, and avoids building tooling before the build output structure exists.~~
 
-~~Do add a Node development server later, as part of milestone 5, because the framework will need a single command that understands Wizz's output directory, triggers compilation, watches source files, and provides SPA fallback for client-side routes. It can remain zero-dependency by using Node's built-in `node:http`, `node:fs`, and `node:path` modules.~~ Do not add an application backend server to the framework core; the development server should serve static build output only.
+~~Do add a Node development server later, as part of milestone 5, because the framework will need a single command that understands Wizz's output directory, triggers compilation, watches source files, and provides SPA fallback for client-side routes. It can remain zero-dependency by using Node's built-in `node:http`, `node:fs`, and `node:path` modules.~~ Do not add an application backend server to the framework core; the development server should serve static build output only. Milestone 13 narrows this deliberately: route documents may be server-rendered through the milestone 12 compiler target, but the server still gains no API layer, request-time data fetching, sessions, or persistence — eligibility and delivery are compilation artifacts, not backend behavior.

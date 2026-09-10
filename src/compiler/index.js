@@ -2,6 +2,7 @@ const { parseComponent } = require('./parser/index.js');
 const { analyzeDependencies } = require('./analyzer/dependencyAnalyzer.js');
 const { assignNodeIds } = require('./analyzer/idAssigner.js');
 const { generateComponent } = require('./generator/componentGenerator.js');
+const { generateServerComponent } = require('./generator/serverGenerator.js');
 const { augmentErrorWithFile } = require('./errorAugmenter.js');
 const { createSourceMap } = require('./sourceMapGenerator.js');
 const { VERSIONS } = require('./version.js');
@@ -15,6 +16,12 @@ const { VERSIONS } = require('./version.js');
  * @param {string} [options.filePath] - Path of the component file the source
  *   was read from. When supplied, compiler errors identify the file as well
  *   as their source location, and carry it as `error.filePath`.
+ * @param {boolean} [options.hydratable] - When true, the generated module
+ *   additionally exports `hydrateComponent(target, props, state)`, which
+ *   adopts server-rendered markup instead of recreating it. Hydratable
+ *   modules are restricted to the server-renderable component surface; the
+ *   compile fails with a located error when the template uses `{#if}`,
+ *   `{#each}`, or component tags.
  * @returns {{ source: string, payload: Object, sourceMap: Object|null, version: Object }}
  *   The generated module source, final analyzed handoff payload, optional
  *   source map, and frozen compatibility versions (`compiler`, `syntax`,
@@ -22,10 +29,11 @@ const { VERSIONS } = require('./version.js');
  */
 function compile(source, options = {}) {
   const filePath = options && typeof options === 'object' ? options.filePath : undefined;
+  const hydratable = options && typeof options === 'object' ? options.hydratable === true : false;
 
   try {
     const payload = assignNodeIds(analyzeDependencies(parseComponent(source)));
-    const generatedSource = generateComponent(payload);
+    const generatedSource = generateComponent(payload, { hydratable });
 
     return {
       source: generatedSource,
@@ -38,4 +46,44 @@ function compile(source, options = {}) {
   }
 }
 
-module.exports = { compile, augmentErrorWithFile, VERSIONS };
+/**
+ * Compiles a raw component source string into a self-contained server module
+ * that renders HTML strings without any DOM dependency. The module exports
+ * `renderComponent(props)` returning `{ html, state }` and
+ * `serializeInitialState(state)` producing the delivery script tag content.
+ *
+ * The server target accepts only the server-renderable surface: static
+ * markup, text interpolations, dynamic attributes, and top-level props.
+ * `{#if}`, `{#each}`, component tags, and event directives outside that
+ * surface fail the compile with a located error.
+ *
+ * No source map is produced: server output is an HTML string evaluated at
+ * request time, not a DOM artifact whose positions map back to the template.
+ * @param {string} source - The raw string content of the component file.
+ * @param {Object} [options] - Compilation options.
+ * @param {string} [options.filePath] - Path of the component file the source
+ *   was read from. When supplied, compiler errors identify the file as well
+ *   as their source location, and carry it as `error.filePath`.
+ * @returns {{ source: string, payload: Object, sourceMap: null, version: Object }}
+ *   The generated server module source, final analyzed handoff payload, and
+ *   frozen compatibility versions.
+ */
+function compileServer(source, options = {}) {
+  const filePath = options && typeof options === 'object' ? options.filePath : undefined;
+
+  try {
+    const payload = assignNodeIds(analyzeDependencies(parseComponent(source)));
+    const generatedSource = generateServerComponent(payload);
+
+    return {
+      source: generatedSource,
+      payload,
+      sourceMap: null,
+      version: VERSIONS
+    };
+  } catch (error) {
+    throw augmentErrorWithFile(error, filePath, source);
+  }
+}
+
+module.exports = { compile, compileServer, augmentErrorWithFile, VERSIONS };

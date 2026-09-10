@@ -99,6 +99,11 @@ All template nodes originating from source have `loc.start` and `loc.end` positi
   },
   loc: {}
 }
+
+// Block nodes ({#if}, {#each}) also carry their directive's location, so
+// later stages (for example the server-renderability gate) can point
+// diagnostics at the construct rather than at a generic position.
+{ type: 'IfBlock', test: 'flag', consequent: [], alternate: [], children: [], loc: { start: { offset: 6, line: 1, column: 7 }, end: {} } }
 ```
 
 ## Supported Language Surface

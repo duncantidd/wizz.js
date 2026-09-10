@@ -10,17 +10,20 @@
 //   - `output` is the contract version of the generated module surface: the
 //     `mountComponent(target, props)` default export, the returned
 //     `{ setProps?, destroy() }` handle, and the `__wizz*` root-node
-//     properties the framework consumes. Within one major version, generated
-//     modules keep this surface and their runtime behavior.
+//     properties the framework consumes. Optionally — for compiles requested
+//     with the `hydratable` flag — the module additionally exports
+//     `hydrateComponent(target, props, state)`, which adopts server-rendered
+//     markup through the documented hydration traversal. Within one major
+//     version, generated modules keep this surface and their runtime behavior.
 //
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.2.1',
+  compiler: '1.3.0',
   syntax: '1.1.0',
-  output: '1.2.1'
+  output: '1.3.0'
 });
 
 module.exports = { VERSIONS };

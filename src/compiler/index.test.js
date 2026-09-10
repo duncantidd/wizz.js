@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { compile, VERSIONS } = require('./index');
+const { compile, compileServer, VERSIONS } = require('./index');
 
 function createDocument() {
   const elements = new Map();
@@ -215,4 +215,100 @@ test('rejects non-string component source', () => {
   assert.throws(() => compile(undefined), /Component source must be a string\./);
   assert.throws(() => compile(undefined, { filePath: 'Home.wizz' }), /Home\.wizz: Component source must be a string\.$/);
   assert.throws(() => compile(undefined, null), /Component source must be a string\./);
+});
+
+test('compileServer produces the self-contained HTML string module contract', () => {
+  const { source, payload, sourceMap, version } = compileServer(
+    '<script>let count = 0;</script><main><p>Count: {count}</p></main>'
+  );
+
+  // Named exports only: no default browser mount, no DOM API anywhere.
+  assert.doesNotMatch(source, /export default/);
+  assert.match(source, /export function renderComponent\(props = \{\}\)/);
+  assert.match(source, /export \{ __wizzSerializeInitialState as serializeInitialState \};/);
+  assert.doesNotMatch(source, /createElement|createTextNode|appendChild/);
+  assert.match(source, /server output \d+\.\d+\.\d+/);
+
+  // Server output is evaluated as an HTML string at request time, so no
+  // source map is produced even for file-backed compiles.
+  assert.equal(sourceMap, null);
+  assert.deepEqual({ ...version }, { ...VERSIONS });
+  assert.equal(payload.template.children[0].name, 'main');
+});
+
+test('compileServer renders HTML and serializes state without a DOM', () => {
+  const { source } = compileServer(
+    '<script>let count = 0; const label = "A & B";</script><main><p title={label}>Count: {count}</p></main>'
+  );
+
+  const module = new Function(
+    `${source
+      .replace('export function renderComponent(', 'function renderComponent(')
+      .replace('export { __wizzSerializeInitialState as serializeInitialState };', '')
+    }\nreturn { renderComponent, __wizzSerializeInitialState };`
+  )();
+
+  const { html, state } = module.renderComponent();
+  // The dynamic attribute carries the analyzer's data-wizz-id for hydration.
+  assert.equal(html, '<main><p title="A &amp; B" data-wizz-id="1">Count: <!-- -->0</p></main>');
+  assert.deepEqual(state, { count: 0 });
+  assert.equal(
+    module.__wizzSerializeInitialState({ count: 5 }),
+    '<script type="application/wizz-state">{"count":5}</script>'
+  );
+});
+
+test('compileServer rejects the non-server-renderable surface with located errors', () => {
+  assert.throws(
+    () => compileServer('<main>{#if ready}<p>yes</p>{/if}</main>'),
+    /Server rendering does not support \{#if\} conditional blocks at 1:7\./
+  );
+  assert.throws(
+    () => compileServer('<main>{#each items as item}<p></p>{/each}</main>'),
+    /Server rendering does not support \{#each\} blocks at 1:7\./
+  );
+  assert.throws(
+    () => compileServer('<main><p>1 + 2 = {1 2}</p></main>'),
+    /Template Expression Error at 1:21/
+  );
+});
+
+test('compileServer errors identify the input file when compiling from a file', () => {
+  const error = (() => {
+    try {
+      compileServer('<main>{#if ready}<p>yes</p>{/if}</main>', { filePath: 'src/pages/Home.wizz' });
+    } catch (caught) {
+      return caught;
+    }
+  })();
+
+  assert.ok(error instanceof SyntaxError);
+  assert.equal(error.filePath, 'src/pages/Home.wizz');
+  assert.equal(
+    error.message,
+    'Server rendering does not support {#if} conditional blocks at src/pages/Home.wizz:1:7.\n\n' +
+      'src/pages/Home.wizz:1:7\n1 | <main>{#if ready}<p>yes</p>{/if}</main>\n  |       ^'
+  );
+});
+
+test('the hydratable option exports hydrateComponent and gates the surface', () => {
+  const { source } = compile(
+    '<script>let count = 0;</script><main><p>Count: {count}</p></main>',
+    { hydratable: true }
+  );
+
+  assert.match(source, /export default function mountComponent\(target, props = \{\}\)/);
+  assert.match(source, /export function hydrateComponent\(target, props = \{\}, state = null\)/);
+
+  // Blocks are rejected before generation, mirroring the server target.
+  assert.throws(
+    () => compile('<main>{#if ready}<p>yes</p>{/if}</main>', { hydratable: true }),
+    /Server rendering does not support \{#if\} conditional blocks at 1:7\./
+  );
+
+  // Default compiles never carry the hydration surface.
+  const { source: defaultSource } = compile(
+    '<script>let count = 0;</script><main><p>Count: {count}</p></main>'
+  );
+  assert.doesNotMatch(defaultSource, /hydrateComponent|hydrateCreate/);
 });

@@ -83,6 +83,19 @@ test('rejects unsupported tokens instead of discarding them', () => {
   );
 });
 
+test('records source locations on block nodes', () => {
+  const source = '<main>{#if flag}<p>yes</p>{/if}{#each items as item}<span></span>{/each}</main>';
+  const root = parseTemplate(tokenize(source));
+  const [ifBlock, eachBlock] = root.children[0].children;
+
+  // Block nodes carry their directive token's location so downstream
+  // consumers (e.g. the server target's diagnostics) can report `at L:C`.
+  assert.equal(ifBlock.loc.start.line, 1);
+  assert.equal(ifBlock.loc.start.column, 7);
+  assert.equal(eachBlock.loc.start.line, 1);
+  assert.equal(eachBlock.loc.start.column, 32);
+});
+
 test('parses if blocks with an optional else branch', () => {
   const root = parseTemplate(tokenize("<main>{#if section === 'About'}<p>About</p>{:else}<p>Other</p>{/if}</main>"));
   const block = root.children[0].children[0];
