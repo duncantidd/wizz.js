@@ -26,6 +26,20 @@ test('tags nested expressions throughout the template tree', () => {
   assert.deepEqual(section.children[1].children[0].dependencies, ['total']);
 });
 
+test('tags expressions in both branches of an if block with an else', () => {
+  // The parser's `children` alias repoints to the alternate at {:else}, so
+  // both branches must be walked explicitly or consequent content in
+  // if-with-else templates would never receive dependency metadata (and the
+  // generated update code would never rerender it).
+  const payload = parseComponent(
+    '<script>let flag = false; let on = 1; let off = 2;</script><main>{#if flag}<p>{on}</p>{:else}<span>{off}</span>{/if}</main>'
+  );
+  const block = analyzeDependencies(payload).template.children[0].children[0];
+
+  assert.deepEqual(block.consequent[0].children[0].dependencies, ['on']);
+  assert.deepEqual(block.alternate[0].children[0].dependencies, ['off']);
+});
+
 test('leaves non-expression template nodes unchanged', () => {
   const payload = parseComponent('<script>let count = 0;</script><p>Static text</p>');
   const paragraph = analyzeDependencies(payload).template.children[0];

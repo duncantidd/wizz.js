@@ -7,17 +7,18 @@ test('exposes exactly the compiler, syntax, and output versions', () => {
 });
 
 test('pins the current contract versions so bumps are deliberate', () => {
-  // 1.4.0 / syntax 1.1.0 / output 1.4.0: the full template surface renders
-  // server-side. The server target additively gains `{#if}`, `{#each}`, and
-  // vouched component tags; the output contract additively gains the optional
-  // `hydrateRoot(rootNode, props, state)` export and branch-aware/list/nested
-  // hydration on hydratable modules. Previously-rejected templates now
-  // compile and default `mountComponent` output is unchanged, so both minors
-  // bump together with syntax pinned.
+  // 1.5.0 / syntax 1.1.0 / output 1.5.0: milestone 14 (1.4.0) added the full
+  // template surface server-side. 1.5.0 fixes the if-with-else traversal bug
+  // the broadened surface exposed: the parser's `children` alias repoints to
+  // the alternate at {:else}, so the dependency analyzer, ID assigner, and
+  // component-ref collector missed consequent content — reactive elements and
+  // component tags in a taken-branch-with-else generated no IDs/deps at all.
+  // Generated output changes (corrected IDs, dependency flags, and refs) for
+  // those templates, so compiler and output bump together with syntax pinned.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.4.0',
+    compiler: '1.5.0',
     syntax: '1.1.0',
-    output: '1.4.0'
+    output: '1.5.0'
   });
 });
 
