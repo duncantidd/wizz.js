@@ -193,8 +193,8 @@ function assertServerRenderable(astPayload, options = {}) {
  * that never touches DOM APIs. Imported component tags render recursively —
  * the module imports the child's server module and embeds its HTML at the tag
  * position, collecting each child's state snapshot under the reserved
- * `__wizz.components` state key (only when the template actually renders a
- * component tag, keeping component-free output byte-identical to milestone
+ * `__wizz.components` state key (only when the template contains component
+ * tags, keeping component-free output byte-identical to milestone
  * 12).
  * @param {Object} astPayload - The final analyzed handoff payload.
  * @param {Object} [options] - Options forwarded to the renderable gate; see
