@@ -1,13 +1,16 @@
 <script>
   import Counter from "./components/Counter.wizz";
   const frameworkName = "wizz.js";
-  
-  let params = new URLSearchParams(document.location.search);
-  let name = params.get("name");
 
-  if (!name) {
-    name = "friend";
-  }
+  let name = "friend";
+
+  // The query string is only readable in the browser: keep the read behind a
+  // lifecycle hook so the server render produces the "friend" default and the
+  // reactivity engine applies the real value after hydration.
+  onMount(() => {
+    const params = new URLSearchParams(document.location.search);
+    name = params.get("name") || "friend";
+  });
 </script>
 
 <main>

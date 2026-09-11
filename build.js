@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 // Single public compiler entry point: parsing, analysis, ID assignment, generation.
-const { compile } = require('./src/compiler');
+const { compile, compileServer } = require('./src/compiler');
 
 function parseBuildArguments(argv) {
   if (!Array.isArray(argv)) {
@@ -54,11 +54,7 @@ function getOutputPath(inputDirectory, outputDirectory, inputPath) {
   return path.join(outputDirectory, relativePath.replace(/\.wizz$/, '.js'));
 }
 
-function compileWizzFile(inputPath, outputPath) {
-  const rawWizzCode = fs.readFileSync(inputPath, 'utf-8');
-  const { source: generatedModule, sourceMap } = compile(rawWizzCode, { filePath: inputPath });
-
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+function writeGeneratedModule(outputPath, generatedModule, sourceMap) {
   if (sourceMap) {
     const sourceMapPath = `${outputPath}.map`;
     sourceMap.file = path.basename(outputPath);
@@ -72,6 +68,120 @@ function compileWizzFile(inputPath, outputPath) {
   }
 
   fs.writeFileSync(outputPath, generatedModule, 'utf-8');
+}
+
+function firstErrorLine(error) {
+  return String(error.message).split('\n', 1)[0];
+}
+
+/**
+ * Compiles and writes the client module for one .wizz file and returns the
+ * artifacts the eligibility graph needs (raw source, analyzed payload).
+ * Server and hydratable builds are written separately by writeServerBuilds
+ * once import-graph eligibility is known, because whether a file may
+ * server-render depends on the files it imports, not on its own template.
+ */
+function compileWizzFile(inputPath, outputPath) {
+  const rawWizzCode = fs.readFileSync(inputPath, 'utf-8');
+  const { source: generatedModule, sourceMap, payload } = compile(rawWizzCode, { filePath: inputPath });
+
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  writeGeneratedModule(outputPath, generatedModule, sourceMap);
+
+  return { rawWizzCode, payload };
+}
+
+/**
+ * Resolves a component import source (e.g. "./Counter.wizz") against the
+ * importing file. Returns null for anything that is not a .wizz import
+ * resolvable to a discovered project file — such imports are not components
+ * of this build and are simply never vouched for.
+ */
+function resolveImportPath(inputPath, importSource, discoveredFiles) {
+  if (typeof importSource !== 'string' || !importSource.endsWith('.wizz')) return null;
+  const resolved = path.resolve(path.dirname(inputPath), importSource);
+  return discoveredFiles.has(resolved) ? resolved : null;
+}
+
+/**
+ * Computes server-rendering eligibility bottom-up over the import graph with
+ * memoization: a file is eligible when its own server and hydratable targets
+ * compile — with each rendered import vouched for by that child's own
+ * eligibility — and every transitive .wizz import is eligible. This is what
+ * lets a static component pulled into an eligible page ship a server build,
+ * and what keeps a page whose child fails the gate client-only with the
+ * child's own gate failure chained as the underlying reason.
+ *
+ * The graph is assumed to be a DAG (cyclic component imports have no
+ * meaningful render order); a cycle is reported as ineligibility for every
+ * file involved rather than recursing forever.
+ */
+function computeServerEligibility(inputFiles, compiledByInputPath, failureReasonsByInputPath) {
+  const discoveredFiles = new Set(inputFiles);
+  const eligibilityByInputPath = new Map();
+  const serverBuildsByInputPath = new Map();
+  const visiting = new Set();
+  const CYCLE_REASON = 'its import graph contains a cycle.';
+
+  function compute(inputPath) {
+    if (eligibilityByInputPath.has(inputPath)) return eligibilityByInputPath.get(inputPath);
+    if (visiting.has(inputPath)) return { eligible: false, reason: CYCLE_REASON };
+    // A file whose client build failed has no payload to walk and no reason
+    // to re-report here; its own build failure was already reported.
+    if (!compiledByInputPath.has(inputPath)) {
+      return { eligible: false, reason: failureReasonsByInputPath.get(inputPath) || 'its client build failed' };
+    }
+
+    visiting.add(inputPath);
+    try {
+      const { rawWizzCode, payload } = compiledByInputPath.get(inputPath);
+      const componentServerRenderable = {};
+      const componentIneligibilityReasons = {};
+
+      for (const { name, source } of payload.imports || []) {
+        const childPath = resolveImportPath(inputPath, source, discoveredFiles);
+        if (!childPath) continue;
+        const childResult = compute(childPath);
+        if (childResult.eligible) {
+          componentServerRenderable[name] = true;
+        } else {
+          componentIneligibilityReasons[name] = childResult.reason;
+        }
+      }
+
+      const gateOptions = { componentServerRenderable, componentIneligibilityReasons };
+      const serverResult = compileServer(rawWizzCode, { filePath: inputPath, ...gateOptions });
+      const hydratableResult = compile(rawWizzCode, { filePath: inputPath, hydratable: true, ...gateOptions });
+
+      serverBuildsByInputPath.set(inputPath, { serverResult, hydratableResult });
+      const result = { eligible: true, reason: null };
+      eligibilityByInputPath.set(inputPath, result);
+      return result;
+    } catch (error) {
+      const result = { eligible: false, reason: firstErrorLine(error) };
+      eligibilityByInputPath.set(inputPath, result);
+      return result;
+    } finally {
+      visiting.delete(inputPath);
+    }
+  }
+
+  for (const inputPath of inputFiles) compute(inputPath);
+
+  return { eligibilityByInputPath, serverBuildsByInputPath };
+}
+
+/**
+ * Writes the server and hydratable builds for one eligible file from the
+ * artifacts cached during the eligibility walk, so nothing is compiled twice.
+ */
+function writeEligibleServerBuilds(inputPath, outputPath, serverBuilds) {
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  // Server output carries no source map (HTML string rendering, not
+  // positional DOM artifacts); the hydratable build mirrors the client
+  // build's source-map presence.
+  writeGeneratedModule(outputPath.replace(/\.js$/, '.server.js'), serverBuilds.serverResult.source, null);
+  writeGeneratedModule(outputPath.replace(/\.js$/, '.hydrate.js'), serverBuilds.hydratableResult.source, serverBuilds.hydratableResult.sourceMap);
 }
 
 function copyRuntimeModules(outputDirectory) {
@@ -117,7 +227,7 @@ function validateRouteEntries(routeEntries) {
   }
 }
 
-function emitRouteManifest(inputDirectory, outputDirectory, inputFiles) {
+function emitRouteManifest(inputDirectory, outputDirectory, inputFiles, serverRenderableByInputPath = new Map()) {
   const routeFiles = inputFiles.filter((inputPath) => getRoutePath(inputDirectory, inputPath));
   const routeEntries = routeFiles.map((inputPath) => {
     const outputPath = getOutputPath(inputDirectory, outputDirectory, inputPath);
@@ -129,7 +239,19 @@ function emitRouteManifest(inputDirectory, outputDirectory, inputFiles) {
     };
   });
   validateRouteEntries(routeEntries);
-  const pageModules = routeEntries.map(({ filePath, modulePath, routePath }) => ({ filePath, modulePath, routePath }));
+  const pageModules = routeEntries.map(({ filePath, modulePath, routePath, inputPath }) => {
+    // Eligibility is a build-time artifact: the manifest field is the single
+    // authority on whether a route server-renders, so the dev server never
+    // probes the filesystem for stale server modules from earlier builds.
+    const serverRenderable = serverRenderableByInputPath.get(inputPath) === true;
+    return {
+      filePath,
+      modulePath,
+      routePath,
+      serverModulePath: serverRenderable ? modulePath.replace(/\.js$/, '.server.js') : null,
+      hydratableModulePath: serverRenderable ? modulePath.replace(/\.js$/, '.hydrate.js') : null
+    };
+  });
   const manifestPath = path.join(outputDirectory, 'runtime', 'routes.js');
 
   fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
@@ -155,20 +277,55 @@ function buildProject(inputDirectory, outputDirectory, logger = console) {
   const inputFiles = discoverWizzFiles(resolvedInputDirectory);
   let failedCount = 0;
 
+  // Pass 1 — client builds. Every .wizz file gets its browser module; a
+  // client-side failure is reported and recorded so importing files can chain
+  // it as their own ineligibility reason.
+  const compiledByInputPath = new Map();
+  const failureReasonsByInputPath = new Map();
   for (const inputPath of inputFiles) {
     const outputPath = getOutputPath(resolvedInputDirectory, resolvedOutputDirectory, inputPath);
 
     try {
-      compileWizzFile(inputPath, outputPath);
+      compiledByInputPath.set(inputPath, compileWizzFile(inputPath, outputPath));
       logger.log(`Compiled ${inputPath} -> ${outputPath}`);
     } catch (error) {
       failedCount++;
+      failureReasonsByInputPath.set(inputPath, firstErrorLine(error));
       logger.error(`Compilation failed for ${inputPath}: ${error.message}`);
     }
   }
 
+  // Pass 2 — eligibility over the import graph, computed bottom-up with the
+  // client payloads. Both server targets are compiled here (once per file)
+  // and cached for writing, so an eligible page never ships a server module
+  // without its hydratable client build.
+  const { eligibilityByInputPath, serverBuildsByInputPath } = computeServerEligibility(
+    inputFiles,
+    compiledByInputPath,
+    failureReasonsByInputPath
+  );
+
+  // Pass 3 — server artifacts for eligible files (pages AND components: a
+  // page's server module imports its components' server modules), and
+  // ineligibility notes for everything else.
+  const serverRenderableByInputPath = new Map();
+  for (const inputPath of inputFiles) {
+    if (!compiledByInputPath.has(inputPath)) continue;
+
+    const outputPath = getOutputPath(resolvedInputDirectory, resolvedOutputDirectory, inputPath);
+    const eligibility = eligibilityByInputPath.get(inputPath);
+
+    if (eligibility.eligible) {
+      writeEligibleServerBuilds(inputPath, outputPath, serverBuildsByInputPath.get(inputPath));
+      serverRenderableByInputPath.set(inputPath, true);
+    } else {
+      serverRenderableByInputPath.set(inputPath, false);
+      logger.log(`Note: server rendering skipped for ${inputPath} — ${eligibility.reason} Serving the client build only.`);
+    }
+  }
+
   copyRuntimeModules(resolvedOutputDirectory);
-  emitRouteManifest(resolvedInputDirectory, resolvedOutputDirectory, inputFiles);
+  emitRouteManifest(resolvedInputDirectory, resolvedOutputDirectory, inputFiles, serverRenderableByInputPath);
 
   return {
     compiledCount: inputFiles.length - failedCount,
@@ -195,6 +352,7 @@ if (require.main === module) {
 module.exports = {
   buildProject,
   compileWizzFile,
+  computeServerEligibility,
   copyRuntimeModules,
   discoverWizzFiles,
   emitRouteManifest,

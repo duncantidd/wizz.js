@@ -42,8 +42,13 @@ function collectComponentRefNames(templateAST, componentImports = []) {
       && (node.attributes || []).some((attribute) => attribute.dynamic && attribute.dependencies?.length > 0)) {
       refNames.push(`component_${node.componentId}`);
     }
-    // IfBlock.children aliases its consequent, so walking children plus
-    // alternate covers every branch exactly once.
+    if (node.type === 'IfBlock') {
+      // The parser's `children` alias repoints to the alternate at {:else},
+      // so both branches are walked explicitly.
+      (node.consequent || []).forEach(walk);
+      (node.alternate || []).forEach(walk);
+      return;
+    }
     (node.children || []).forEach(walk);
     (node.alternate || []).forEach(walk);
   }
@@ -285,4 +290,4 @@ function generateCreateFunction(templateAST, componentImports = []) {
   return builder.generate();
 }
 
-module.exports = { generateCreateFunction, collectComponentRefNames };
+module.exports = { generateCreateFunction, collectComponentRefNames, buildComponentPropsSource };

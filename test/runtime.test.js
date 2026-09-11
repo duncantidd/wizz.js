@@ -15,8 +15,17 @@ function writeFile(filePath, contents) {
   fs.writeFileSync(filePath, contents, 'utf8');
 }
 
-function createDocument(target) {
+function createDocument(target, options = {}) {
+  // Optional wizz-state delivery script, exactly as the dev server places it
+  // beside the mount point; remove() marks it consumed.
+  const stateScript = options.stateScriptText === undefined ? null : {
+    textContent: options.stateScriptText,
+    removed: false,
+    remove() { this.removed = true; }
+  };
+
   return {
+    stateScript,
     getElementById(id) {
       return id === 'app' ? target : null;
     },
@@ -25,6 +34,12 @@ function createDocument(target) {
     },
     createTextNode(nodeValue) {
       return { nodeValue };
+    },
+    querySelector(selector) {
+      if (selector === 'script[type="application/wizz-state"]') {
+        return stateScript && !stateScript.removed ? stateScript : null;
+      }
+      return null;
     }
   };
 }
@@ -83,6 +98,8 @@ test('runtime entry builds lazy routes from the generated page manifest', () => 
 
   assert.match(runtimeEntry, /import \{ pageModules \} from '\.\/routes\.js';/);
   assert.match(runtimeEntry, /pageModules\.map\(\(\{ routePath, modulePath \}.*import\(modulePath\)/);
+  assert.match(runtimeEntry, /pageModules\s*\n\s*\.filter\(\(\{ hydratableModulePath \}\) => hydratableModulePath\)/);
+  assert.match(runtimeEntry, /createRouter\(\{ routes, hydratableRoutes, target, window, document \}\)/);
   assert.doesNotMatch(runtimeEntry, /import\('\.\.\/pages\/Home\.js'\)/);
 });
 
@@ -273,4 +290,217 @@ test('router renders a not-found view and rerenders through browser history', as
 
   router.destroy();
   assert.equal(aboutDestroyedCount, 1);
+});
+
+function createSplicingTarget() {
+  return {
+    childNodes: [],
+    appendChild(node) { this.childNodes.push(node); },
+    removeChild(node) { this.childNodes.splice(this.childNodes.indexOf(node), 1); }
+  };
+}
+
+async function loadRouterForTest(t) {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  buildProject(path.join(__dirname, '..', 'src'), outputDirectory, { log() {}, error() {} });
+  return loadRouter(outputDirectory);
+}
+
+test('router hydrates delivered markup on the first render and mounts fresh afterwards', async (t) => {
+  const { createRouter } = await loadRouterForTest(t);
+
+  const serverNode = { name: 'server-main' };
+  const target = createSplicingTarget();
+  target.appendChild(serverNode);
+  const document = createDocument(target, { stateScriptText: '{"count":5}' });
+  const window = createWindow('/');
+
+  const mountCalls = [];
+  const destroyed = [];
+  let hydration = null;
+  const router = createRouter({
+    routes: {
+      '/': async () => ({ default: (mountTarget) => {
+        mountCalls.push('home');
+        mountTarget.appendChild({ name: 'client-main' });
+        return { destroy() { destroyed.push('client'); } };
+      } }),
+      '/about': async () => ({ default: () => {
+        mountCalls.push('about');
+        return { destroy() { destroyed.push('about'); } };
+      } })
+    },
+    hydratableRoutes: {
+      '/': async () => ({
+        hydrateComponent(hydrateTarget, props, state) {
+          hydration = { props, state, adoptedNodes: [...hydrateTarget.childNodes] };
+          return { destroy() { destroyed.push('hydrated'); } };
+        }
+      })
+    },
+    target,
+    window,
+    document
+  });
+
+  await router.render();
+
+  // The hydratable build adopted the delivered markup; the standard client
+  // module never mounted, the state reached the hydrator, and the delivery
+  // script was consumed.
+  assert.ok(hydration, 'the router hydrated instead of mounting');
+  assert.deepEqual(hydration.props, {});
+  assert.deepEqual(hydration.state, { count: 5 });
+  assert.deepEqual(hydration.adoptedNodes, [serverNode]);
+  assert.deepEqual(mountCalls, []);
+  assert.equal(document.stateScript.removed, true);
+  assert.deepEqual(target.childNodes, [serverNode]);
+
+  await router.navigate('/about');
+  assert.deepEqual(mountCalls, ['about']);
+  assert.deepEqual(destroyed, ['hydrated']);
+
+  router.destroy();
+  assert.deepEqual(destroyed, ['hydrated', 'about']);
+});
+
+test('router clears server markup and mounts when no hydratable build exists', async (t) => {
+  const { createRouter } = await loadRouterForTest(t);
+
+  const target = createSplicingTarget();
+  const serverNode = { name: 'server-main' };
+  target.appendChild(serverNode);
+  const document = createDocument(target, { stateScriptText: '{"count":5}' });
+  const window = createWindow('/');
+
+  const router = createRouter({
+    routes: {
+      '/': async () => ({ default: (mountTarget) => {
+        mountTarget.appendChild({ name: 'client-main' });
+        return { destroy() {} };
+      } })
+    },
+    target,
+    window,
+    document
+  });
+
+  await router.render();
+
+  // The fresh client root would otherwise appear beside the delivered markup.
+  assert.deepEqual(target.childNodes.map((node) => node.name), ['client-main']);
+  assert.equal(document.stateScript.removed, true);
+});
+
+test('router drops markup for an unreadable state payload and mounts fresh', async (t) => {
+  const { createRouter } = await loadRouterForTest(t);
+
+  const target = createSplicingTarget();
+  target.appendChild({ name: 'server-main' });
+  const document = createDocument(target, { stateScriptText: 'not-json{{' });
+  const window = createWindow('/');
+
+  let hydrateCalls = 0;
+  const router = createRouter({
+    routes: {
+      '/': async () => ({ default: (mountTarget) => {
+        mountTarget.appendChild({ name: 'client-main' });
+        return { destroy() {} };
+      } })
+    },
+    hydratableRoutes: {
+      '/': async () => ({
+        hydrateComponent() {
+          hydrateCalls++;
+          return { destroy() {} };
+        }
+      })
+    },
+    target,
+    window,
+    document
+  });
+
+  await router.render();
+
+  assert.deepEqual(target.childNodes.map((node) => node.name), ['client-main']);
+  assert.equal(hydrateCalls, 0);
+  assert.equal(document.stateScript.removed, true);
+});
+
+test('router drops unclaimed server markup before rendering not-found', async (t) => {
+  const { createRouter } = await loadRouterForTest(t);
+
+  const target = createSplicingTarget();
+  target.appendChild({ name: 'server-main' });
+  const document = createDocument(target, { stateScriptText: '{"count":5}' });
+  const window = createWindow('/missing');
+
+  const router = createRouter({
+    routes: {
+      '/': async () => ({ default: () => ({ destroy() {} }) })
+    },
+    target,
+    window,
+    document
+  });
+
+  await router.render();
+
+  // The delivered markup must not sit beside the not-found message.
+  assert.equal(target.childNodes.length, 1);
+  assert.equal(target.childNodes[0].textContent, 'Not found');
+  assert.equal(document.stateScript.removed, true);
+});
+
+test('a hydration render superseded by a newer render abandons instead of double-mounting', async (t) => {
+  const { createRouter } = await loadRouterForTest(t);
+
+  const target = createSplicingTarget();
+  const document = createDocument(target, { stateScriptText: '{"count":5}' });
+  const window = createWindow('/');
+
+  let resolveHydratableImport;
+  let hydrateCalls = 0;
+  const mountCalls = [];
+  const router = createRouter({
+    routes: {
+      '/': async () => ({ default: () => {
+        mountCalls.push('/');
+        return { destroy() {} };
+      } }),
+      '/about': async () => ({ default: () => {
+        mountCalls.push('/about');
+        return { destroy() {} };
+      } })
+    },
+    hydratableRoutes: {
+      '/': () => new Promise((resolve) => { resolveHydratableImport = resolve; })
+    },
+    target,
+    window,
+    document
+  });
+
+  // First render stalls inside the hydratable import; a popstate lands and
+  // mounts /about before the hydration can proceed.
+  const firstRender = router.render();
+  await new Promise((resolve) => setImmediate(resolve));
+  window.dispatchPopState('/about');
+  await new Promise((resolve) => setImmediate(resolve));
+
+  resolveHydratableImport({
+    hydrateComponent() {
+      hydrateCalls++;
+      return { destroy() {} };
+    }
+  });
+  await firstRender;
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(hydrateCalls, 0);
+  assert.deepEqual(mountCalls, ['/about']);
+  assert.equal(target.childNodes.length, 0);
 });

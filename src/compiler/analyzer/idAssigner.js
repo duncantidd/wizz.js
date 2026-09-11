@@ -51,6 +51,14 @@ function assignNodeIds(astPayload) {
     }
 
     // 3. Continue walking down the tree
+    if (node.type === 'IfBlock') {
+      // The parser's `children` alias repoints to the alternate at {:else},
+      // so a children-only walk would miss consequent content in blocks with
+      // an else branch. Both branches are walked explicitly instead.
+      for (const child of node.consequent || []) walk(child);
+      for (const child of node.alternate || []) walk(child);
+      return;
+    }
     if (node.children && Array.isArray(node.children)) {
       for (let i = 0; i < node.children.length; i++) {
         walk(node.children[i]);

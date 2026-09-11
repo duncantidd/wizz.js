@@ -1,5 +1,9 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { assignNodeIds } = require('../analyzer/idAssigner');
 const { analyzeDependencies } = require('../analyzer/dependencyAnalyzer');
 const { parseComponent } = require('../parser');
@@ -10,27 +14,55 @@ function analyze(source) {
   return assignNodeIds(analyzeDependencies(parseComponent(source)));
 }
 
-function generateServer(source) {
-  return generateServerComponent(analyze(source));
+function generateServer(source, options) {
+  return generateServerComponent(analyze(source), options);
 }
 
-// Executes the emitted ESM under CommonJS by stripping the two export forms
-// and returning the module's public surface. Generated server modules never
-// touch DOM APIs, so no document is needed here.
-function loadServerModule(moduleSource) {
-  const transformed = moduleSource
-    .replace('export { __wizzSerializeInitialState as serializeInitialState };', '')
-    .replace('export function renderComponent(', 'function renderComponent(');
-  return new Function(`${transformed}\nreturn { renderComponent, __wizzSerializeInitialState };`)();
+// Each generated module is written into its own temp directory (unique per
+// call, so the ESM import cache can never serve a stale module) and loaded
+// through a real file import. Import-bearing modules resolve their child
+// `.server.js` specifiers relative to the module the same way the build
+// output does, so child sources are compiled and laid out alongside it.
+const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-server-generator-'));
+fs.writeFileSync(path.join(tempRoot, 'package.json'), '{"type":"module"}');
+
+test.after(() => {
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+function writeModuleTree(dir, fileName, moduleSource, childSources) {
+  fs.writeFileSync(path.join(dir, fileName), moduleSource);
+  const importPattern = /^import \* as \w+ from (".+");$/gm;
+  let match;
+  while ((match = importPattern.exec(moduleSource)) !== null) {
+    const specifier = JSON.parse(match[1]);
+    const childKey = specifier.replace(/^\.\//, '').replace(/\.server\.js$/, '.wizz');
+    const entry = childSources[childKey];
+    if (entry === undefined) {
+      throw new Error(`Test setup error: no child source provided for '${childKey}'`);
+    }
+    if (!fs.existsSync(path.join(dir, specifier))) {
+      const childOptions = typeof entry === 'string' ? undefined : entry.options;
+      const childSource = typeof entry === 'string' ? entry : entry.source;
+      writeModuleTree(dir, specifier, generateServer(childSource, childOptions), childSources);
+    }
+  }
 }
 
-function renderSource(source, props = {}) {
-  const moduleSource = generateServer(source);
-  return { moduleSource, ...loadServerModule(moduleSource).renderComponent(props) };
+async function loadServerModule(moduleSource, childSources = {}) {
+  const dir = fs.mkdtempSync(path.join(tempRoot, 'mod-'));
+  writeModuleTree(dir, 'module.server.js', moduleSource, childSources);
+  return import(pathToFileURL(path.join(dir, 'module.server.js')).href);
 }
 
-test('renders static markup with whitespace and interpolation output preserved byte-for-byte', () => {
-  const { html } = renderSource('<script>let count = 0;</script><main>\n  <h1>Counter</h1>\n  <button data-testid="btn">Clicks: {count}</button>\n</main>\n');
+async function renderSource(source, props = {}, childSources = {}, options) {
+  const moduleSource = generateServer(source, options);
+  const mod = await loadServerModule(moduleSource, childSources);
+  return { moduleSource, ...mod.renderComponent(props) };
+}
+
+test('renders static markup with whitespace and interpolation output preserved byte-for-byte', async () => {
+  const { html } = await renderSource('<script>let count = 0;</script><main>\n  <h1>Counter</h1>\n  <button data-testid="btn">Clicks: {count}</button>\n</main>\n');
 
   assert.equal(html, '<main>\n  <h1>Counter</h1>\n  <button data-testid="btn" data-wizz-id="1">Clicks: <!-- -->0</button>\n</main>');
 });
@@ -45,101 +77,101 @@ test('emits the server output header variant exactly once as the first line', ()
   assert.match(moduleSource.split('\n')[0], new RegExp(`Wizz ${VERSIONS.compiler} \\(component syntax ${VERSIONS.syntax.replace(/\./g, '\\.')}, server output ${VERSIONS.output.replace(/\./g, '\\.')}\\)`));
 });
 
-test('escapes text interpolation output including script injection payloads', () => {
-  const { html } = renderSource(`<script>let name = '<img src=x onerror=alert(1)>';</script><p>{name}</p>`);
+test('escapes text interpolation output including script injection payloads', async () => {
+  const { html } = await renderSource(`<script>let name = '<img src=x onerror=alert(1)>';</script><p>{name}</p>`);
 
   assert.doesNotMatch(html, /<img/);
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
 });
 
-test('escapes static text and static attribute values at compile time', () => {
-  const { html } = renderSource(`<p title='Tom & "Jerry" <3'>Tom & Jerry</p>`);
+test('escapes static text and static attribute values at compile time', async () => {
+  const { html } = await renderSource(`<p title='Tom & "Jerry" <3'>Tom & Jerry</p>`);
 
   assert.match(html, /<p title="Tom &amp; &quot;Jerry&quot; &lt;3">Tom &amp; Jerry<\/p>/);
 });
 
-test('escapes dynamic attribute values including quote-breakout payloads', () => {
-  const { html } = renderSource(`<script>let evil = '"><img src=x onerror=alert(1)>';</script><p data-x={evil}>ok</p>`);
+test('escapes dynamic attribute values including quote-breakout payloads', async () => {
+  const { html } = await renderSource(`<script>let evil = '"><img src=x onerror=alert(1)>';</script><p data-x={evil}>ok</p>`);
 
   assert.doesNotMatch(html, /<img src=x/);
   assert.match(html, /data-x="&quot;&gt;&lt;img src=x onerror=alert\(1\)&gt;"/);
 });
 
-test('inserts an empty comment between adjacent text-like children only', () => {
-  const { html } = renderSource('<script>let a = 1; let b = 2;</script><p>{a}{b}</p>');
+test('inserts an empty comment between adjacent text-like children only', async () => {
+  const { html } = await renderSource('<script>let a = 1; let b = 2;</script><p>{a}{b}</p>');
 
   // One marker between the two expressions; none before the first or at
   // element boundaries, where the parser splits text runs on its own.
   assert.equal(html, '<p data-wizz-id="1">1<!-- -->2</p>');
 
-  const { html: mixed } = renderSource('<script>let a = 1;</script><p>{a}<span>x</span>{a}</p>');
+  const { html: mixed } = await renderSource('<script>let a = 1;</script><p>{a}<span>x</span>{a}</p>');
   assert.equal(mixed, '<p data-wizz-id="1">1<span>x</span>1</p>');
 });
 
-test('renders void elements without an end tag', () => {
-  const { html } = renderSource('<main><br/><hr/><img src="a.png"/></main>');
+test('renders void elements without an end tag', async () => {
+  const { html } = await renderSource('<main><br/><hr/><img src="a.png"/></main>');
 
   assert.equal(html, '<main><br><hr><img src="a.png"></main>');
 });
 
-test('renders bare attributes as empty values', () => {
-  const { html } = renderSource('<input hidden required/>');
+test('renders bare attributes as empty values', async () => {
+  const { html } = await renderSource('<input hidden required/>');
 
   assert.equal(html, '<input hidden="" required="">');
 });
 
-test('renders dynamic attributes with escaped values and boolean attributes truthy-only', () => {
-  const { html: truthy } = renderSource(
+test('renders dynamic attributes with escaped values and boolean attributes truthy-only', async () => {
+  const { html: truthy } = await renderSource(
     '<script>let flag = 1; let label = "Total";</script><button disabled={flag} class={label}>go</button>'
   );
   assert.equal(truthy, '<button disabled class="Total" data-wizz-id="1">go</button>');
 
-  const { html: falsy } = renderSource(
+  const { html: falsy } = await renderSource(
     '<script>let flag = 0;</script><button disabled={flag}>go</button>'
   );
   assert.equal(falsy, '<button data-wizz-id="1">go</button>');
 });
 
-test('always renders a dynamic value attribute, even when empty', () => {
-  const { html } = renderSource('<script>let text = "";</script><input value={text}/>');
+test('always renders a dynamic value attribute, even when empty', async () => {
+  const { html } = await renderSource('<script>let text = "";</script><input value={text}/>');
 
   assert.equal(html, '<input value="" data-wizz-id="1">');
 });
 
-test('skips event directives in server output', () => {
-  const { html } = renderSource('<script>function go() {}</script><button on:click={go}>go</button>');
+test('skips event directives in server output', async () => {
+  const { html } = await renderSource('<script>function go() {}</script><button on:click={go}>go</button>');
 
   assert.equal(html, '<button>go</button>');
   assert.doesNotMatch(html, /on:click/);
 });
 
-test('carries data-wizz-id values from the analyzer into server markup', () => {
-  const { html } = renderSource('<script>let count = 0;</script><main><p>static</p><p>{count}</p></main>');
+test('carries data-wizz-id values from the analyzer into server markup', async () => {
+  const { html } = await renderSource('<script>let count = 0;</script><main><p>static</p><p>{count}</p></main>');
 
   assert.match(html, /<p>\{?static/);
   assert.match(html, /<p data-wizz-id="1">/);
 });
 
-test('applies prop bindings with defaults, overrides, and missing values', () => {
+test('applies prop bindings with defaults, overrides, and missing values', async () => {
   const source = '<script>export let label = "Guest"; export let count;</script><p>{label}: {count}</p>';
-  const { html: defaults } = renderSource(source);
+  const { html: defaults } = await renderSource(source);
   assert.equal(defaults, '<p data-wizz-id="1">Guest<!-- -->: <!-- -->undefined</p>');
 
-  const { html: overridden } = renderSource(source, { label: 'Ada', count: 3 });
+  const { html: overridden } = await renderSource(source, { label: 'Ada', count: 3 });
   assert.equal(overridden, '<p data-wizz-id="1">Ada<!-- -->: <!-- -->3</p>');
 
-  const { html: partial } = renderSource(source, { label: 'Grace' });
+  const { html: partial } = await renderSource(source, { label: 'Grace' });
   assert.equal(partial, '<p data-wizz-id="1">Grace<!-- -->: <!-- -->undefined</p>');
 });
 
-test('renders const and let expressions identically during creation', () => {
-  const { html } = renderSource('<script>let count = 2; const title = "Total";</script><p>{title}: {count}</p>');
+test('renders const and let expressions identically during creation', async () => {
+  const { html } = await renderSource('<script>let count = 2; const title = "Total";</script><p>{title}: {count}</p>');
 
   assert.equal(html, '<p data-wizz-id="1">Total<!-- -->: <!-- -->2</p>');
 });
 
-test('renders only the first root element and drops surrounding root-level nodes', () => {
-  const { html } = renderSource('\n  <p>first</p>\n  <p>second</p>\n');
+test('renders only the first root element and drops surrounding root-level nodes', async () => {
+  const { html } = await renderSource('\n  <p>first</p>\n  <p>second</p>\n');
 
   assert.equal(html, '<p>first</p>');
 });
@@ -152,69 +184,68 @@ test('is deterministic across repeated compiles', () => {
   assert.equal(first, second);
 });
 
-test('snapshots reactive let declarations but not props or consts', () => {
-  const { state } = renderSource(
+test('snapshots reactive let declarations but not props or consts', async () => {
+  const { state } = await renderSource(
     '<script>export let label = "x"; let count = 1; const title = "t";</script><p>{count}</p>'
   );
 
   assert.deepEqual(state, { count: 1 });
 });
 
-test('serializes the initial state as a guarded wizz-state script', () => {
-  const { moduleSource } = renderSource('<script>let count = 1;</script><p>{count}</p>');
-  const mod = loadServerModule(moduleSource);
+test('serializes the initial state as a guarded wizz-state script', async () => {
+  const mod = await loadServerModule(generateServer('<script>let count = 1;</script><p>{count}</p>'));
 
   assert.equal(
-    mod.__wizzSerializeInitialState({ count: 1 }),
+    mod.serializeInitialState({ count: 1 }),
     '<script type="application/wizz-state">{"count":1}</script>'
   );
 });
 
-test('prevents script-tag breakout through the serialized state', () => {
-  const mod = loadServerModule(generateServer('<script>let count = 1;</script><p>{count}</p>'));
+test('prevents script-tag breakout through the serialized state', async () => {
+  const mod = await loadServerModule(generateServer('<script>let count = 1;</script><p>{count}</p>'));
 
-  const serialized = mod.__wizzSerializeInitialState({ count: '</script><script>alert(1)</script>' });
+  const serialized = mod.serializeInitialState({ count: '</script><script>alert(1)</script>' });
   assert.doesNotMatch(serialized, /<\/script><script>/);
   assert.match(serialized, /\\u003c\/script>/);
   assert.deepEqual(JSON.parse(serialized.replace('<script type="application/wizz-state">', '').replace('</script>', '')), { count: '</script><script>alert(1)</script>' });
 });
 
-test('rejects non-object state in serializeInitialState', () => {
-  const mod = loadServerModule(generateServer('<script>let count = 1;</script><p>{count}</p>'));
+test('rejects non-object state in serializeInitialState', async () => {
+  const mod = await loadServerModule(generateServer('<script>let count = 1;</script><p>{count}</p>'));
 
-  assert.throws(() => mod.__wizzSerializeInitialState(null), TypeError);
-  assert.throws(() => mod.__wizzSerializeInitialState([1, 2]), TypeError);
-  assert.throws(() => mod.__wizzSerializeInitialState('x'), TypeError);
-  assert.throws(() => mod.__wizzSerializeInitialState(undefined), TypeError);
+  assert.throws(() => mod.serializeInitialState(null), TypeError);
+  assert.throws(() => mod.serializeInitialState([1, 2]), TypeError);
+  assert.throws(() => mod.serializeInitialState('x'), TypeError);
+  assert.throws(() => mod.serializeInitialState(undefined), TypeError);
 });
 
-test('does not intercept reactive assignments in the server script', () => {
+test('does not intercept reactive assignments in the server script', async () => {
   // The last top-level assignment is the value the template renders: without
   // interception there is no queueUpdate emission in the module source.
   const moduleSource = generateServer('<script>let count = 0; count = 5;</script><p>{count}</p>');
 
   assert.doesNotMatch(moduleSource, /queueUpdate/);
-  const { html } = renderSource('<script>let count = 0; count = 5;</script><p>{count}</p>');
+  const { html } = await renderSource('<script>let count = 0; count = 5;</script><p>{count}</p>');
   assert.equal(html, '<p data-wizz-id="1">5</p>');
 });
 
-test('rejects a script that references browser globals at render time', () => {
-  const { renderComponent } = loadServerModule(generateServer(
+test('rejects a script that references browser globals at render time', async () => {
+  const mod = await loadServerModule(generateServer(
     '<script>let name = document.title;</script><p>{name}</p>'
   ));
 
-  assert.throws(() => renderComponent(), /document is not defined/);
+  assert.throws(() => mod.renderComponent(), /document is not defined/);
 });
 
-test('renders components without a script', () => {
-  const { html, state } = renderSource('<main><p>Plain</p></main>');
+test('renders components without a script', async () => {
+  const { html, state } = await renderSource('<main><p>Plain</p></main>');
 
   assert.equal(html, '<main><p>Plain</p></main>');
   assert.deepEqual(state, {});
 });
 
-test('renders lifecycle fixtures with hooks registered but not invoked', () => {
-  const { html } = renderSource(`
+test('renders lifecycle fixtures with hooks registered but not invoked', async () => {
+  const { html } = await renderSource(`
 <script>
   let status = "created";
   function initialize() { status = "mounted"; }
@@ -225,41 +256,242 @@ test('renders lifecycle fixtures with hooks registered but not invoked', () => {
   assert.equal(html, '<main><p data-wizz-id="1">created</p></main>');
 });
 
-test('does not mutate the props object passed to renderComponent', () => {
+test('does not mutate the props object passed to renderComponent', async () => {
   const props = { label: 'Ada' };
   const source = '<script>export let label = "Guest";</script><p>{label}</p>';
 
-  renderSource(source, props);
+  await renderSource(source, props);
 
   assert.deepEqual(props, { label: 'Ada' });
 });
 
-test('emits a self-contained module with no import statements', () => {
-  const moduleSource = generateServer('<main><p>Plain</p></main>');
+test('emits a self-contained module when the template renders no component tags', () => {
+  // An unused import must not appear either: only rendered tags are imported.
+  const moduleSource = generateServer('<script>import Counter from "./Counter.wizz";</script><main><p>Plain</p></main>');
 
   assert.doesNotMatch(moduleSource, /^import /m);
 });
 
-test('rejects if blocks with a located diagnostic', () => {
+test('imports child server modules for rendered component tags only', () => {
+  // Imports sit on their own lines, as the parser requires.
+  const moduleSource = generateServer(
+    '<script>\nimport Counter from "./Counter.wizz";\nimport Unused from "./Unused.wizz";\n</script><main><Counter /></main>',
+    { componentServerRenderable: { Counter: true, Unused: false } }
+  );
+
+  assert.match(moduleSource, /^import \* as __wizzServer_Counter from "\.\/Counter\.server\.js";$/m);
+  assert.doesNotMatch(moduleSource, /Unused\.server\.js/);
+});
+
+test('renders an if block\'s initially-taken branch with adjacency markers', async () => {
+  const { html } = await renderSource(
+    '<script>let flag = true;</script><main>{#if flag}<p>yes</p>{:else}<p>no</p>{/if}</main>'
+  );
+
+  // Every branch is wrapped in markers: the hydration walk re-evaluates the
+  // same test and needs the parser not to merge boundary text runs.
+  assert.equal(html, '<main><!-- --><p>yes</p><!-- --></main>');
+});
+
+test('renders an if block\'s else branch when the test is false', async () => {
+  const { html } = await renderSource(
+    '<script>let flag = false;</script><main>{#if flag}<p>yes</p>{:else}<p>no</p>{/if}</main>'
+  );
+
+  assert.equal(html, '<main><!-- --><p>no</p><!-- --></main>');
+});
+
+test('renders if blocks without an else clause', async () => {
+  const { html } = await renderSource(
+    '<script>let flag = false;</script><main>before{#if flag}<p>yes</p>{/if}after</main>'
+  );
+
+  // Both block-boundary markers are emitted even when nothing renders
+  // between them; the hydration walk strips comments, so this is harmless.
+  assert.equal(html, '<main>before<!-- --><!-- -->after</main>');
+});
+
+test('renders each blocks once per collection item', async () => {
+  const { html: rendered } = await renderSource(
+    '<script>let items = ["a", "b", "c"];</script><ul>{#each items as item}<li>{item}</li>{/each}</ul>'
+  );
+
+  assert.equal(rendered, '<ul><li>a</li><li>b</li><li>c</li></ul>');
+
+  const { html: empty } = await renderSource(
+    '<script>let items = [];</script><ul>{#each items as item}<li>{item}</li>{/each}</ul>'
+  );
+  assert.equal(empty, '<ul></ul>');
+});
+
+test('renders each blocks over object collections with property access', async () => {
+  const { html } = await renderSource(
+    '<script>let fruits = [{ id: 1, name: "apple" }, { id: 2, name: "pear" }];</script>'
+    + '<ul>{#each fruits as fruit (fruit.id)}<li>{fruit.name}</li>{/each}</ul>'
+  );
+
+  assert.equal(html, '<ul><li>apple</li><li>pear</li></ul>');
+});
+
+test('rejects each bodies that do not hold exactly one root element', () => {
   assert.throws(
-    () => assertServerRenderable(analyze('<main>{#if flag}<p>x</p>{/if}</main>')),
-    /Server rendering does not support \{#if\} conditional blocks at 1:7\./
+    () => assertServerRenderable(analyze('<main>{#each items as item}plain text{/each}</main>')),
+    /Each blocks must contain exactly one root element at 1:7\./
+  );
+  assert.throws(
+    () => assertServerRenderable(analyze('<main>{#each items as item}<p>a</p><p>b</p>{/each}</main>')),
+    /Each blocks must contain exactly one root element/
   );
 });
 
-test('rejects each blocks with a located diagnostic', () => {
+test('rejects nested blocks, imported components, and event directives inside each bodies', () => {
+  // A block as the body root trips the shape check; the per-node
+  // restrictions fire for content nested inside the body root element.
   assert.throws(
-    () => assertServerRenderable(analyze('<main>{#each items as item}<p>x</p>{/each}</main>')),
-    /Server rendering does not support \{#each\} blocks at 1:7\./
+    () => assertServerRenderable(analyze('<main>{#each items as item}{#if item}<p>x</p>{/if}{/each}</main>')),
+    /Each blocks must contain exactly one root element at 1:7\./
+  );
+  assert.throws(
+    () => assertServerRenderable(analyze('<main>{#each items as item}<div>{#if item}x{/if}</div>{/each}</main>')),
+    /Each block bodies do not support 'IfBlock' nodes yet at 1:\d+\./
+  );
+  assert.throws(
+    () => assertServerRenderable(analyze(
+      '<script>\nimport Counter from "./Counter.wizz";\n</script><main>{#each items as item}<div><Counter /></div>{/each}</main>'
+    ), { componentServerRenderable: { Counter: true } }),
+    // The each-body restriction fires before component vouching is consulted.
+    /Imported components are not supported inside each blocks/
+  );
+  assert.throws(
+    () => assertServerRenderable(analyze('<main>{#each items as item}<button on:click={go}>x</button>{/each}</main>')),
+    /Event directive 'on:click' is not supported inside each blocks yet/
   );
 });
 
-test('rejects imported component tags with a located diagnostic', () => {
+test('vouched component tags render the child server module recursively', async () => {
+  const { html, state } = await renderSource(
+    '<script>import Counter from "./Counter.wizz";</script><main><h1>Hi</h1><Counter /></main>',
+    {},
+    { 'Counter.wizz': '<script>let count = 3;</script><div><button>Clicks: {count}</button></div>' },
+    { componentServerRenderable: { Counter: true } }
+  );
+
+  // The child's markup is embedded at the tag position with the child's own
+  // per-template ids; the parent template stays marker-free.
+  assert.equal(html, '<main><h1>Hi</h1><div><button data-wizz-id="1">Clicks: <!-- -->3</button></div></main>');
+  assert.deepEqual(state, { __wizz: { components: { '1': { count: 3 } } } });
+});
+
+test('evaluates component props in the parent render scope', async () => {
+  // The /contact showcase shape: a reactive parent value passed as a prop.
+  const { html, state } = await renderSource(
+    '<script>\nimport TestProps from "./TestProps.wizz";\nlet myName = "Paul";\n</script><main><TestProps name={myName} /></main>',
+    {},
+    { 'TestProps.wizz': '<script>export let name = "Test";</script><p>{name}</p>' },
+    { componentServerRenderable: { TestProps: true } }
+  );
+
+  assert.equal(html, '<main><p data-wizz-id="1">Paul</p></main>');
+  // The child's prop is not part of its state snapshot; the slice is empty.
+  // The parent's reactive myName is snapshotted alongside the child slices.
+  assert.deepEqual(state, { myName: 'Paul', __wizz: { components: { '1': {} } } });
+});
+
+test('passes static and bare component attributes as props', async () => {
+  const { html } = await renderSource(
+    '<script>import Card from "./Card.wizz";</script><main><Card title="Static" flagged /></main>',
+    {},
+    { 'Card.wizz': '<script>export let title = "none"; export let flagged = false;</script><p>{title}:{flagged}</p>' },
+    { componentServerRenderable: { Card: true } }
+  );
+
+  assert.equal(html, '<main><p data-wizz-id="1">Static<!-- -->:<!-- -->true</p></main>');
+});
+
+test('renders two-level nested components with per-template ids and nested state slices', async () => {
+  const { html, state } = await renderSource(
+    '<script>import Panel from "./Panel.wizz";</script><main><Panel title={"Hi"} /></main>',
+    {},
+    {
+      'Panel.wizz': {
+        source: '<script>\nimport Badge from "./Badge.wizz";\nexport let title = "none";\n</script><section><h2>{title}</h2><Badge /></section>',
+        options: { componentServerRenderable: { Badge: true } }
+      },
+      'Badge.wizz': '<script>let n = 7;</script><span>{n}</span>'
+    },
+    { componentServerRenderable: { Panel: true } }
+  );
+
+  // Each template numbers its own reactive nodes from 1.
+  assert.equal(html, '<main><section><h2 data-wizz-id="1">Hi</h2><span data-wizz-id="1">7</span></section></main>');
+  assert.deepEqual(state, { __wizz: { components: { '1': { __wizz: { components: { '1': { n: 7 } } } } } } });
+});
+
+test('rejects component tags without a server-renderable vouch, conservatively', () => {
+  // No options at all (the milestone 12 contract) and an explicit false both
+  // reject; the unvouched error names the missing build.
   assert.throws(
     () => assertServerRenderable(analyze(
       '<script>import Counter from "./Counter.wizz";</script><main><Counter /></main>'
     )),
-    /Server rendering does not support component tags; <Counter> cannot be rendered server-side at 1:61\./
+    /Server rendering does not support component tags; <Counter> cannot be rendered server-side at 1:61\. No server-renderable build was provided for this import\./
+  );
+  assert.throws(
+    () => assertServerRenderable(analyze(
+      '<script>import Counter from "./Counter.wizz";</script><main><Counter /></main>'
+    ), { componentServerRenderable: { Counter: false } }),
+    /No server-renderable build was provided for this import\./
+  );
+});
+
+test('chains the child\'s own ineligibility reason into the diagnostic', () => {
+  assert.throws(
+    () => assertServerRenderable(analyze(
+      '<script>import Counter from "./Counter.wizz";</script><main><Counter /></main>'
+    ), {
+      componentServerRenderable: { Counter: false },
+      componentIneligibilityReasons: {
+        Counter: 'Server rendering does not support component tags; <Nested> cannot be rendered server-side at 2:3. No server-renderable build was provided for this import.'
+      }
+    }),
+    /<Counter> cannot be rendered server-side at 1:61\. Underlying reason: Server rendering does not support component tags; <Nested>/
+  );
+});
+
+test('rejects component tags with children or event directives', () => {
+  const options = { componentServerRenderable: { Counter: true } };
+  assert.throws(
+    () => assertServerRenderable(analyze(
+      '<script>import Counter from "./Counter.wizz";</script><main><Counter>slot</Counter></main>'
+    ), options),
+    /Component <Counter> does not support children at 1:61\./
+  );
+  assert.throws(
+    () => assertServerRenderable(analyze(
+      '<script>import Counter from "./Counter.wizz";</script><main><Counter on:click={go} /></main>'
+    ), options),
+    /Event directive 'on:click' is not supported on component <Counter>/
+  );
+});
+
+test('rejects root-level component tags like the browser target', () => {
+  assert.throws(
+    () => assertServerRenderable(analyze(
+      '<script>import Counter from "./Counter.wizz";</script><Counter />'
+    ), { componentServerRenderable: { Counter: true } }),
+    /Component <Counter> must be nested inside an element at 1:55\./
+  );
+});
+
+test('gates both branches of an if block, including the untaken one', () => {
+  // The client target bakes both branches at mount, and hydration may select
+  // either, so an unvouched component in the untaken branch still rejects.
+  assert.throws(
+    () => assertServerRenderable(analyze(
+      '<script>\nimport Counter from "./Counter.wizz";\nlet flag = false;\n</script>'
+      + '<main>{#if flag}<p>yes</p>{:else}<Counter />{/if}</main>'
+    ), {}),
+    /<Counter> cannot be rendered server-side at 4:43\./
   );
 });
 

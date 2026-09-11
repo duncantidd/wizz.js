@@ -93,3 +93,22 @@ test('ignores same-named tags that were not imported', () => {
 
   assert.equal(counter.componentId, undefined);
 });
+
+test('assigns ids inside the consequent of an if block that has an else', () => {
+  // The parser's `children` alias repoints to the alternate at {:else}, so a
+  // children-only walk would leave consequent elements without data-wizz-id
+  // and consequent component tags without a componentId ("Component <Counter>
+  // is missing its componentId" at generation time).
+  const payload = analyzeDependencies(parseComponent(
+    "<script>\nimport Counter from './Counter.wizz';\nlet flag = false; let count = 0;\n</script>"
+    + '<main>{#if flag}<Counter start={count} /><p>{count}</p>{:else}<p>off</p>{/if}</main>'
+  ));
+  const main = assignNodeIds(payload).template.children[0];
+  const block = main.children[0];
+
+  assert.equal(block.consequent[0].componentId, 1);
+  assert.deepEqual(getAttribute(block.consequent[1], 'data-wizz-id'), {
+    name: 'data-wizz-id',
+    value: '1'
+  });
+});
