@@ -57,11 +57,11 @@ The returned payload has the shape established by the parser and enriched by the
 
 The analyzer and ID assigner mutate this payload in place before it is returned. Consumers that only need compiled output should rely on `result.source`; `payload` is exposed for testing and compiler tooling.
 
-`compile()` accepts one additional option: `hydratable: true` restricts the component to the server-renderable surface (see [Server Rendering](#server-rendering)) and makes the generated module additionally export `hydrateComponent(target, props, state)`, which adopts markup delivered by the server target instead of recreating it. Without the flag, generation is unchanged.
+`compile()` accepts one additional option: `hydratable: true` restricts the component to the statically renderable surface (see [Server Rendering](#server-rendering)) and makes the generated module additionally export `hydrateComponent(target, props, state)` and `hydrateRoot(rootNode, props, state)`, which adopt markup delivered by the server target instead of recreating it. Without the flag, generation is unchanged.
 
 ## Server Rendering
 
-`compileServer(source, options)` shares the parse → analyze → assign pipeline but emits a self-contained server module with no DOM dependency:
+`compileServer(source, options)` shares the parse → analyze → assign pipeline but emits a DOM-free server module:
 
 ```js
 const { source } = compileServer(
@@ -74,7 +74,9 @@ const { source } = compileServer(
 //   serializeInitialState(state) -> '<script type="application/wizz-state">…</script>'
 ```
 
-The v1 server-renderable surface is deliberately narrow: the root element, static markup, text interpolations, dynamic attributes, and top-level props. `{#if}`, `{#each}`, imported component tags, void elements with children, reactive names matching `__proto__` or the reserved `__wizz` prefix, and malformed `on:` directives fail the compile with located diagnostics. The author's top-level script runs verbatim and trusted on both targets; event handlers and lifecycle hooks are client-only.
+The server-renderable surface covers everything with a deterministic initial rendering: the root element, static markup, text interpolations, dynamic attributes, top-level props, the initially-taken `{#if}` branch, `{#each}` lists (each bodies keep the browser target's restrictions: exactly one root element, no components, no `on:` directives), and imported component tags. Because a component tag's renderability depends on the child's own template, the compile consults two gate options: `componentServerRenderable` maps import names to `true` when that child's own server pipeline compiles (a missing entry conservatively rejects the tag), and `componentIneligibilityReasons` maps import names to the child's own failure so the thrown diagnostic chains the deepest blocking construct (`Underlying reason: …`). Remaining rejections — void elements with children, reactive names matching `__proto__` or the reserved `__wizz` prefix, malformed `on:` directives — carry located diagnostics. The author's top-level script runs verbatim and trusted on both targets; event handlers and lifecycle hooks are client-only, and author scripts that read browser globals fail `renderComponent()` at runtime (the caller's fallback applies).
+
+Component tags render recursively: the server module namespace-imports each rendered child's `.server.js` build and calls its `renderComponent()` with the evaluated props at the tag position; the child's state snapshot rides under the framework-reserved `__wizz` key (`state.__wizz.components["<componentId>"]`, emitted only when the template renders component tags).
 
 Escaping and delivery boundaries: text output escapes `&`, `<`, `>`; attribute values additionally escape `"`. Adjacent text-like children carry `<!-- -->` markers so browser parsing preserves the positional node layout client updates target. State serializes through `serializeInitialState()` with every `<` escaped; the delivery script is a sibling of the mount point, never a child.
 
@@ -124,15 +126,15 @@ The optional `options` value is normalized defensively. Omitting it, passing `nu
 
 ```js
 {
-  compiler: '1.3.0', // The compiler itself
+  compiler: '1.5.0', // The compiler itself
   syntax: '1.1.0',   // The component language contract
-  output: '1.3.0'    // The generated module contract
+  output: '1.5.0'    // The generated module contract
 }
 ```
 
 **What `syntax` covers.** The component language surface a `.wizz` file may use: template directives (`on:`, `{#if}`, `{:else}`, `{#each}` with keyed and keyless forms, imports, interpolation expressions, attributes on imported component tags, which pass as props) and the script boundary (reactive `let` declarations, `export let` prop declarations, named functions, lifecycle hooks). Within one `syntax` major version, any component that compiled before keeps compiling with the same meaning. New syntax may be added in a minor version; existing syntax never changes meaning without a major bump.
 
-**What `output` covers.** The surface of every generated module: a default-exported `mountComponent(target, props)` factory that appends the component's root element to `target` and returns `{ setProps?, destroy() }` (the optional `setProps(next)` handle exists on components that declare props); `destroy()` running destroy hooks, destroying child components, removing tracked `on:` listeners, and removing the root from the target; and the `__wizzChildComponents`, `__wizzMountChildren`, and `__wizzListUpdates` root-node properties the framework consumes. Optionally — for compiles requested with `hydratable: true` — the module additionally exports `hydrateComponent(target, props, state)`, which adopts server-rendered markup through the documented hydration traversal. Within one `output` major version, generated modules keep this surface and their runtime behavior. A test in `componentGenerator.test.js` pins this surface (byte-for-byte for default output), so a codegen change that breaks it fails the suite until the version is bumped deliberately.
+**What `output` covers.** The surface of every generated module: a default-exported `mountComponent(target, props)` factory that appends the component's root element to `target` and returns `{ setProps?, destroy() }` (the optional `setProps(next)` handle exists on components that declare props); `destroy()` running destroy hooks, destroying child components, removing tracked `on:` listeners, and removing the root from the target; and the `__wizzChildComponents`, `__wizzMountChildren`, and `__wizzListUpdates` root-node properties the framework consumes. Optionally — for compiles requested with `hydratable: true` — the module additionally exports `hydrateComponent(target, props, state)` and `hydrateRoot(rootNode, props, state)`, which adopt server-rendered markup through the documented hydration traversal (the latter adopting the given node itself, which is how nested components are adopted in place). Within one `output` major version, generated modules keep this surface and their runtime behavior. A test in `componentGenerator.test.js` pins this surface (byte-for-byte for default output), so a codegen change that breaks it fails the suite until the version is bumped deliberately.
 
 **Bump rules.** A breaking change to a contract bumps its major version and the compiler's major version. Additive capabilities bump the affected minor version. Fixes bump patch versions. `version.test.js` pins the current values, so a bump can only happen by editing `version.js` and its test together.
 
@@ -142,7 +144,7 @@ The optional `options` value is normalized defensively. Omitting it, passing `nu
 - Every generated module self-identifies with a first-line comment stamped from the table:
 
   ```js
-  // Generated by Wizz 1.3.0 (component syntax 1.1.0, generated output 1.3.0). Edits will be overwritten.
+  // Generated by Wizz 1.5.0 (component syntax 1.1.0, generated output 1.5.0). Edits will be overwritten.
   ```
 
   Server modules stamp the same table with a `server output` label.
@@ -199,7 +201,7 @@ Every occurrence matching `at <line>:<column>` is qualified. The function is int
 
 ## Tests
 
-- `index.test.js` verifies pipeline composition, generated source, mounted behavior against a minimal DOM, static components, compiler error propagation, and the versioned compile result — plus the `compileServer()` module contract, its executed render/serialize behavior, located server-target rejections, and the `hydratable` option's dual exports and surface gate.
+- `index.test.js` verifies pipeline composition, generated source, mounted behavior against a minimal DOM, static components, compiler error propagation, and the versioned compile result — plus the `compileServer()` module contract, its executed render/serialize behavior, located server-target rejections, and the `hydratable` option's export surface and gate.
 - `version.test.js` verifies the version table's shape, semver format, immutability, pinned values, and the policy invariant that the compiler major version leads both contract majors.
 - `errorAugmenter.test.js` verifies location qualification, source excerpts, code frames, location-free errors, repeated locations, invalid file paths, and non-`Error` thrown values.
 - `sourceMapGenerator.test.js` verifies VLQ encoding, multiline mappings, unavailable map inputs, and script-location anchoring.

@@ -11,6 +11,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Milestone 14 — Render the Full Template Surface Server-Side
+
+#### Added
+
+- Recursive server rendering of component tags: the server target now renders an imported component by calling the child's own server module (`import * as __wizzServer_<Name> from "./<Name>.server.js"`, evaluated props at the tag position), so a page's delivered markup embeds its components' rendered HTML exactly where the tags appear. Child state snapshots serialize under the framework-reserved `__wizz` key as `state.__wizz.components["<componentId>"]` (nested trees nest the same way); the key is emitted only when the template renders component tags, keeping component-free state output byte-identical to milestone 12. Reactive names cannot start with `__wizz`, so the namespace stays framework-owned (`src/compiler/generator/serverGenerator.js`).
+- `{#if}` and `{#each}` render server-side: the initially-taken branch is selected by re-evaluating the test against render-time state, and each lists render the initial collection with the item variable in scope. Each bodies keep the browser target's restrictions (exactly one root element, no components, no `on:` directives). Adjacency markers are now also emitted at branch boundaries so the browser cannot merge text across a branch boundary (`src/compiler/generator/serverGenerator.js`).
+- Bottom-up eligibility over the import graph: `build.js` computes server-rendering eligibility bottom-up with a memoized DAG walk over each payload's component imports — a file is eligible when its own `compileServer` and `compile({ hydratable: true })` compile with every rendered import vouched for by the child's own eligibility. Eligible **component files** now also ship `<Name>.server.js` and `<Name>.hydrate.js` beside their client module (the milestone 13 "components never ship server builds" rule flips deliberately: a page's server module imports its components' server modules). Ineligible files log one note chaining the deepest underlying reason (`Underlying reason: <child's own gate failure>`), and cyclic component imports are reported as ineligibility (`its import graph contains a cycle.`) instead of recursing forever (`build.js`, exported as `computeServerEligibility`).
+- Nested hydration through a new additive public export: hydratable modules now export **`hydrateRoot(rootNode, props, state)`** alongside `hydrateComponent` (`mountInstance(target, props, hydrate, state, adoptSelf)` internally). `hydrateRoot` adopts the *given* node as the component root; the parent's adoption walk verifies only that the component-tag position holds an element, then adopts the child through the child's own hydratable module seeded with the state slice under `__wizz.components`. Reactive prop bindings re-apply through `setProps`, and a mismatch at any depth remounts **inside the child's root** — nothing is detached from the parent and the parent never fails. The adoption walk flattens if/each sequences (branch tests re-evaluated against seeded state), adopts each items positionally while rebuilding the records map with key-aware update closures so client list updates mutate adopted nodes, and creates only the list anchor (an empty text node cannot survive HTML serialization) (`src/compiler/generator/hydrationGenerator.js`).
+
+#### Fixed
+
+- A component tag inside an `{#if}` branch had its hydration walk ref declared inline inside the generated branch block while the adoption block after the walk references it at function scope — hydrating such a page threw `ReferenceError`. Component-tag refs are now pre-allocated at `hydrateCreate` scope (`src/compiler/generator/hydrationGenerator.js`).
+- The template parser's `IfBlock.children` alias repoints to the alternate at `{:else}`, so the dependency analyzer, ID assigner, and the component-ref collector all walked consequent content only in blocks *without* an else branch: expressions in a taken-branch-with-else got no dependency metadata, reactive elements got no `data-wizz-id`, and component tags got no `componentId` (surfacing as `Component <Counter> is missing its componentId` on any page with an imported component inside an `{#if}`-with-else). All three traversals now walk `consequent` and `alternate` explicitly (`src/compiler/analyzer/dependencyAnalyzer.js`, `src/compiler/analyzer/idAssigner.js`, `src/compiler/generator/domGenerator.js`).
+
+#### Changed
+
+- Compiler and generated-output contracts bumped to 1.5.0 (component syntax stays 1.1.0): previously-rejected templates (blocks, component tags with eligible import graphs) now compile; default non-hydratable `compile()` output stays byte-identical apart from the version header stamp. `compileServer(source, options)` and `compile(source, { hydratable: true })` gain the gate options `componentServerRenderable` (import names vouched for by their child's eligibility; a missing entry conservatively rejects that tag) and `componentIneligibilityReasons` (child gate failures chained into the diagnostic). The 1.4.0 → 1.5.0 step fixes the if-with-else traversal bug above, which changes generated output (corrected IDs, dependency flags, and component refs) for if-with-else templates.
+
+#### Docs
+
+- README's server-rendering section documents the recursive surface, bottom-up eligibility, the chained ineligibility note, and the `hydrateRoot` nested-adoption contract; ROADMAP §14 records the implementation notes including the author-script limitation (browser globals in author scripts fail `renderComponent()` at runtime and stream the plain shell).
+
 ### Milestone 13 — Serve Server-Rendered Routes from the Development Server
 
 #### Added
