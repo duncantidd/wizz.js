@@ -742,14 +742,21 @@ test('hydratable compiles export both mount entries through one mountInstance', 
   )));
   const source = generateComponent(payload, { hydratable: true });
 
-  assert.match(source, /export default function mountComponent\(target, props = \{\}\) \{\n  return mountInstance\(target, props, false, null\);\n\}/);
-  assert.match(source, /export function hydrateComponent\(target, props = \{\}, state = null\) \{\n  return mountInstance\(target, props, true, state\);\n\}/);
-  assert.match(source, /function mountInstance\(target, props, hydrate, state\) \{/);
-  assert.match(source, /function hydrateCreate\(target, state\) \{/);
-  assert.match(source, /const rootNode = hydrate \? hydrateCreate\(target, state\) : create\(ctx\);/);
-  assert.match(source, /if \(!rootNode\) return mountComponent\(target, props\);/);
+  assert.match(source, /export default function mountComponent\(target, props = \{\}\) \{\n  return mountInstance\(target, props, false, null, false\);\n\}/);
+  assert.match(source, /export function hydrateComponent\(target, props = \{\}, state = null\) \{\n  return mountInstance\(target, props, true, state, false\);\n\}/);
+  // The nested adoption entry adopts the given node as the component root, so
+  // a mismatch remounts inside it and never detaches the parent's tree.
+  assert.match(source, /export function hydrateRoot\(rootNode, props = \{\}, state = null\)/);
+  assert.match(source, /return mountInstance\(rootNode, props, true, state, true\);/);
+  assert.match(source, /function mountInstance\(target, props, hydrate, state, adoptSelf\) \{/);
+  assert.match(source, /function hydrateCreate\(target, state, adoptSelf\) \{/);
+  assert.match(source, /const adoptedHydration = hydrate \? hydrateCreate\(target, state, adoptSelf\) : null;/);
+  assert.match(source, /if \(hydrate && !adoptedHydration\) return mountComponent\(target, props\);/);
+  assert.match(source, /const rootNode = hydrate \? adoptedHydration\.node : create\(ctx\);/);
   // Hydration collects listeners and attaches them only after the walk passes.
   assert.match(source, /pendingListeners\.forEach\(\(pending\) => trackListener\(pending\[0\], pending\[1\], pending\[2\]\)\);/);
+  // A self-adopted root belongs to the parent's tree; teardown leaves it.
+  assert.match(source, /if \(!hydrate \|\| !adoptSelf\) target\.removeChild\(rootNode\);/);
 });
 
 test('default compiles never emit the hydration surface', () => {
@@ -777,12 +784,23 @@ test('hydratable compiles reject the server-renderable boundary', () => {
     ))), { hydratable: true }),
     /Server rendering does not support component tags/
   );
-  // Hydration adoption for blocks arrives with nested hydration; until then
-  // the hydration generator keeps its own gate.
-  assert.throws(
-    () => generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
-      '<main>{#each items as item}<p>x</p>{/each}</main>'
-    ))), { hydratable: true }),
-    /Hydration does not support EachBlock nodes\./
-  );
+  // Blocks and each lists hydrate since nested hydration; a vouched component
+  // import clears the gate and pulls in the child's hydratable module.
+  const payload = assignNodeIds(analyzeDependencies(parseComponent(
+    '<script>\nimport Counter from "./Counter.wizz";\n</script><main><Counter /></main>'
+  )));
+  const source = generateComponent(payload, {
+    hydratable: true,
+    componentServerRenderable: { Counter: true }
+  });
+  assert.match(source, /import \* as __wizzHydrate_Counter from "\.\/Counter\.hydrate\.js";/);
+  // An import that is never rendered must not drag in a hydratable module.
+  const unusedPayload = assignNodeIds(analyzeDependencies(parseComponent(
+    '<script>\nimport Counter from "./Counter.wizz";\n</script><main><p>static</p></main>'
+  )));
+  const unusedSource = generateComponent(unusedPayload, {
+    hydratable: true,
+    componentServerRenderable: { Counter: true }
+  });
+  assert.doesNotMatch(unusedSource, /__wizzHydrate_Counter/);
 });

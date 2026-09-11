@@ -177,6 +177,7 @@ test('hydration adopts delivered markup with zero DOM creation and exact reactiv
     `${source
       .replace('export default function mountComponent(', 'function mountComponent(')
       .replace('export function hydrateComponent(', 'function hydrateComponent(')
+      .replace('export function hydrateRoot(', 'function hydrateRoot(')
     }\nreturn { hydrateComponent };`
   )(document, queueMicrotask);
 

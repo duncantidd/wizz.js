@@ -308,11 +308,13 @@ test('the hydratable option exports hydrateComponent and gates the surface', () 
   assert.match(source, /export default function mountComponent\(target, props = \{\}\)/);
   assert.match(source, /export function hydrateComponent\(target, props = \{\}, state = null\)/);
 
-  // The hydration surface keeps its own gate for blocks until nested
-  // hydration lands; the message is the hydration generator's.
+  // Blocks hydrate since nested hydration; the remaining gate is the
+  // server-renderable component surface (vouched imports only).
+  const { source: blockSource } = compile('<main>{#if ready}<p>yes</p>{/if}</main>', { hydratable: true });
+  assert.match(blockSource, /if \(ready\) \{/);
   assert.throws(
-    () => compile('<main>{#if ready}<p>yes</p>{/if}</main>', { hydratable: true }),
-    /Hydration does not support IfBlock nodes\./
+    () => compile('<script>\nimport Counter from "./Counter.wizz";\n</script><main><Counter /></main>', { hydratable: true }),
+    /Server rendering does not support component tags/
   );
 
   // Default compiles never carry the hydration surface.

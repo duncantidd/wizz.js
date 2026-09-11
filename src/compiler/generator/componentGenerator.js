@@ -11,17 +11,26 @@ const { VERSIONS } = require('../version.js');
  * @param {Object} astPayload - The Final Handoff Object (must include rawScript).
  * @param {Object} [options] - Generation options.
  * @param {boolean} [options.hydratable] - When true, the module additionally
- *   exports hydrateComponent(target, props, state), which adopts server-rendered
- *   markup instead of recreating it. Hydratable modules are restricted to the
- *   server-renderable component surface. Default generation is unchanged.
+ *   exports hydrateComponent(target, props, state) and hydrateRoot(rootNode,
+ *   props, state), which adopt server-rendered markup instead of recreating
+ *   it. Hydratable modules are restricted to the server-renderable component
+ *   surface. Default generation is unchanged.
+ * @param {Object<string, boolean>} [options.componentServerRenderable] -
+ *   Import names vouched for as having server-renderable builds; required for
+ *   component tags to pass the hydratable gate.
+ * @param {Object<string, string>} [options.componentIneligibilityReasons] -
+ *   Import names mapped to the child's own gate failure, chained into the
+ *   thrown diagnostic.
  * @returns {string} The final compiled JavaScript module.
  */
 function generateComponent(astPayload, options = {}) {
   const hydratable = options.hydratable === true;
   if (hydratable) {
-    // The hydration walk cannot adopt component tags or block constructs, so
-    // hydratable modules are held to the same surface as the server target.
-    assertServerRenderable(astPayload);
+    // Hydratable modules are held to the same surface as the server target.
+    assertServerRenderable(astPayload, {
+      componentServerRenderable: options.componentServerRenderable,
+      componentIneligibilityReasons: options.componentIneligibilityReasons
+    });
   }
   const builder = new CodeBuilder();
       const componentImports = astPayload.imports || [];
@@ -45,6 +54,16 @@ function generateComponent(astPayload, options = {}) {
       componentImports.forEach(({ name, source }) => {
             builder.add(`import ${name} from ${JSON.stringify(source.replace(/\.wizz$/, '.js'))};`);
       });
+      if (hydratable) {
+        // Nested hydration imports the child's hydratable module alongside
+        // its browser module; only rendered tags are imported so an unused
+        // import can never break module loading. Import statements must sit
+        // on their own lines (see the parser's import handling).
+        for (const { name, source } of componentImports) {
+          if (!renderedImportNames(astPayload.template, name)) continue;
+          builder.add(`import * as __wizzHydrate_${name} from ${JSON.stringify(source.replace(/\.wizz$/, '.hydrate.js'))};`);
+        }
+      }
       if (componentImports.length > 0) builder.add('');
 
   // 1. Factory Function Signature. `props` carries the values the parent
@@ -54,17 +73,26 @@ function generateComponent(astPayload, options = {}) {
   if (hydratable) {
     builder.add('export default function mountComponent(target, props = {}) {')
           .indent()
-          .add('return mountInstance(target, props, false, null);')
+          .add('return mountInstance(target, props, false, null, false);')
           .dedent()
           .add('}')
           .add('')
           .add('export function hydrateComponent(target, props = {}, state = null) {')
           .indent()
-          .add('return mountInstance(target, props, true, state);')
+          .add('return mountInstance(target, props, true, state, false);')
           .dedent()
           .add('}')
           .add('')
-          .add('function mountInstance(target, props, hydrate, state) {')
+          .add('export function hydrateRoot(rootNode, props = {}, state = null) {')
+          .indent()
+          .add('// Nested adoption entry: rootNode is already in the parent\'s DOM at')
+          .add('// the component tag\'s position, so a mismatch remounts inside it')
+          .add('// and never detaches anything from the parent tree.')
+          .add('return mountInstance(rootNode, props, true, state, true);')
+          .dedent()
+          .add('}')
+          .add('')
+          .add('function mountInstance(target, props, hydrate, state, adoptSelf) {')
           .indent();
   } else {
     builder.add('export default function mountComponent(target, props = {}) {')
@@ -172,7 +200,7 @@ function generateComponent(astPayload, options = {}) {
 
   // 4b. Inject the hydration adoption walk for hydratable modules.
   if (hydratable) {
-    const hydrationCode = generateHydrationFunction(astPayload.template);
+    const hydrationCode = generateHydrationFunction(astPayload.template, componentImports);
     hydrationCode.split('\n').forEach(line => builder.add(line));
   }
 
@@ -192,10 +220,11 @@ function generateComponent(astPayload, options = {}) {
           .add('target.appendChild(rootNode);')
           .add('rootNode.__wizzMountChildren();');
   } else {
-    builder.add('const rootNode = hydrate ? hydrateCreate(target, state) : create(ctx);')
-          .add('if (!rootNode) return mountComponent(target, props);')
-          .add('const childComponents = hydrate ? [] : rootNode.__wizzChildComponents;')
-          .add('const listUpdates = hydrate ? [] : rootNode.__wizzListUpdates;')
+    builder.add('const adoptedHydration = hydrate ? hydrateCreate(target, state, adoptSelf) : null;')
+          .add('if (hydrate && !adoptedHydration) return mountComponent(target, props);')
+          .add('const rootNode = hydrate ? adoptedHydration.node : create(ctx);')
+          .add('const childComponents = hydrate ? adoptedHydration.childComponents : rootNode.__wizzChildComponents;')
+          .add('const listUpdates = hydrate ? adoptedHydration.listUpdates : rootNode.__wizzListUpdates;')
           .add('if (!hydrate) {')
           .indent()
           .add('target.appendChild(rootNode);')
@@ -256,9 +285,16 @@ function generateComponent(astPayload, options = {}) {
       .add('isDestroyed = true;')
       .add('destroyHooks.forEach((hook) => hook());')
       .add('childComponents.forEach((component) => component.destroy());')
-      .add('trackedListeners.forEach(({ node, eventName, handler }) => node.removeEventListener(eventName, handler));')
-        .add('target.removeChild(rootNode);')
-        .dedent()
+      .add('trackedListeners.forEach(({ node, eventName, handler }) => node.removeEventListener(eventName, handler));');
+  if (hydratable) {
+    // A self-adopted root (nested hydration) belongs to the parent's tree;
+    // the parent's destroy removes it, so the child must leave it in place.
+    // Fresh mounts and top-level adoption own their root and remove it.
+    builder.add('if (!hydrate || !adoptSelf) target.removeChild(rootNode);');
+  } else {
+    builder.add('target.removeChild(rootNode);');
+  }
+  builder.dedent()
         .add('}')
         .dedent()
         .add('};');
@@ -267,6 +303,26 @@ function generateComponent(astPayload, options = {}) {
         .add('}');
 
   return builder.generate();
+}
+
+/**
+ * Reports whether the template renders the named import. Component tags
+ * cannot appear inside each bodies (the renderable gate refuses them), and
+ * IfBlock.children aliases its consequent, so walking consequent plus
+ * alternate covers every branch exactly once.
+ */
+function renderedImportNames(templateAST, name) {
+  const scan = (node) => {
+    if (node.type === 'Element') {
+      if (node.name === name) return true;
+      return (node.children || []).some((child) => scan(child));
+    }
+    if (node.type === 'IfBlock') {
+      return (node.consequent || []).some(scan) || (node.alternate || []).some(scan);
+    }
+    return false;
+  };
+  return (templateAST.children || []).some(scan);
 }
 
 module.exports = { generateComponent };

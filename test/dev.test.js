@@ -418,12 +418,13 @@ test('an eligibility flip stops server rendering despite stale build artifacts',
   const url = await developmentServer.listen();
   assert.match(await (await fetch(`${url}/`)).text(), /<div id="app"><main>/);
 
-  // The edit makes the page ineligible; the rebuild leaves the previous
+  // The edit makes the page ineligible: the imported component has no
+  // server-renderable build to vouch for. The rebuild leaves the previous
   // build's server module on disk (builds never clean dist), so the manifest
   // — not the filesystem — must decide whether a route server-renders.
   writeFile(
     path.join(projectDirectory, 'src', 'App.wizz'),
-    '<script>let flag = true;</script><main>{#if flag}<p>On</p>{/if}</main>'
+    '<script>\nimport Counter from "./Counter.wizz";\n</script><main><Counter /></main>'
   );
   watchListeners[0]('change', 'App.wizz');
   assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'App.server.js')), true);
