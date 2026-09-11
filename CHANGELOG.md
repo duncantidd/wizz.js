@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 
+- Showcase route `/` now server-renders: `App.wizz` moved its top-level `document.location.search` read (which failed `renderComponent()` at runtime in Node and streamed the plain shell) behind `onMount`. The server target's `onMount` is a no-op, so the page delivers the `"friend"` default server-side; mount hooks run after state seeding on both client paths, so the reactivity engine applies the query-param name after hydration.
 - Compiler and generated-output contracts bumped to 1.5.0 (component syntax stays 1.1.0): previously-rejected templates (blocks, component tags with eligible import graphs) now compile; default non-hydratable `compile()` output stays byte-identical apart from the version header stamp. `compileServer(source, options)` and `compile(source, { hydratable: true })` gain the gate options `componentServerRenderable` (import names vouched for by their child's eligibility; a missing entry conservatively rejects that tag) and `componentIneligibilityReasons` (child gate failures chained into the diagnostic). The 1.4.0 → 1.5.0 step fixes the if-with-else traversal bug above, which changes generated output (corrected IDs, dependency flags, and component refs) for if-with-else templates.
 
 #### Docs
