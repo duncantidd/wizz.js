@@ -7,17 +7,17 @@ test('exposes exactly the compiler, syntax, and output versions', () => {
 });
 
 test('pins the current contract versions so bumps are deliberate', () => {
-  // 1.3.0 / syntax 1.1.0 / output 1.3.0: server-side rendering and hydration.
-  // The compiler gains an explicit `compileServer()` target and an opt-in
-  // `hydratable` compile flag; the output contract additively gains the
-  // optional `hydrateComponent(target, props, state)` export and its
-  // hydration traversal on hydratable modules. Default `mountComponent`
-  // behavior is unchanged and component syntax is untouched, so both minors
+  // 1.4.0 / syntax 1.1.0 / output 1.4.0: the full template surface renders
+  // server-side. The server target additively gains `{#if}`, `{#each}`, and
+  // vouched component tags; the output contract additively gains the optional
+  // `hydrateRoot(rootNode, props, state)` export and branch-aware/list/nested
+  // hydration on hydratable modules. Previously-rejected templates now
+  // compile and default `mountComponent` output is unchanged, so both minors
   // bump together with syntax pinned.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.3.0',
+    compiler: '1.4.0',
     syntax: '1.1.0',
-    output: '1.3.0'
+    output: '1.4.0'
   });
 });
 
