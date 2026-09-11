@@ -777,10 +777,12 @@ test('hydratable compiles reject the server-renderable boundary', () => {
     ))), { hydratable: true }),
     /Server rendering does not support component tags/
   );
+  // Hydration adoption for blocks arrives with nested hydration; until then
+  // the hydration generator keeps its own gate.
   assert.throws(
     () => generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
       '<main>{#each items as item}<p>x</p>{/each}</main>'
     ))), { hydratable: true }),
-    /Server rendering does not support \{#each\} blocks/
+    /Hydration does not support EachBlock nodes\./
   );
 });

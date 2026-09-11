@@ -285,4 +285,4 @@ function generateCreateFunction(templateAST, componentImports = []) {
   return builder.generate();
 }
 
-module.exports = { generateCreateFunction, collectComponentRefNames };
+module.exports = { generateCreateFunction, collectComponentRefNames, buildComponentPropsSource };

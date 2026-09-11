@@ -259,13 +259,17 @@ test('compileServer renders HTML and serializes state without a DOM', () => {
 });
 
 test('compileServer rejects the non-server-renderable surface with located errors', () => {
+  // Blocks and each lists are server-renderable since milestone 14.
+  const { source: ifSource } = compileServer('<main>{#if ready}<p>yes</p>{/if}</main>');
+  assert.match(ifSource, /if \(ready\)/);
+  const { source: eachSource } = compileServer('<main>{#each items as item}<p></p>{/each}</main>');
+  assert.match(eachSource, /for \(const item of items\)/);
+
+  // Component tags stay ineligible until the caller vouches for a child
+  // server build through the componentServerRenderable option.
   assert.throws(
-    () => compileServer('<main>{#if ready}<p>yes</p>{/if}</main>'),
-    /Server rendering does not support \{#if\} conditional blocks at 1:7\./
-  );
-  assert.throws(
-    () => compileServer('<main>{#each items as item}<p></p>{/each}</main>'),
-    /Server rendering does not support \{#each\} blocks at 1:7\./
+    () => compileServer('<script>\nimport Counter from "./Counter.wizz";\n</script><main><Counter /></main>'),
+    /Server rendering does not support component tags; <Counter> cannot be rendered server-side at 3:16\./
   );
   assert.throws(
     () => compileServer('<main><p>1 + 2 = {1 2}</p></main>'),
@@ -276,7 +280,10 @@ test('compileServer rejects the non-server-renderable surface with located error
 test('compileServer errors identify the input file when compiling from a file', () => {
   const error = (() => {
     try {
-      compileServer('<main>{#if ready}<p>yes</p>{/if}</main>', { filePath: 'src/pages/Home.wizz' });
+      compileServer(
+        '<script>\nimport Counter from "./Counter.wizz";\n</script><main><Counter /></main>',
+        { filePath: 'src/pages/Home.wizz' }
+      );
     } catch (caught) {
       return caught;
     }
@@ -286,8 +293,9 @@ test('compileServer errors identify the input file when compiling from a file', 
   assert.equal(error.filePath, 'src/pages/Home.wizz');
   assert.equal(
     error.message,
-    'Server rendering does not support {#if} conditional blocks at src/pages/Home.wizz:1:7.\n\n' +
-      'src/pages/Home.wizz:1:7\n1 | <main>{#if ready}<p>yes</p>{/if}</main>\n  |       ^'
+    'Server rendering does not support component tags; <Counter> cannot be rendered server-side at ' +
+      'src/pages/Home.wizz:3:16. No server-renderable build was provided for this import.\n\n' +
+      'src/pages/Home.wizz:3:16\n3 | </script><main><Counter /></main>\n  |                ^'
   );
 });
 
@@ -300,10 +308,11 @@ test('the hydratable option exports hydrateComponent and gates the surface', () 
   assert.match(source, /export default function mountComponent\(target, props = \{\}\)/);
   assert.match(source, /export function hydrateComponent\(target, props = \{\}, state = null\)/);
 
-  // Blocks are rejected before generation, mirroring the server target.
+  // The hydration surface keeps its own gate for blocks until nested
+  // hydration lands; the message is the hydration generator's.
   assert.throws(
     () => compile('<main>{#if ready}<p>yes</p>{/if}</main>', { hydratable: true }),
-    /Server rendering does not support \{#if\} conditional blocks at 1:7\./
+    /Hydration does not support IfBlock nodes\./
   );
 
   // Default compiles never carry the hydration surface.

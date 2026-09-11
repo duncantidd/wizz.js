@@ -344,9 +344,15 @@ test('keeps pages that fail the server-renderability gate client-only without fa
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
   const inputDirectory = path.join(projectDirectory, 'src');
   const outputDirectory = path.join(projectDirectory, 'dist');
+  // An import whose child has no vouched server build keeps the page
+  // client-only; the note chains the unvouched-import reason.
   writeFile(
     path.join(inputDirectory, 'pages', 'Static.wizz'),
-    '<script>let flag = true;</script><main>{#if flag}<p>On</p>{/if}</main>'
+    '<script>\nimport Counter from "../components/Counter.wizz";\n</script><main><Counter /></main>'
+  );
+  writeFile(
+    path.join(inputDirectory, 'components', 'Counter.wizz'),
+    '<script>let count = 0;</script><div><button>Clicks: {count}</button></div>'
   );
 
   const logger = createLogger();
@@ -354,7 +360,7 @@ test('keeps pages that fail the server-renderability gate client-only without fa
 
   // Ineligibility is not a build failure: the client module compiles, only
   // the server target rejects the surface.
-  assert.deepEqual(result, { compiledCount: 1, failedCount: 0 });
+  assert.deepEqual(result, { compiledCount: 2, failedCount: 0 });
   assert.match(
     fs.readFileSync(path.join(outputDirectory, 'pages', 'Static.js'), 'utf8'),
     /^export default function mountComponent\(target, props = \{\}\)/m
@@ -381,7 +387,8 @@ test('keeps pages that fail the server-renderability gate client-only without fa
   const notices = logger.messages.filter((message) => message.startsWith('Note: server rendering skipped for'));
   assert.equal(notices.length, 1);
   assert.match(notices[0], new RegExp(`Note: server rendering skipped for ${path.join(inputDirectory, 'pages', 'Static.wizz').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} —`));
-  assert.match(notices[0], /Server rendering does not support \{#if\} conditional blocks at .*1:\d+\./);
+  assert.match(notices[0], /<Counter> cannot be rendered server-side at .*:\d+:\d+\./);
+  assert.match(notices[0], /No server-renderable build was provided for this import\./);
   assert.match(notices[0], /Serving the client build only\.$/);
 });
 
