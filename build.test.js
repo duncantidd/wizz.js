@@ -339,27 +339,28 @@ test('emits the App root route when the project has no pages directory', (t) => 
   );
 });
 
-test('keeps pages that fail the server-renderability gate client-only without failing the build', (t) => {
+test('keeps pages whose imported component fails the gate client-only, chaining the deepest reason', (t) => {
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
   const inputDirectory = path.join(projectDirectory, 'src');
   const outputDirectory = path.join(projectDirectory, 'dist');
-  // An import whose child has no vouched server build keeps the page
-  // client-only; the note chains the unvouched-import reason.
+  // The imported component itself has an unvouched import (its own child
+  // build does not exist), which keeps the importing page client-only too;
+  // the note chains the child's own gate failure as the underlying reason.
   writeFile(
     path.join(inputDirectory, 'pages', 'Static.wizz'),
     '<script>\nimport Counter from "../components/Counter.wizz";\n</script><main><Counter /></main>'
   );
   writeFile(
     path.join(inputDirectory, 'components', 'Counter.wizz'),
-    '<script>let count = 0;</script><div><button>Clicks: {count}</button></div>'
+    '<script>\nimport Ghost from "./Ghost.wizz";\n</script><div><Ghost /></div>'
   );
 
   const logger = createLogger();
   const result = buildProject(inputDirectory, outputDirectory, logger);
 
-  // Ineligibility is not a build failure: the client module compiles, only
-  // the server target rejects the surface.
+  // Ineligibility is not a build failure: the client modules compile, only
+  // the server targets reject the surface.
   assert.deepEqual(result, { compiledCount: 2, failedCount: 0 });
   assert.match(
     fs.readFileSync(path.join(outputDirectory, 'pages', 'Static.js'), 'utf8'),
@@ -367,6 +368,9 @@ test('keeps pages that fail the server-renderability gate client-only without fa
   );
   assert.equal(fs.existsSync(path.join(outputDirectory, 'pages', 'Static.server.js')), false);
   assert.equal(fs.existsSync(path.join(outputDirectory, 'pages', 'Static.hydrate.js')), false);
+  // The ineligible child ships client-only as well.
+  assert.equal(fs.existsSync(path.join(outputDirectory, 'components', 'Counter.server.js')), false);
+  assert.equal(fs.existsSync(path.join(outputDirectory, 'components', 'Counter.hydrate.js')), false);
   assert.equal(
     fs.readFileSync(path.join(outputDirectory, 'runtime', 'routes.js'), 'utf8'),
     [
@@ -385,14 +389,48 @@ test('keeps pages that fail the server-renderability gate client-only without fa
   );
   assert.equal(logger.errors.length, 0);
   const notices = logger.messages.filter((message) => message.startsWith('Note: server rendering skipped for'));
-  assert.equal(notices.length, 1);
-  assert.match(notices[0], new RegExp(`Note: server rendering skipped for ${path.join(inputDirectory, 'pages', 'Static.wizz').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} —`));
-  assert.match(notices[0], /<Counter> cannot be rendered server-side at .*:\d+:\d+\./);
-  assert.match(notices[0], /No server-renderable build was provided for this import\./);
-  assert.match(notices[0], /Serving the client build only\.$/);
+  // Both files are ineligible and each reports its own reason.
+  assert.equal(notices.length, 2);
+  const pageNotice = notices.find((message) => message.includes(path.join('pages', 'Static.wizz')));
+  const componentNotice = notices.find((message) => message.includes(path.join('components', 'Counter.wizz')));
+  assert.ok(pageNotice && componentNotice);
+  assert.match(pageNotice, /<Counter> cannot be rendered server-side at .*:\d+:\d+\./);
+  // The page's reason chains the component's own failure, which chains the
+  // missing grandchild build two levels deep.
+  assert.match(pageNotice, /Underlying reason: Server rendering does not support component tags; <Ghost> cannot be rendered server-side at .*:\d+:\d+\./);
+  assert.match(componentNotice, /<Ghost> cannot be rendered server-side at .*:\d+:\d+\./);
+  assert.match(componentNotice, /No server-renderable build was provided for this import\./);
+  assert.match(pageNotice, /Serving the client build only\.$/);
 });
 
-test('does not emit server builds for non-route component files', (t) => {
+test('reports cyclic component imports as ineligibility instead of recursing forever', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(
+    path.join(inputDirectory, 'components', 'A.wizz'),
+    '<script>\nimport B from "./B.wizz";\n</script><div><B /></div>'
+  );
+  writeFile(
+    path.join(inputDirectory, 'components', 'B.wizz'),
+    '<script>\nimport A from "./A.wizz";\n</script><div><A /></div>'
+  );
+
+  const logger = createLogger();
+  const result = buildProject(inputDirectory, outputDirectory, logger);
+
+  // The cycle is a server-rendering ineligibility, not a client build failure.
+  assert.deepEqual(result, { compiledCount: 2, failedCount: 0 });
+  assert.equal(fs.existsSync(path.join(outputDirectory, 'components', 'A.server.js')), false);
+  assert.equal(fs.existsSync(path.join(outputDirectory, 'components', 'B.server.js')), false);
+  const notices = logger.messages.filter((message) => message.startsWith('Note: server rendering skipped for'));
+  assert.equal(notices.length, 2);
+  assert.match(notices[0], /Underlying reason: its import graph contains a cycle\./);
+  assert.match(notices[1], /Underlying reason: its import graph contains a cycle\./);
+});
+
+test('ships server builds for eligible component files so importing pages can render them', (t) => {
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
   const inputDirectory = path.join(projectDirectory, 'src');
@@ -402,12 +440,74 @@ test('does not emit server builds for non-route component files', (t) => {
 
   buildProject(inputDirectory, outputDirectory, createLogger());
 
+  // An eligible non-route component ships its server and hydratable builds
+  // beside the client module: a page's server module imports them.
   assert.equal(fs.existsSync(path.join(outputDirectory, 'components', 'Nav.js')), true);
-  assert.equal(fs.existsSync(path.join(outputDirectory, 'components', 'Nav.server.js')), false);
-  assert.equal(fs.existsSync(path.join(outputDirectory, 'components', 'Nav.hydrate.js')), false);
+  assert.match(
+    fs.readFileSync(path.join(outputDirectory, 'components', 'Nav.server.js'), 'utf8'),
+    /^export function renderComponent\(props = \{\}\)/m
+  );
+  assert.match(
+    fs.readFileSync(path.join(outputDirectory, 'components', 'Nav.hydrate.js'), 'utf8'),
+    /^export function hydrateComponent\(target, props = \{\}, state = null\)/m
+  );
+  // Components are never routes, so the manifest still excludes them.
   assert.doesNotMatch(
     fs.readFileSync(path.join(outputDirectory, 'runtime', 'routes.js'), 'utf8'),
     /Nav/
+  );
+});
+
+test('vouches an eligible import graph so a component-importing page server-renders', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  // Counter is fully server-renderable, so the page rendering it is eligible
+  // through the import graph: the build vouches for the child and both files
+  // ship server builds.
+  writeFile(
+    path.join(inputDirectory, 'pages', 'Static.wizz'),
+    '<script>\nimport Counter from "../components/Counter.wizz";\n</script><main><Counter /></main>'
+  );
+  writeFile(
+    path.join(inputDirectory, 'components', 'Counter.wizz'),
+    '<script>let count = 0;</script><div><button>Clicks: {count}</button></div>'
+  );
+
+  const logger = createLogger();
+  const result = buildProject(inputDirectory, outputDirectory, logger);
+
+  assert.deepEqual(result, { compiledCount: 2, failedCount: 0 });
+  assert.equal(logger.errors.length, 0);
+  assert.equal(logger.messages.filter((message) => message.startsWith('Note: server rendering skipped for')).length, 0);
+  assert.match(
+    fs.readFileSync(path.join(outputDirectory, 'pages', 'Static.server.js'), 'utf8'),
+    /^import \* as __wizzServer_Counter from "\.\.\/components\/Counter\.server\.js";/m
+  );
+  assert.match(
+    fs.readFileSync(path.join(outputDirectory, 'components', 'Counter.server.js'), 'utf8'),
+    /^export function renderComponent\(props = \{\}\)/m
+  );
+  assert.match(
+    fs.readFileSync(path.join(outputDirectory, 'pages', 'Static.hydrate.js'), 'utf8'),
+    /^import \* as __wizzHydrate_Counter from "\.\.\/components\/Counter\.hydrate\.js";/m
+  );
+  assert.equal(
+    fs.readFileSync(path.join(outputDirectory, 'runtime', 'routes.js'), 'utf8'),
+    [
+      '// Generated by Wizz. Edits will be overwritten.',
+      'export const pageModules = [',
+      '  {',
+      '    "filePath": "pages/Static.wizz",',
+      '    "modulePath": "../pages/Static.js",',
+      '    "routePath": "/static",',
+      '    "serverModulePath": "../pages/Static.server.js",',
+      '    "hydratableModulePath": "../pages/Static.hydrate.js"',
+      '  }',
+      '];',
+      ''
+    ].join('\n')
   );
 });
 
