@@ -163,6 +163,27 @@ test('emits the branch-aware walk for if blocks', () => {
   assert.match(source, /\} else \{/);
 });
 
+test('declares component-tag refs at hydrateCreate scope for tags inside branches', () => {
+  const source = generateHydratable(
+    '<script>\nimport Counter from "./Counter.wizz";\nlet flag = true;\n</script><main>{#if flag}<Counter />{/if}</main>',
+    { componentServerRenderable: { Counter: true } }
+  );
+
+  // The ref is declared before the branch wrapper and only assigned inside
+  // it: the adoption block after the walk references it at function scope,
+  // so an inline `let` inside the branch would be out of scope there.
+  const hydrationStart = source.indexOf('function hydrateCreate(');
+  const declarationIndex = source.indexOf('let node_1 = null;', hydrationStart);
+  const branchIndex = source.indexOf('if (flag) {', hydrationStart);
+  const adoptionIndex = source.indexOf('.hydrateRoot(node_1,');
+  assert.ok(declarationIndex !== -1, 'component ref declared at function scope');
+  assert.ok(branchIndex !== -1 && adoptionIndex !== -1);
+  assert.ok(declarationIndex < branchIndex, 'declaration precedes the branch wrapper');
+  assert.ok(branchIndex < adoptionIndex, 'adoption follows the branch');
+  // The in-branch assignment must not redeclare the ref.
+  assert.doesNotMatch(source.slice(branchIndex, adoptionIndex), /let node_1/);
+});
+
 test('emits per-list machinery for each blocks', () => {
   const source = generateHydratable(
     '<script>let fruits = [{ id: 1, name: "apple" }];</script><ul>{#each fruits as fruit (fruit.id)}<li>{fruit.name}</li>{/each}</ul>'

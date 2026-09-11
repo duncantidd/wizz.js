@@ -85,6 +85,32 @@ function generateHydrationFunction(templateAST, componentImports = []) {
   builder.add('  const childComponents = [];');
   builder.add('  const listUpdates = [];');
 
+  // Component-tag refs are declared at hydrateCreate scope up front: the
+  // adoption block after the walk references them at function scope, but a
+  // tag inside an if-branch is visited inside that branch, where an inline
+  // `let` would be out of scope by then.
+  const componentRefs = new Map();
+  const preAllocateRefs = (node) => {
+    if (node.type === 'Element') {
+      if (importedNames.has(node.name)) {
+        componentRefs.set(node, nextReference());
+        return;
+      }
+      (node.children || []).forEach(preAllocateRefs);
+      return;
+    }
+    if (node.type === 'IfBlock') {
+      (node.consequent || []).forEach(preAllocateRefs);
+      (node.alternate || []).forEach(preAllocateRefs);
+    }
+    // EachBlock bodies cannot contain component tags (the server-renderable
+    // gate refuses them), so no allocation is needed there.
+  };
+  (templateAST.children || []).forEach(preAllocateRefs);
+  for (const componentRef of componentRefs.values()) {
+    builder.add(`  let ${componentRef} = null;`);
+  }
+
   // The mount point's first element is adopted as the component root; a
   // self-adopted root (nested hydration) is the given node itself, which is
   // already in the parent's DOM at the component's position.
@@ -162,8 +188,9 @@ function generateHydrationFunction(templateAST, componentImports = []) {
     if (componentNode.componentId == null) {
       throw new SyntaxError(`Component <${componentNode.name}> is missing its componentId; run the analyzer before generation.`);
     }
-    const ref = nextReference();
-    builder.add(`  let ${ref} = null;`);
+    // The ref was pre-allocated at function scope (see componentRefs above);
+    // here it is only assigned at the tag's child position.
+    const ref = componentRefs.get(componentNode);
     builder.add('  if (problems.length === 0) {');
     builder.add(`    ${ref} = ${parentRef}.childNodes[${cursorRef}];`);
     builder.add(`    if (!${ref} || ${ref}.nodeType !== 1) {`);
