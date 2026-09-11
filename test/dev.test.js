@@ -365,6 +365,50 @@ test('serves server-rendered route documents with the state script as a sibling'
   assert.match(await serverBuild.text(), /^export function renderComponent\(props = \{\}\)/m);
 });
 
+test('server-renders component tags and blocks through the import graph', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), DOCUMENT_SHELL);
+  fs.mkdirSync(path.join(projectDirectory, 'src'), { recursive: true });
+  // A Contact-style page: an imported prop-driven component plus an {#if}
+  // block — both server-renderable since milestone 14.
+  writeFile(
+    path.join(projectDirectory, 'src', 'App.wizz'),
+    '<script>\nimport TestProps from "./components/TestProps.wizz";\nlet myName = "Paul";\nlet ready = false;\n</script><main><TestProps name={myName} />{#if ready}<p>On</p>{:else}<p>Off</p>{/if}</main>'
+  );
+  writeFile(
+    path.join(projectDirectory, 'src', 'components', 'TestProps.wizz'),
+    '<script>export let name = "";</script><p>{name}</p>'
+  );
+
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger: createLogger() });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  const document = await (await fetch(`${url}/`)).text();
+  // The child's rendered root sits at the component-tag position inside #app,
+  // and the untaken if branch renders the else content between the block
+  // markers.
+  assert.match(document, /<div id="app"><main><p data-wizz-id="1">Paul<\/p><!-- --><p>Off<\/p><!-- --><\/main><\/div>/);
+  // The child's state slice travels under the reserved __wizz key; a
+  // props-only child contributes an empty slice (props are re-applied by the
+  // parent, never serialized).
+  assert.match(document, /<script type="application\/wizz-state">\{"myName":"Paul","ready":false,"__wizz":\{"components":\{"1":\{\}\}\}\}<\/script>/);
+
+  // Both server-side builds of the imported component are served.
+  const childServerBuild = await fetch(`${url}/components/TestProps.server.js`);
+  assert.equal(childServerBuild.status, 200);
+  assert.match(await childServerBuild.text(), /^export function renderComponent\(props = \{\}\)/m);
+  const childHydrateBuild = await fetch(`${url}/components/TestProps.hydrate.js`);
+  assert.equal(childHydrateBuild.status, 200);
+
+  // The page's hydratable build imports the child's hydratable module for
+  // nested adoption.
+  const pageHydrateBuild = await fetch(`${url}/App.hydrate.js`);
+  assert.equal(pageHydrateBuild.status, 200);
+  assert.match(await pageHydrateBuild.text(), /import \* as __wizzHydrate_TestProps from "\.\/components\/TestProps\.hydrate\.js";/);
+});
+
 test('renders fresh server modules after a watch rebuild (no stale cache)', async (t) => {
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));

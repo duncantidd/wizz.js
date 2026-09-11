@@ -371,6 +371,138 @@ test('a hostile __proto__ state key cannot pollute prototypes while hydrating', 
   component.destroy();
 });
 
+// Compiles the parent and child of a nested delivery into one temporary ESM
+// project, so the generated cross-module imports (`__wizzServer_*` and
+// `__wizzHydrate_*`) resolve through the real module loader exactly as they
+// do in a built application.
+async function loadNestedModules(t, parentSource, childSource) {
+  const projectDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-nested-hydration-'));
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(projectDirectory, 'package.json'), '{"type":"module"}');
+
+  const childPath = path.join(projectDirectory, 'Counter.wizz');
+
+  // Child builds first: the parent's generated modules import them.
+  const { source: childServerSource } = compileServer(childSource, { filePath: childPath });
+  fs.writeFileSync(path.join(projectDirectory, 'Counter.server.js'), childServerSource);
+  const { source: childClientSource } = compile(childSource, { filePath: childPath });
+  fs.writeFileSync(path.join(projectDirectory, 'Counter.js'), childClientSource);
+  const { source: childHydrateSource } = compile(childSource, { filePath: childPath, hydratable: true });
+  fs.writeFileSync(path.join(projectDirectory, 'Counter.hydrate.js'), childHydrateSource);
+
+  const { source: serverSource } = compileServer(parentSource, {
+    filePath: 'test/nested/Page.wizz',
+    componentServerRenderable: { Counter: true }
+  });
+  fs.writeFileSync(path.join(projectDirectory, 'server.js'), serverSource);
+  const { source: clientSource } = compile(parentSource, {
+    filePath: 'test/nested/Page.wizz',
+    hydratable: true,
+    componentServerRenderable: { Counter: true }
+  });
+  fs.writeFileSync(path.join(projectDirectory, 'client.js'), clientSource);
+
+  const bust = `?test=${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const serverModule = await import(`${pathToFileURL(path.join(projectDirectory, 'server.js')).href}${bust}`);
+
+  const document = createEnhancedDocument();
+  const originalDocument = global.document;
+  global.document = document;
+  t.after(() => { global.document = originalDocument; });
+  const clientModule = await import(`${pathToFileURL(path.join(projectDirectory, 'client.js')).href}${bust}`);
+
+  const metricsBefore = { ...document.metrics };
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(message);
+  t.after(() => { console.warn = originalWarn; });
+
+  return {
+    document,
+    clientModule,
+    metricsBefore,
+    warnings,
+    render() {
+      const { html, state } = serverModule.renderComponent();
+      return { html, state, stateScript: serverModule.serializeInitialState(state) };
+    }
+  };
+}
+
+test('nested component delivery hydrates in place with zero recreation', async (t) => {
+  // The motivating case: any page importing a component used to go
+  // client-only. Now the page server-renders the child's markup and both
+  // templates adopt their delivered nodes.
+  const parentSource = '<script>\nimport Counter from "./Counter.wizz";\nlet greeting = "Hi";\n</script><main><h1>{greeting}</h1><Counter /></main>';
+  const childSource = '<script>let count = 3; function increment() { count += 1; }</script><div><button on:click={increment}>Clicks: {count}</button></div>';
+  const { document, clientModule, metricsBefore, warnings, render } = await loadNestedModules(t, parentSource, childSource);
+
+  const { html, state, stateScript } = render();
+  // The child's rendered root occupies the component-tag position, and the
+  // child's state rides under the reserved __wizz key. Elements holding
+  // reactive children carry their analyzer-assigned data-wizz-id in both
+  // templates (each template's own counter).
+  assert.equal(html, '<main><h1 data-wizz-id="1">Hi</h1><div><button data-wizz-id="1">Clicks: <!-- -->3</button></div></main>');
+  assert.deepEqual(state, { greeting: 'Hi', __wizz: { components: { '1': { count: 3 } } } });
+  assert.deepEqual(state, JSON.parse(stateScript.match(/^<script type="application\/wizz-state">(.*)<\/script>$/)[1]));
+
+  const target = deliverMarkup(document, html);
+  const parent = clientModule.hydrateComponent(target, {}, state);
+
+  assert.equal(warnings.length, 0);
+  assert.ok(parent);
+  // Zero recreation across BOTH templates: parent shell and child root are
+  // all delivered nodes.
+  assert.equal(document.metrics.elements, metricsBefore.elements);
+  assert.equal(document.metrics.textNodes, metricsBefore.textNodes);
+  assert.equal(document.metrics.addedListeners, metricsBefore.addedListeners + 1);
+
+  // The child's handler works on its adopted nodes (the walk stripped the
+  // marker, so the expression text sits at index 1).
+  const button = target.childNodes[0].childNodes[1].childNodes[0];
+  assert.equal(button.name, 'button');
+  button.dispatchEvent('click');
+  await flushUpdates();
+  assert.equal(button.childNodes[1].nodeValue, '4');
+  // Exactly three reactive writes so far: the parent's initial greeting
+  // convergence, the child's initial count convergence, and the click.
+  assert.equal(document.metrics.textWrites, metricsBefore.textWrites + 3);
+
+  // Nested destroy: the child leaves its self-adopted root in place and the
+  // parent's teardown removes the whole subtree at once.
+  parent.destroy();
+  assert.deepEqual(target.childNodes, []);
+  assert.equal(document.metrics.removedListeners, 1);
+});
+
+test('nested prop updates flow into the adopted child through setProps', async (t) => {
+  // The /contact case: a reactive parent binding re-applied to an adopted
+  // child flips the child's delivered text without recreating it.
+  const parentSource = '<script>\nimport Counter from "./Counter.wizz";\nlet myName = "Paul";\nfunction rename() { myName = "Duncan"; }\n</script><main><button on:click={rename}>Go</button><Counter name={myName} /></main>';
+  const childSource = '<script>export let name = "";</script><p>{name}</p>';
+  const { document, clientModule, metricsBefore, warnings, render } = await loadNestedModules(t, parentSource, childSource);
+
+  const { html, state } = render();
+  assert.equal(html, '<main><button>Go</button><p data-wizz-id="1">Paul</p></main>');
+
+  const target = deliverMarkup(document, html);
+  const parent = clientModule.hydrateComponent(target, {}, state);
+
+  assert.equal(warnings.length, 0);
+  assert.equal(document.metrics.elements, metricsBefore.elements);
+  assert.equal(document.metrics.textNodes, metricsBefore.textNodes);
+
+  const button = target.childNodes[0].childNodes[0];
+  button.dispatchEvent('click');
+  await flushUpdates();
+  // The child's adopted <p> text flipped via setProps, not recreation.
+  assert.equal(target.childNodes[0].childNodes[1].childNodes[0].nodeValue, 'Duncan');
+  assert.equal(document.metrics.elements, metricsBefore.elements);
+
+  parent.destroy();
+  assert.deepEqual(target.childNodes, []);
+});
+
 test('escaping survives the full round trip for hostile text and attribute content', () => {
   // Top-level script strings are trusted, but their output still passes
   // through the escaping boundary: markup characters can never escape their
