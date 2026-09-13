@@ -1,0 +1,15 @@
+<article>
+  <h2>Card heading</h2>
+  <p>Styled by Card.</p>
+</article>
+
+<wizz:style>
+  article {
+    border: 1px solid #ccc;
+    padding: 8px;
+  }
+
+  h2 {
+    font-size: 24px;
+  }
+</wizz:style>

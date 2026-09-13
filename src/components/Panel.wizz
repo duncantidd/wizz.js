@@ -1,0 +1,15 @@
+<section>
+  <h2>Panel heading</h2>
+  <p>Styled by Panel.</p>
+</section>
+
+<wizz:style>
+  section {
+    background: #f4f4f4;
+    padding: 8px;
+  }
+
+  h2 {
+    font-size: 30px;
+  }
+</wizz:style>
