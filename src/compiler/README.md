@@ -70,13 +70,21 @@ const { source } = compileServer(
 );
 
 // The module exports:
-//   renderComponent(props = {}) -> { html, state }
+//   renderComponent(props = {}, options = {}) -> { html, head, state }
 //   serializeInitialState(state) -> '<script type="application/wizz-state">…</script>'
+// `head` exists only when the component (or a rendered child) declares
+// <wizz:head>; head-free pages return exactly { html, state }.
 ```
 
 The server-renderable surface covers everything with a deterministic initial rendering: the root element, static markup, text interpolations, dynamic attributes, top-level props, the initially-taken `{#if}` branch, `{#each}` lists (each bodies keep the browser target's restrictions: exactly one root element, no components, no `on:` directives), and imported component tags. Because a component tag's renderability depends on the child's own template, the compile consults two gate options: `componentServerRenderable` maps import names to `true` when that child's own server pipeline compiles (a missing entry conservatively rejects the tag), and `componentIneligibilityReasons` maps import names to the child's own failure so the thrown diagnostic chains the deepest blocking construct (`Underlying reason: …`). Remaining rejections — void elements with children, reactive names matching `__proto__` or the reserved `__wizz` prefix, malformed `on:` directives — carry located diagnostics. The author's top-level script runs verbatim and trusted on both targets; event handlers and lifecycle hooks are client-only, and author scripts that read browser globals fail `renderComponent()` at runtime (the caller's fallback applies).
 
 Component tags render recursively: the server module namespace-imports each rendered child's `.server.js` build and calls its `renderComponent()` with the evaluated props at the tag position; the child's state snapshot rides under the framework-reserved `__wizz` key (`state.__wizz.components["<componentId>"]`, emitted only when the template contains component tags — a static presence check, so a tag in an untaken branch still emits it).
+
+## Document Head
+
+A component can declare one top-level `<wizz:head>` block containing only `<title>`, `<meta>`, and `<link>` (anything else fails compilation with a located, file-aware diagnostic; the block is pruned from the template AST so it never renders into body markup). Expressions inside head reuse the body machinery: `<title>{title}</title>` text and dynamic attribute values evaluate at render time server-side and at mount time client-side; `on:` directives are skipped.
+
+On the server, `renderComponent()` gains the additive `head` field — the component's head markup followed by each rendered child's head in tree order, every node tagged `data-wizz-head-id="<ownerPath>"` (page `'r'`, child `'r/<componentId>'`) and `data-wizz-loc="<file>:<line>:<col>"` when the compile carries `filePath`. On the client, `mountComponent` builds and prepends head nodes to `document.head` (tagged `data-wizz-head`), `destroy` releases them, and hydration verifies the delivered head against compile-time expectations before adopting it in place — mismatch falls back to a fresh mount exactly like the body tree. Multiple `<title>` declarations resolve last-in-tree-wins with one development warning naming both locations; `<meta>`/`<link>` concatenate. Reactive head updates are deliberately out of scope — head follows navigation, not state changes.
 
 Escaping and delivery boundaries: text output escapes `&`, `<`, `>`; attribute values additionally escape `"`. Adjacent text-like children carry `<!-- -->` markers so browser parsing preserves the positional node layout client updates target. State serializes through `serializeInitialState()` with every `<` escaped; the delivery script is a sibling of the mount point, never a child.
 
@@ -126,15 +134,15 @@ The optional `options` value is normalized defensively. Omitting it, passing `nu
 
 ```js
 {
-  compiler: '1.5.0', // The compiler itself
-  syntax: '1.1.0',   // The component language contract
-  output: '1.5.0'    // The generated module contract
+  compiler: '1.6.0', // The compiler itself
+  syntax: '1.2.0',   // The component language contract
+  output: '1.6.0'    // The generated module contract
 }
 ```
 
-**What `syntax` covers.** The component language surface a `.wizz` file may use: template directives (`on:`, `{#if}`, `{:else}`, `{#each}` with keyed and keyless forms, imports, interpolation expressions, attributes on imported component tags, which pass as props) and the script boundary (reactive `let` declarations, `export let` prop declarations, named functions, lifecycle hooks). Within one `syntax` major version, any component that compiled before keeps compiling with the same meaning. New syntax may be added in a minor version; existing syntax never changes meaning without a major bump.
+**What `syntax` covers.** The component language surface a `.wizz` file may use: template directives (`on:`, `{#if}`, `{:else}`, `{#each}` with keyed and keyless forms, imports, interpolation expressions, attributes on imported component tags, which pass as props, and the root-level `<wizz:head>` block) and the script boundary (reactive `let` declarations, `export let` prop declarations, named functions, lifecycle hooks). Within one `syntax` major version, any component that compiled before keeps compiling with the same meaning. New syntax may be added in a minor version; existing syntax never changes meaning without a major bump.
 
-**What `output` covers.** The surface of every generated module: a default-exported `mountComponent(target, props)` factory that appends the component's root element to `target` and returns `{ setProps?, destroy() }` (the optional `setProps(next)` handle exists on components that declare props); `destroy()` running destroy hooks, destroying child components, removing tracked `on:` listeners, and removing the root from the target; and the `__wizzChildComponents`, `__wizzMountChildren`, and `__wizzListUpdates` root-node properties the framework consumes. Optionally — for compiles requested with `hydratable: true` — the module additionally exports `hydrateComponent(target, props, state)` and `hydrateRoot(rootNode, props, state)`, which adopt server-rendered markup through the documented hydration traversal (the latter adopting the given node itself, which is how nested components are adopted in place). Within one `output` major version, generated modules keep this surface and their runtime behavior. A test in `componentGenerator.test.js` pins this surface (byte-for-byte for default output), so a codegen change that breaks it fails the suite until the version is bumped deliberately.
+**What `output` covers.** The surface of every generated module: a default-exported `mountComponent(target, props)` factory that appends the component's root element to `target` and returns `{ setProps?, destroy() }` (the optional `setProps(next)` handle exists on components that declare props); `destroy()` running destroy hooks, destroying child components, releasing the component's head nodes, removing tracked `on:` listeners, and removing the root from the target; and the `__wizzChildComponents`, `__wizzMountChildren`, and `__wizzListUpdates` root-node properties the framework consumes. Optionally — for compiles requested with `hydratable: true` — the module additionally exports `hydrateComponent(target, props, state)` and `hydrateRoot(rootNode, props, state)`, which adopt server-rendered markup through the documented hydration traversal (the latter adopting the given node itself, which is how nested components are adopted in place). Server modules export `renderComponent(props = {})` returning `{ html, state }`, gaining the additive `head` field (and the `options.headOwner` parameter) when the component or a rendered child declares `<wizz:head>`. Within one `output` major version, generated modules keep this surface and their runtime behavior. A test in `componentGenerator.test.js` pins this surface (byte-for-byte for default output), so a codegen change that breaks it fails the suite until the version is bumped deliberately.
 
 **Bump rules.** A breaking change to a contract bumps its major version and the compiler's major version. Additive capabilities bump the affected minor version. Fixes bump patch versions. `version.test.js` pins the current values, so a bump can only happen by editing `version.js` and its test together.
 
@@ -144,7 +152,7 @@ The optional `options` value is normalized defensively. Omitting it, passing `nu
 - Every generated module self-identifies with a first-line comment stamped from the table:
 
   ```js
-  // Generated by Wizz 1.5.0 (component syntax 1.1.0, generated output 1.5.0). Edits will be overwritten.
+  // Generated by Wizz 1.6.0 (component syntax 1.2.0, generated output 1.6.0). Edits will be overwritten.
   ```
 
   Server modules stamp the same table with a `server output` label.
