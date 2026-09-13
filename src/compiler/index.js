@@ -97,7 +97,11 @@ function compileServer(source, options = {}) {
     componentServerRenderable: optionObject.componentServerRenderable,
     componentIneligibilityReasons: optionObject.componentIneligibilityReasons,
     // Forwarded for generated diagnostics (head locations), not the gate.
-    filePath
+    filePath,
+    // Decorates child `.server.js` import specifiers so a development
+    // server's in-process module cache re-evaluates the child graph after a
+    // rebuild (empty for production builds, which emit clean specifiers).
+    moduleQuery: optionObject.moduleQuery
   };
 
   try {

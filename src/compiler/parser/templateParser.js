@@ -6,6 +6,13 @@ const HEAD_BLOCK_NAME = 'wizz:head';
 // authoring form) and can never receive a closing tag.
 const HEAD_CHILD_ELEMENTS = new Set(['title', 'meta', 'link']);
 const HEAD_VOID_ELEMENTS = new Set(['meta', 'link']);
+// The framework-namespaced style block for scoped component stylesheets.
+// Colon spelling matches <wizz:head>; the tokenizer raw-texts its body, so
+// CSS braces, colons, and quotes never reach the expression lexer.
+const STYLE_BLOCK_NAME = 'wizz:style';
+// A plain <style> keeps HTML's global-stylesheet meaning in ordinary markup,
+// so it is never silently accepted as the scoped form.
+const PLAIN_STYLE_ELEMENT_NAME = 'style';
 
 function parseTemplate(tokens) {
   // The root of our AST
@@ -44,6 +51,24 @@ function parseTemplate(tokens) {
           headDepth += 1;
           break;
         }
+        if (token.name === STYLE_BLOCK_NAME) {
+          if (currentParent.type !== 'Root') {
+            throw new SyntaxError(`<wizz:style> must be a top-level block; it cannot be nested inside <${currentParent.name || currentParent.type}> at ${at}.`);
+          }
+          if (token.attributes && token.attributes.length > 0) {
+            throw new SyntaxError(`<wizz:style> does not accept attributes at ${at}.`);
+          }
+          if (root.children.some((child) => child.type === 'StyleBlock')) {
+            throw new SyntaxError(`A component can declare only one <wizz:style> block at ${at}.`);
+          }
+          const styleBlock = { type: 'StyleBlock', name: 'wizz:style', value: '', loc: token.loc };
+          currentParent.children.push(styleBlock);
+          stack.push(styleBlock);
+          break;
+        }
+        if (currentParent.type === 'StyleBlock') {
+          throw new SyntaxError(`<${token.name}> is not allowed inside <wizz:style> — style content is raw CSS at ${at}.`);
+        }
         if (headDepth > 0) {
           // Inside a head block the only element ever pushed onto the stack is
           // <title> (meta and link are void), so a further open tag under an
@@ -64,6 +89,9 @@ function parseTemplate(tokens) {
           currentParent.children.push(element);
           if (!HEAD_VOID_ELEMENTS.has(token.name)) stack.push(element);
           break;
+        }
+        if (token.name === PLAIN_STYLE_ELEMENT_NAME) {
+          throw new SyntaxError(`Plain <style> blocks are not supported — use <wizz:style> for scoped component styles at ${at}.`);
         }
         const element = {
           type: 'Element',
@@ -110,6 +138,21 @@ function parseTemplate(tokens) {
           // Do NOT push to stack because it immediately closes
           break;
         }
+        if (token.name === STYLE_BLOCK_NAME) {
+          if (currentParent.type !== 'Root') {
+            throw new SyntaxError(`<wizz:style> must be a top-level block; it cannot be nested inside <${currentParent.name || currentParent.type}> at ${at}.`);
+          }
+          if (token.attributes && token.attributes.length > 0) {
+            throw new SyntaxError(`<wizz:style> does not accept attributes at ${at}.`);
+          }
+          if (root.children.some((child) => child.type === 'StyleBlock')) {
+            throw new SyntaxError(`A component can declare only one <wizz:style> block at ${at}.`);
+          }
+          // An empty style block is a harmless no-op; it carries no CSS.
+          currentParent.children.push({ type: 'StyleBlock', name: 'wizz:style', value: '', loc: token.loc });
+          // Do NOT push to stack because it immediately closes
+          break;
+        }
         if (headDepth > 0) {
           if (!HEAD_CHILD_ELEMENTS.has(token.name)) {
             throw new SyntaxError(`<${token.name}> is not allowed inside <wizz:head> — only <title>, <meta>, and <link> are supported at ${at}.`);
@@ -125,6 +168,9 @@ function parseTemplate(tokens) {
           // Void or self-closing: never pushed onto the stack
           break;
         }
+        if (token.name === PLAIN_STYLE_ELEMENT_NAME) {
+          throw new SyntaxError(`Plain <style> blocks are not supported — use <wizz:style> for scoped component styles at ${at}.`);
+        }
         const element = {
           type: 'Element',
           name: token.name,
@@ -138,6 +184,12 @@ function parseTemplate(tokens) {
       }
 
       case 'Text': {
+        if (currentParent.type === 'StyleBlock') {
+          // Raw CSS from the tokenizer's raw-text mode, appended verbatim —
+          // whitespace included; the extraction step decides final trimming.
+          currentParent.value += token.value;
+          break;
+        }
         if (headDepth > 0 && currentParent.type === 'HeadBlock') {
           // Whitespace between head elements is formatting, not content; only
           // the three allowed elements may appear as direct head children.
@@ -153,6 +205,12 @@ function parseTemplate(tokens) {
       }
 
       case 'Expression': {
+        if (currentParent.type === 'StyleBlock') {
+          // Unreachable through tokenize() — raw-text mode keeps expressions
+          // out of style bodies — but guards hand-built token streams so a
+          // future tokenizer regression fails here with a clear diagnostic.
+          throw new SyntaxError(`Expressions are not allowed inside <wizz:style> — style content is opaque CSS at ${at}.`);
+        }
         if (headDepth > 0 && currentParent.type === 'HeadBlock') {
           // Head follows navigation, not state changes: neither block
           // directives nor bare expression text are head children.

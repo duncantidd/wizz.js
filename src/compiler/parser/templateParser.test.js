@@ -286,3 +286,108 @@ test('reports unclosed head blocks and nested unclosed titles', () => {
     /Unclosed tag <title> starting at 1:12\./
   );
 });
+
+test('parses a top-level wizz:style block with raw CSS preserved', () => {
+  const source = '<wizz:style>\n  h2 {\n    font-size: 30px; /* {not an expression} */\n    content: "a } b";\n  }\n</wizz:style><main>Body</main>';
+  const ast = parseTemplate(tokenize(source));
+
+  const style = ast.children[0];
+  assert.equal(style.type, 'StyleBlock');
+  assert.equal(style.name, 'wizz:style');
+  assert.equal(style.value, '\n  h2 {\n    font-size: 30px; /* {not an expression} */\n    content: "a } b";\n  }\n');
+  assert.equal(style.loc.start.line, 1);
+  assert.equal(style.loc.start.column, 1);
+  // The block is a sibling of body markup; body parsing is unaffected.
+  assert.equal(ast.children[1].type, 'Element');
+  assert.equal(ast.children[1].name, 'main');
+});
+
+test('keeps every raw-text character of style content, whitespace included', () => {
+  const source = '<wizz:style>@media (min-width: 40em) {\n  a:hover { color: red }\n}\n</wizz:style>';
+  const ast = parseTemplate(tokenize(source));
+  assert.equal(ast.children[0].value, '@media (min-width: 40em) {\n  a:hover { color: red }\n}\n');
+});
+
+test('accepts a self-closing empty wizz:style block', () => {
+  const ast = parseTemplate(tokenize('<wizz:style /><main>Body</main>'));
+  assert.deepEqual(
+    { type: ast.children[0].type, name: ast.children[0].name, value: ast.children[0].value },
+    { type: 'StyleBlock', name: 'wizz:style', value: '' }
+  );
+});
+
+test('rejects a wizz:style block nested inside an element', () => {
+  assert.throws(
+    () => parseTemplate(tokenize('<main><wizz:style>h2 {}</wizz:style></main>')),
+    /<wizz:style> must be a top-level block; it cannot be nested inside <main> at 1:7\./
+  );
+});
+
+test('rejects a wizz:style block inside an each body', () => {
+  assert.throws(
+    () => parseTemplate(tokenize('{#each items as item}<wizz:style>h2 {}</wizz:style>{/each}')),
+    /<wizz:style> must be a top-level block; it cannot be nested inside <EachBlock> at 1:22\./
+  );
+});
+
+test('rejects attributes on a wizz:style block', () => {
+  assert.throws(
+    () => parseTemplate(tokenize('<wizz:style media="print">h2 {}</wizz:style>')),
+    /<wizz:style> does not accept attributes at 1:1\./
+  );
+});
+
+test('rejects a second wizz:style block', () => {
+  assert.throws(
+    () => parseTemplate(tokenize('<wizz:style>h2 {}</wizz:style><wizz:style>p {}</wizz:style>')),
+    /A component can declare only one <wizz:style> block at 1:31\./
+  );
+});
+
+test('rejects a plain style element with a diagnostic pointing at wizz:style', () => {
+  assert.throws(
+    () => parseTemplate(tokenize('<main><style>h2 { color: red }</style></main>')),
+    /Plain <style> blocks are not supported — use <wizz:style> for scoped component styles at 1:7\./
+  );
+  assert.throws(
+    () => parseTemplate(tokenize('<style />')),
+    /Plain <style> blocks are not supported — use <wizz:style> for scoped component styles at 1:1\./
+  );
+});
+
+test('reports unclosed style blocks at the parser level', () => {
+  // Hand-built token stream: the tokenizer fails earlier on real unclosed
+  // input; this pins the parser's own guard for any token source.
+  const openTag = {
+    type: 'OpenTag',
+    name: 'wizz:style',
+    attributes: [],
+    start: 0,
+    end: 12,
+    loc: { start: { offset: 0, line: 1, column: 1 }, end: { offset: 12, line: 1, column: 13 } }
+  };
+  assert.throws(
+    () => parseTemplate([openTag]),
+    /Unclosed tag <wizz:style> starting at 1:1\./
+  );
+});
+
+test('rejects expressions and elements inside style blocks', () => {
+  // Both are unreachable through tokenize() — raw-text mode keeps them out of
+  // style bodies — so these pin the parser guards against hand-built streams
+  // and future tokenizer regressions.
+  const openLoc = { start: { offset: 0, line: 1, column: 1 }, end: { offset: 12, line: 1, column: 13 } };
+  const innerLoc = { start: { offset: 12, line: 1, column: 13 }, end: { offset: 19, line: 1, column: 20 } };
+  const openTag = { type: 'OpenTag', name: 'wizz:style', attributes: [], start: 0, end: 12, loc: openLoc };
+  const expression = { type: 'Expression', value: 'title', start: 12, end: 19, loc: innerLoc };
+  const divTag = { type: 'OpenTag', name: 'div', attributes: [], start: 12, end: 17, loc: innerLoc };
+
+  assert.throws(
+    () => parseTemplate([openTag, expression]),
+    /Expressions are not allowed inside <wizz:style> — style content is opaque CSS at 1:13\./
+  );
+  assert.throws(
+    () => parseTemplate([openTag, divTag]),
+    /<div> is not allowed inside <wizz:style> — style content is raw CSS at 1:13\./
+  );
+});

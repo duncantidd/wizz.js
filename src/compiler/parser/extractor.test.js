@@ -41,3 +41,24 @@ test('returns null when the component declares no head block', () => {
   assert.equal(extractHeadBlock(ast), null);
   assert.equal(ast.children.length, 1);
 });
+
+test('extracts and prunes the top-level style block from the AST', () => {
+  const { extractStyleBlock } = require('./extractor');
+  const source = '<wizz:style>\n  h2 { font-size: 30px }\n</wizz:style><main>Body</main>';
+  const ast = integrateExpressions(parseTemplate(tokenize(source)));
+
+  const style = extractStyleBlock(ast);
+  assert.equal(style.type, 'StyleBlock');
+  assert.equal(style.name, 'wizz:style');
+  assert.equal(style.value, '\n  h2 { font-size: 30px }\n');
+  assert.equal(ast.children.length, 1);
+  assert.equal(ast.children[0].name, 'main');
+});
+
+test('returns null when the component declares no style block', () => {
+  const { extractStyleBlock } = require('./extractor');
+  const ast = integrateExpressions(parseTemplate(tokenize('<main>Body</main>')));
+
+  assert.equal(extractStyleBlock(ast), null);
+  assert.equal(ast.children.length, 1);
+});

@@ -11,6 +11,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Milestone 16 — Scoped Component Stylesheets
+
+#### Added
+
+- `<wizz:style>` blocks: a component may declare one top-level `<wizz:style>` block holding raw CSS text (a `StyleBlock` node, tokenized as a raw-text element parallel to `<script>` — CSS braces, colons, and quotes never reach the template expression lexer). The block is root-only, attribute-free, and mutually exclusive with elements/expression children per the parser guards; a second block, a nested block, a self-closing block with content, and any plain `<style>` element all fail compilation with a located, file-aware diagnostic pointing at `<wizz:style>`. The extractor prunes the block from the template AST before generation so it never renders into body markup, and the payload carries `style: { css, scope, loc }` (`src/compiler/parser/tokenizer.js`, `src/compiler/parser/templateParser.js`, `src/compiler/parser/extractor.js`, `src/compiler/parser/index.js`).
+- Deterministic scope hashing: a component's scope is an FNV-1a + djb2 mix over its full source (`Math.imul(fnv ^ djb2, 0x27d4eb2d) >>> 0`, base36 with an `s` prefix), computed by `computeStyleScope(source)` with no compile options — server and client always agree on a component's scope regardless of build flags (`src/compiler/parser/index.js`).
+- Minimal zero-dependency CSS scanner: `scopeCss(css, scope)` rewrites each selector's terminal compound — type selectors, `*`, and `&` gain the scope attribute appended (`h2 { … }` → `h2[data-wizz-s="<scope>"] { … }`), while `.class`, `#id`, `[attr]`, and pseudo-* terminals have it prepended — descending into `@media`/`@supports`/`@container` prelude blocks only (every other at-rule passes through verbatim). Brace matching, strings, and comments are literal-aware (a same-length mask keeps structure analysis honest while insertions preserve formatting), and `@keyframes` names are scope-suffixed with all `animation`/`animation-name` references rewritten to match. It is deliberately not a full CSS parser: unknown at-rules and malformed input are passed through rather than rejected (`src/compiler/analyzer/cssScanner.js`).
+- Scope attribute stamping: when a component has a style block, the analyzer stamps `data-wizz-s="<scope>"` on every element that component renders (imported component tags excluded — they carry their own component's scope), riding the same attribute-stamping path as `data-wizz-id`; an author-written `data-wizz-s` wins over the generated value, and style-free components keep byte-identical markup (`src/compiler/analyzer/idAssigner.js`).
+- Server style delivery: styled components inject one deduped `<style data-wizz-style="<scope>" data-wizz-loc="…">` per document — the server target threads a `__wizzStyleScopes` accumulator through component emission (page-created, shared with children via the options argument), so a component imported by several pages or rendered twice injects exactly once per document. Style tags ride the head run **without** a `data-wizz-head-id` delivery tag: runtime scope dedup makes compile-time slice expectations impossible, and the positional slice verification from milestone 15 is untouched. CSS text is escaped for raw-text delivery (`<` → `\3c `, entities do not work inside `<style>`) so a rule can never terminate the tag early. Styled-only components activate the head run gate (`src/compiler/generator/serverGenerator.js`).
+- Client style dedup and refcounting: `__wizzApplyHead` dedups `<style>` nodes by their `data-wizz-style` scope attribute — a fresh insert sets `data-wizz-refs="1"`, finding an existing copy (delivered by the server, or applied by an earlier mount) increments the refcount and reuses it instead of duplicating — and `__wizzReleaseHead` decrements on destroy, removing the stylesheet at zero. Hydration adoption reuses the same apply path, so server-delivered styles are adopted (refcounted, never recreated) and a hydration fallback's fresh apply adopts the delivered copy too. Orphaned delivered styles (the component never mounts client-side) are harmless dead weight; remounts adopt rather than duplicate because dedup is scope-based, not owner-based (`src/compiler/generator/componentGenerator.js`, `src/compiler/generator/hydrationGenerator.js`).
+- Production extraction: `wizz build` writes one `dist/app.css` carrying every compiled component's scoped rules in discovery order under per-file header comments (computed through the same `scopeCss` the generators use), and copies the project's document shell (probing the input directory, then its parent for the conventional `wizz build src dist` layout) with `<link rel="stylesheet" href="/app.css">` injected before `</head>` — leaving shells that already link `/app.css` untouched and shell-less projects on the old behavior with a logged note. Style-free projects write no stylesheet and copy the shell verbatim (`build.js`).
+
+#### Changed
+
+- The hydration generator's leftover-run check reads delivery tags loosely (`!= null`), so absent `data-wizz-head-id` attributes read as claimed identically in real DOMs (`null`) and test shims (`undefined`).
+- The document shell is now copied into the output directory by `wizz build` (previously hand-placed); `wizz dev` continues to require it at serve time.
+
+#### Fixed
+
+- Editing a child component no longer requires restarting `wizz dev`: each rebuild stamps child `.server.js` import specifiers with a fresh `?v=<timestamp>-<sequence>` query (a new `moduleQuery` compile option threaded from the dev server through `buildProject`/`compileServer` into the server generator), because Node's module cache keys on the full URL and queries never propagate through static imports — without the stamp, a rebuild re-evaluated only the page module while its cached children kept serving the first build's stale markup, scope hashes, and styles. Production builds omit the option and emit clean specifiers, byte-identical to before.
+
+#### Docs
+
+- ROADMAP §16 records the implementation notes; the compiler READMEs document the `StyleBlock` node, the raw-text style mode, the CSS scanner, scope stamping, and the style delivery/refcounting contract; STRUCTURE.md and the CHANGELOG are synced.
+
 ### Milestone 15 — Own the Document Head from Components
 
 #### Added

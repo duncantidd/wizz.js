@@ -55,4 +55,21 @@ function extractHeadBlock(ast) {
   return headBlock;
 }
 
-module.exports = { extractScriptBlock, extractHeadBlock };
+/**
+ * Removes the top-level <wizz:style> block (if any) from the template AST and
+ * returns it. Style content is opaque author CSS — never body markup — so the
+ * parser enforces the block at root level and every later stage (body DOM
+ * generation, the update pass, ID assignment) receives a tree with the block
+ * already pruned out. The block's raw CSS lives on its `value` field,
+ * whitespace and all; callers decide the final trimming.
+ * @param {Object} ast - The fully integrated Template AST (Root node)
+ * @returns {Object|null} The StyleBlock node, or null when the component declares no styles.
+ */
+function extractStyleBlock(ast) {
+  const index = ast.children.findIndex((child) => child.type === 'StyleBlock');
+  if (index === -1) return null;
+  const [styleBlock] = ast.children.splice(index, 1);
+  return styleBlock;
+}
+
+module.exports = { extractScriptBlock, extractHeadBlock, extractStyleBlock };

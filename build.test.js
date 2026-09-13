@@ -611,3 +611,162 @@ test('copies runtime modules without requiring component files', (t) => {
     fs.readFileSync(path.join(__dirname, 'src', 'runtime', 'main.js'), 'utf8')
   );
 });
+test('extracts styled component rules into app.css linked from the copied shell', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  // The motivating case: two components on one page with conflicting h2
+  // rules, plus an @media block and a @keyframes rule to prove the extracted
+  // CSS is scoped exactly like the injected <style> tags are.
+  writeFile(
+    path.join(inputDirectory, 'components', 'Card.wizz'),
+    '<div><h2>Card title</h2></div><wizz:style>h2 { font-size: 24px } @media (min-width: 600px) { h2 { font-size: 28px } }</wizz:style>'
+  );
+  writeFile(
+    path.join(inputDirectory, 'components', 'Panel.wizz'),
+    '<div><h2>Panel title</h2></div><wizz:style>h2 { font-size: 30px }\n@keyframes panel-in { from { opacity: 0 } }</wizz:style>'
+  );
+  writeFile(
+    path.join(inputDirectory, 'pages', 'Home.wizz'),
+    '<script>import Card from "../components/Card.wizz";\nimport Panel from "../components/Panel.wizz";</script><main><Card /><Panel /><h2>Page heading</h2></main>'
+  );
+  writeFile(path.join(inputDirectory, 'index.html'), [
+    '<!DOCTYPE html>',
+    '<html lang="en">',
+    '<head>',
+    '  <title>Showcase</title>',
+    '</head>',
+    '<body>',
+    '  <div id="app"></div>',
+    '</body>',
+    '</html>',
+    ''
+  ].join('\n'));
+
+  buildProject(inputDirectory, outputDirectory, createLogger());
+
+  const stylesheet = fs.readFileSync(path.join(outputDirectory, 'app.css'), 'utf8');
+  // Discovery order: components sort before pages, so Card precedes Panel;
+  // each block carries its source file header.
+  // The scanner preserves the author's formatting verbatim; only the
+  // selectors and keyframe names are rewritten.
+  assert.match(stylesheet, /\/\* components\/Card\.wizz \*\/\nh2\[data-wizz-s="[a-z0-9]+"\] \{ font-size: 24px \} @media \(min-width: 600px\) \{ h2\[data-wizz-s="[a-z0-9]+"\] \{ font-size: 28px \} \}/);
+  assert.match(stylesheet, /\/\* components\/Panel\.wizz \*\/\nh2\[data-wizz-s="[a-z0-9]+"\] \{ font-size: 30px \}\n@keyframes panel-in-[a-z0-9]+ \{ from \{ opacity: 0 \} \}/);
+  // The two conflicting h2 rules scope to different attributes.
+  const scopes = [...stylesheet.matchAll(/h2\[data-wizz-s="([^"]+)"\]/g)].map((match) => match[1]);
+  assert.equal(new Set(scopes).size, 2);
+  assert.equal(scopes.length, 3); // Card twice (base + media), Panel once
+
+  // The copied shell links the stylesheet before </head>.
+  const shell = fs.readFileSync(path.join(outputDirectory, 'index.html'), 'utf8');
+  const linkIndex = shell.indexOf('<link rel="stylesheet" href="/app.css">');
+  assert.ok(linkIndex !== -1, 'shell should link app.css');
+  assert.ok(linkIndex < shell.indexOf('</head>'), 'link should come before </head>');
+  assert.ok(shell.includes('<title>Showcase</title>'), 'shell content is preserved');
+  assert.ok(shell.includes('<div id="app"></div>'), 'mount point is preserved');
+});
+
+test('copies the document shell verbatim when no component has styles', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'App.wizz'), '<main><p>App</p></main>');
+  const shell = '<!DOCTYPE html>\n<html><head><title>Plain</title></head><body><div id="app"></div></body></html>';
+  writeFile(path.join(inputDirectory, 'index.html'), shell);
+
+  buildProject(inputDirectory, outputDirectory, createLogger());
+
+  assert.equal(fs.existsSync(path.join(outputDirectory, 'app.css')), false);
+  assert.equal(fs.readFileSync(path.join(outputDirectory, 'index.html'), 'utf8'), shell);
+});
+
+test('leaves an already-linked app.css reference alone', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(
+    path.join(inputDirectory, 'App.wizz'),
+    '<main><p>App</p></main><wizz:style>main { padding: 0 }</wizz:style>'
+  );
+  const shell = '<!DOCTYPE html>\n<html><head><link rel="stylesheet" href="/app.css"></head><body><div id="app"></div></body></html>';
+  writeFile(path.join(inputDirectory, 'index.html'), shell);
+
+  buildProject(inputDirectory, outputDirectory, createLogger());
+
+  // The stylesheet is still extracted, but the author's own link stands.
+  assert.match(fs.readFileSync(path.join(outputDirectory, 'app.css'), 'utf8'), /main\[data-wizz-s="[a-z0-9]+"\]/);
+  const builtShell = fs.readFileSync(path.join(outputDirectory, 'index.html'), 'utf8');
+  assert.equal(builtShell.split('/app.css').length - 1, 1); // the author's own link, unmodified
+  assert.equal((builtShell.match(/<link /g) || []).length, 1);
+});
+
+test('builds styled components without a document shell', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(
+    path.join(inputDirectory, 'App.wizz'),
+    '<main><p>App</p></main><wizz:style>main { padding: 0 }</wizz:style>'
+  );
+
+  const logger = createLogger();
+  const result = buildProject(inputDirectory, outputDirectory, logger);
+
+  // Existing behavior is preserved: no shell at the input root is not an
+  // error, and the dev server reports the missing shell at serve time.
+  assert.deepEqual(result, { compiledCount: 1, failedCount: 0 });
+  assert.match(fs.readFileSync(path.join(outputDirectory, 'app.css'), 'utf8'), /main\[data-wizz-s="[a-z0-9]+"\]/);
+  assert.equal(fs.existsSync(path.join(outputDirectory, 'index.html')), false);
+  assert.match(logger.messages.join('\n'), /no index\.html document shell was found/);
+});
+
+test('finds the document shell at the project root for the src layout', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  // The conventional layout: components in src/, index.html at the root.
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(
+    path.join(inputDirectory, 'App.wizz'),
+    '<main><p>App</p></main><wizz:style>p { margin: 0 }</wizz:style>'
+  );
+  writeFile(path.join(projectDirectory, 'index.html'), '<!DOCTYPE html>\n<html><head></head><body><div id="app"></div></body></html>');
+
+  const logger = createLogger();
+  buildProject(inputDirectory, outputDirectory, logger);
+
+  const shell = fs.readFileSync(path.join(outputDirectory, 'index.html'), 'utf8');
+  assert.match(shell, /<link rel="stylesheet" href="\/app\.css">/);
+  assert.equal(logger.messages.filter((message) => message.includes('document shell')).length, 0);
+});
+
+test('threads moduleQuery into child server import specifiers', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'Card.wizz'), '<article><h2>Card</h2></article>');
+  writeFile(
+    path.join(inputDirectory, 'App.wizz'),
+    '<script>import Card from "./Card.wizz";</script><main><Card /></main>'
+  );
+
+  buildProject(inputDirectory, outputDirectory, createLogger(), { moduleQuery: '?v=42-1' });
+
+  const appServer = fs.readFileSync(path.join(outputDirectory, 'App.server.js'), 'utf8');
+  assert.match(appServer, /^import \* as __wizzServer_Card from "\.\/Card\.server\.js\?v=42-1";$/m);
+  // The child module itself receives the option too, though it renders no
+  // component tags and therefore emits no imports.
+  const cardServer = fs.readFileSync(path.join(outputDirectory, 'Card.server.js'), 'utf8');
+  assert.doesNotMatch(cardServer, /^import \* as __wizzServer_/m);
+});
