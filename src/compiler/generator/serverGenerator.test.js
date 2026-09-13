@@ -537,3 +537,93 @@ test('exposes the standard void-element set', () => {
   }
   assert.ok(!VOID_ELEMENTS.has('div'));
 });
+
+test('renders a head block into a separate head string tagged with the page owner', async () => {
+  const { html, head, state } = await renderSource(
+    '<wizz:head><title>Home</title><meta name="viewport" content="width=device-width"><link rel="icon" href="/favicon.ico"></wizz:head><main><p>Body</p></main>'
+  );
+
+  // Head nodes carry the owning render's identity and their source location;
+  // void meta/link never receive an end tag.
+  assert.equal(head,
+    '<title data-wizz-head-id="r" data-wizz-loc="1:12">Home</title>' +
+    '<meta data-wizz-head-id="r" data-wizz-loc="1:31" name="viewport" content="width=device-width">' +
+    '<link data-wizz-head-id="r" data-wizz-loc="1:82" rel="icon" href="/favicon.ico">');
+  // Head markup never leaks into the rendered body. (An empty root element
+  // emits no end tag — pre-existing server-target behavior.)
+  assert.equal(html, '<main><p>Body</p></main>');
+  assert.deepEqual(state, {});
+});
+
+test('an empty head block yields an empty head string', async () => {
+  const { html, head } = await renderSource('<wizz:head /><main></main>');
+
+  assert.equal(head, '');
+  assert.equal(html, '<main>');
+});
+
+test('escapes head title and attribute expression output', async () => {
+  const { head } = await renderSource(
+    '<script>\nlet t = "<b>x</b> & \'q\'";\nlet d = "i>1 & <z>";\n</script><wizz:head><title>P {t}</title><meta content={d}></wizz:head><main></main>'
+  );
+
+  assert.equal(head,
+    '<title data-wizz-head-id="r" data-wizz-loc="4:21">P &lt;b&gt;x&lt;/b&gt; &amp; \'q\'</title>' +
+    '<meta data-wizz-head-id="r" data-wizz-loc="4:41" content="i&gt;1 &amp; &lt;z&gt;">');
+});
+
+test('coalesces title text runs without adjacency markers', async () => {
+  const { head } = await renderSource(
+    '<script>\nlet x = "m";\n</script><wizz:head><title>A {x} B</title></wizz:head><main></main>'
+  );
+
+  // Title is RCDATA in HTML: an `<!-- -->` marker would become visible text,
+  // so title children render as one escaped push instead.
+  assert.ok(head.includes('>A m B</title>'));
+  assert.ok(!head.includes('<!-- -->'));
+});
+
+test('bubbles child component heads in tree order with scoped owner paths', async () => {
+  const { head } = await renderSource(
+    '<script>\nimport Kid from "./Kid.wizz";\n</script><wizz:head><title>Shell</title></wizz:head><main><Kid /></main>',
+    {},
+    { 'Kid.wizz': '<wizz:head><title>Kid</title><meta name="k" content="v"></wizz:head><section>kid</section>' },
+    { componentServerRenderable: { Kid: true } }
+  );
+
+  // The page's own head precedes the child's bubbled head; the child's nodes
+  // carry the parent-scoped owner path so hydration can attribute them.
+  assert.equal(head,
+    '<title data-wizz-head-id="r" data-wizz-loc="3:21">Shell</title>' +
+    '<title data-wizz-head-id="r/1" data-wizz-loc="1:12">Kid</title>' +
+    '<meta data-wizz-head-id="r/1" data-wizz-loc="1:30" name="k" content="v">');
+});
+
+test('qualifies title data-wizz-loc values with options.filePath', async () => {
+  const { head } = await renderSource(
+    '<wizz:head><title>T</title></wizz:head><main></main>', {}, {},
+    { filePath: 'src/pages/X.wizz' }
+  );
+
+  assert.ok(head.includes('data-wizz-loc="src/pages/X.wizz:1:12"'));
+});
+
+test('renders dynamic head attributes with boolean presence semantics', async () => {
+  const { head } = await renderSource(
+    '<script>\nlet flag = true;\nlet off = false;\n</script><wizz:head><meta checked={flag}><link disabled={off}></wizz:head><main></main>'
+  );
+
+  assert.equal(head,
+    '<meta data-wizz-head-id="r" data-wizz-loc="4:21" checked>' +
+    '<link data-wizz-head-id="r" data-wizz-loc="4:42">');
+});
+
+test('head-free component-free server modules keep their previous output shape', async () => {
+  const { moduleSource, ...rendered } = await renderSource('<main><p>Hi</p></main>');
+
+  assert.ok(moduleSource.includes('renderComponent(props = {})'));
+  assert.ok(!moduleSource.includes('__wizzHeadParts'));
+  assert.ok(!moduleSource.includes('__wizzHeadOwner'));
+  assert.ok(!('head' in rendered));
+  assert.deepEqual(rendered, { html: '<main><p>Hi</p></main>', state: {} });
+});

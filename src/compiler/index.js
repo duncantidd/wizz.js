@@ -40,7 +40,9 @@ function compile(source, options = {}) {
   const hydratable = optionObject.hydratable === true;
   const gateOptions = {
     componentServerRenderable: optionObject.componentServerRenderable,
-    componentIneligibilityReasons: optionObject.componentIneligibilityReasons
+    componentIneligibilityReasons: optionObject.componentIneligibilityReasons,
+    // Forwarded for generated diagnostics (head locations), not the gate.
+    filePath
   };
 
   try {
@@ -93,7 +95,9 @@ function compileServer(source, options = {}) {
   const filePath = optionObject.filePath;
   const gateOptions = {
     componentServerRenderable: optionObject.componentServerRenderable,
-    componentIneligibilityReasons: optionObject.componentIneligibilityReasons
+    componentIneligibilityReasons: optionObject.componentIneligibilityReasons,
+    // Forwarded for generated diagnostics (head locations), not the gate.
+    filePath
   };
 
   try {
