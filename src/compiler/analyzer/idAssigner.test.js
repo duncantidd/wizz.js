@@ -112,3 +112,57 @@ test('assigns ids inside the consequent of an if block that has an else', () => 
     value: '1'
   });
 });
+
+test('stamps the style scope on every rendered element of styled components', () => {
+  const payload = analyzeDependencies(parseComponent(
+    '<script>let count = 0;</script><main><h2>{count}</h2><p>Static</p></main><wizz:style>h2 { font-size: 30px }</wizz:style>'
+  ));
+  const assigned = assignNodeIds(payload);
+  const main = assigned.template.children[0];
+  const [heading, paragraph] = main.children;
+  const scope = assigned.style.scope;
+
+  assert.equal(getAttribute(main, 'data-wizz-s').value, scope);
+  assert.equal(getAttribute(heading, 'data-wizz-s').value, scope);
+  assert.equal(getAttribute(paragraph, 'data-wizz-s').value, scope);
+  // Reactive IDs are stamped alongside the scope attribute.
+  assert.deepEqual(getAttribute(heading, 'data-wizz-id'), { name: 'data-wizz-id', value: '1' });
+  // The scope attribute precedes the reactive one in emission order.
+  assert.deepEqual(heading.attributes.map((attribute) => attribute.name),
+    ['data-wizz-s', 'data-wizz-id']);
+});
+
+test('components without a style block receive no scope attributes', () => {
+  const payload = analyzeDependencies(parseComponent(
+    '<script>let count = 0;</script><main><h2>{count}</h2></main>'
+  ));
+  const main = assignNodeIds(payload).template.children[0];
+  const heading = main.children[0];
+
+  assert.equal(payload.style, null);
+  assert.equal(getAttribute(main, 'data-wizz-s'), undefined);
+  assert.equal(getAttribute(heading, 'data-wizz-s'), undefined);
+  assert.deepEqual(getAttribute(heading, 'data-wizz-id'), { name: 'data-wizz-id', value: '1' });
+});
+
+test('imported component tags never receive the scope attribute', () => {
+  const payload = analyzeDependencies(parseComponent(
+    '<script>import Counter from "./Counter.wizz";</script><main><Counter /></main><wizz:style>main { padding: 0 }</wizz:style>'
+  ));
+  const main = assignNodeIds(payload).template.children[0];
+  const counterTag = main.children[0];
+
+  assert.equal(counterTag.componentId, 1);
+  assert.equal(getAttribute(counterTag, 'data-wizz-s'), undefined);
+  assert.equal(getAttribute(main, 'data-wizz-s').value, payload.style.scope);
+});
+
+test('an author-written data-wizz-s attribute wins over the generated value', () => {
+  const payload = analyzeDependencies(parseComponent(
+    '<main data-wizz-s="custom"><p>Hi</p></main><wizz:style>p { color: red }</wizz:style>'
+  ));
+  const main = assignNodeIds(payload).template.children[0];
+
+  assert.equal(getAttribute(main, 'data-wizz-s').value, 'custom');
+  assert.equal(getAttribute(main.children[0], 'data-wizz-s').value, payload.style.scope);
+});
