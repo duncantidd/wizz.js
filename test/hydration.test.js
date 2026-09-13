@@ -737,3 +737,74 @@ test('a tampered delivered title falls back to a fresh head with no duplicates',
   component.destroy();
   assert.deepEqual(document.head.childNodes.map((node) => node.nodeName), ['TITLE']);
 });
+
+test('delivered styles are adopted without duplication and refcounted', async (t) => {
+  const { document, clientModule, metricsBefore, warnings, render } = await loadHeadModules(
+    t,
+    '<main><h1>{who}</h1></main><wizz:style>h1 { color: red }</wizz:style><script>\nlet who = "A";\n</' + 'script>'
+  );
+  const { html, head, state } = render();
+
+  // The stylesheet rides the head run with no delivery tag of its own:
+  // runtime scope dedup makes compile-time slice expectations impossible.
+  assert.match(
+    head,
+    /^<style data-wizz-style="[a-z0-9]+" data-wizz-loc="src\/Page\.wizz:1:\d+">h1\[data-wizz-s="[a-z0-9]+"\] \{ color: red \}<\/style>$/
+  );
+  deliverHeadRun(document, head);
+  const target = deliverMarkup(document, html);
+
+  const component = clientModule.hydrateComponent(target, {}, state);
+
+  assert.equal(warnings.length, 0);
+  assert.ok(component);
+  // The hydrate apply materializes a probe style node that adoption then
+  // discards (never inserted) when the delivered copy is found by scope, so
+  // exactly one stylesheet for the scope exists after hydration.
+  assert.equal(document.metrics.elements, metricsBefore.elements + 1);
+  assert.deepEqual(document.metrics.createdNames.slice(metricsBefore.elements), ['style']);
+  const styles = document.head.childNodes.filter((node) => node.nodeName === 'STYLE');
+  assert.equal(styles.length, 1);
+  // The adopted copy is the delivered one, refcounted at 1.
+  assert.equal(styles[0].attributes['data-wizz-refs'], '1');
+
+  // Releasing on destroy drops the refcount to zero and removes the
+  // stylesheet; the shell title resumes.
+  component.destroy();
+  assert.equal(document.head.childNodes.filter((node) => node.nodeName === 'STYLE').length, 0);
+  assert.equal(document.head.childNodes[0].textContent, 'Shell');
+});
+
+test('a hydration fallback adopts the delivered style instead of duplicating it', async (t) => {
+  const { document, clientModule, metricsBefore, warnings, render } = await loadHeadModules(
+    t,
+    '<main><h1>{who}</h1></main><wizz:style>h1 { color: red }</wizz:style><script>\nlet who = "A";\n</' + 'script>'
+  );
+  const { html, head, state } = render();
+  deliverHeadRun(document, head);
+  const target = deliverMarkup(document, html);
+
+  // Simulate body drift between delivery and hydration so the adopt fails
+  // and the mount falls back to a fresh client mount.
+  const deliveredHeading = target.childNodes.find((node) => node.nodeName === 'MAIN')
+    .childNodes.find((node) => node.nodeName === 'H1');
+  deliveredHeading.childNodes[0].nodeValue = 'Tampered';
+
+  const component = clientModule.hydrateComponent(target, {}, state);
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /^\[wizz\] hydration mismatch: /);
+  assert.ok(component);
+
+  // The fallback's fresh apply found the delivered stylesheet in the head by
+  // scope and adopted it — still exactly one style tag, now refcounted.
+  const styles = document.head.childNodes.filter((node) => node.nodeName === 'STYLE');
+  assert.equal(styles.length, 1);
+  assert.equal(styles[0].attributes['data-wizz-refs'], '1');
+  // The fallback remount recreated the body tree (main + h1) plus the
+  // discarded probe style node.
+  assert.deepEqual(document.metrics.createdNames.slice(metricsBefore.elements), ['main', 'h1', 'style']);
+
+  component.destroy();
+  assert.equal(document.head.childNodes.filter((node) => node.nodeName === 'STYLE').length, 0);
+});

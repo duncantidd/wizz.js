@@ -450,6 +450,76 @@ test('injects the component head run into the document head before </head>', asy
   assert.match(run, /<title data-wizz-head-id="r\/1" data-wizz-loc="[^"]*\/src\/Kid\.wizz:1:\d+">/);
 });
 
+test('delivers scoped component styles with their own h2 rules from the first load', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), DOCUMENT_SHELL);
+  fs.mkdirSync(path.join(projectDirectory, 'src'), { recursive: true });
+  // The motivating case: two styled components with conflicting h2 rules on
+  // one page, plus the page's own unscoped h2 that must match neither rule.
+  writeFile(
+    path.join(projectDirectory, 'src', 'Card.wizz'),
+    '<div><h2>Card</h2></div><wizz:style>h2 { font-size: 24px }</wizz:style>'
+  );
+  writeFile(
+    path.join(projectDirectory, 'src', 'Panel.wizz'),
+    '<div><h2>Panel</h2></div><wizz:style>h2 { font-size: 30px }</wizz:style>'
+  );
+  writeFile(
+    path.join(projectDirectory, 'src', 'App.wizz'),
+    '<script>import Card from "./Card.wizz";\nimport Panel from "./Panel.wizz";</script><main><Card /><Panel /><h2>Page</h2></main>'
+  );
+
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger: createLogger() });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  const document = await (await fetch(`${url}/`)).text();
+  // Exactly one <style> per component, riding the head run inside <head>.
+  assert.equal((document.match(/<style data-wizz-style=/g) || []).length, 2);
+  const run = document.slice(document.indexOf('wizz:head-start'), document.indexOf('wizz:head-end'));
+  assert.match(run, /<style data-wizz-style="[a-z0-9]+"[^>]*>h2\[data-wizz-s="[a-z0-9]+"\] \{ font-size: 24px \}<\/style>/);
+  assert.match(run, /<style data-wizz-style="[a-z0-9]+"[^>]*>h2\[data-wizz-s="[a-z0-9]+"\] \{ font-size: 30px \}<\/style>/);
+  // The two rules scope to different attributes, so the page's own h2 —
+  // carrying no scope attribute — matches neither.
+  const scopeValues = [...run.matchAll(/data-wizz-style="([^"]+)"/g)].map((match) => match[1]);
+  assert.equal(new Set(scopeValues).size, 2);
+  // The page's own h2 carries no scope attribute (component h2s do).
+  assert.match(document, /<h2>Page<\/h2>/);
+});
+
+test('a styled component rendered twice on one page injects its stylesheet once', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), DOCUMENT_SHELL);
+  fs.mkdirSync(path.join(projectDirectory, 'src'), { recursive: true });
+  writeFile(
+    path.join(projectDirectory, 'src', 'Badge.wizz'),
+    '<span><em>!</em></span><wizz:style>em { color: red } span { padding: 2px }</wizz:style>'
+  );
+  // The page renders the styled component twice and also pulls it in
+  // transitively through a child — the document still carries one style tag.
+  writeFile(
+    path.join(projectDirectory, 'src', 'Kid.wizz'),
+    '<script>import Badge from "./Badge.wizz";</script><p><Badge /></p>'
+  );
+  writeFile(
+    path.join(projectDirectory, 'src', 'App.wizz'),
+    '<script>import Badge from "./Badge.wizz";\nimport Kid from "./Kid.wizz";</script><main><Badge /><Badge /><Kid /></main>'
+  );
+
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger: createLogger() });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  const document = await (await fetch(`${url}/`)).text();
+  assert.equal((document.match(/<style data-wizz-style=/g) || []).length, 1);
+  // All three rendered instances (two direct, one nested) carry the scope;
+  // each Badge renders two scoped elements (span + em), so 3 × 2 = 6.
+  const markup = /<div id="app">([\s\S]*?)<\/main><\/div>/.exec(document)[1];
+  assert.equal((markup.match(/data-wizz-s=/g) || []).length, 6);
+});
+
 test('renders fresh server modules after a watch rebuild (no stale cache)', async (t) => {
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
