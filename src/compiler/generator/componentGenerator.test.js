@@ -967,3 +967,87 @@ test('head-free component-free modules emit no head machinery', () => {
   assert.doesNotMatch(hydratableHeadless, /__wizzApplyHead/);
   assert.doesNotMatch(hydratableHeadless, /hydrateCreate\(target, state, adoptSelf, headOwner\)/);
 });
+
+test('styled components mount one scoped stylesheet and stamp data-wizz-s markup', () => {
+  const payload = assignNodeIds(analyzeDependencies(parseComponent(
+    '<main><h2>Title</h2></main><wizz:style>h2 { font-size: 30px }</wizz:style>'
+  )));
+  const source = generateComponent(payload);
+  const document = createHeadDocument();
+  const target = createHeadTarget();
+  const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
+
+  assert.ok(source.includes('createStyleNodes'), 'the style factory is emitted');
+  const component = mountComponent(target);
+
+  const styles = document.head.childNodes.filter((node) => node.nodeName === 'STYLE');
+  assert.equal(styles.length, 1);
+  const style = styles[0];
+  assert.match(style.attributes['data-wizz-style'], /^s[0-9a-z]+$/);
+  assert.equal(style.attributes['data-wizz-loc'], '1:28');
+  assert.equal(style.attributes['data-wizz-refs'], '1');
+  assert.ok(style.attributes['data-wizz-head'], 'the applied style is tagged with the owning instance');
+  assert.equal(style.textContent, `h2[data-wizz-s="${style.attributes['data-wizz-style']}"] { font-size: 30px }`);
+  // Every rendered element carries the scope attribute.
+  const root = target.childNodes[0];
+  assert.equal(root.attributes['data-wizz-s'], style.attributes['data-wizz-style']);
+  assert.equal(root.childNodes[0].attributes['data-wizz-s'], style.attributes['data-wizz-style']);
+
+  component.destroy();
+  assert.equal(document.head.childNodes.filter((node) => node.nodeName === 'STYLE').length, 0);
+});
+
+test('two instances of one styled component share a refcounted stylesheet', () => {
+  const source = generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
+    '<main><h2>Title</h2></main><wizz:style>h2 { font-size: 30px }</wizz:style>'
+  ))));
+  const document = createHeadDocument();
+  const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
+
+  const first = mountComponent(createHeadTarget());
+  const second = mountComponent(createHeadTarget());
+
+  const styles = document.head.childNodes.filter((node) => node.nodeName === 'STYLE');
+  assert.equal(styles.length, 1, 'the stylesheet is injected exactly once');
+  assert.equal(styles[0].attributes['data-wizz-refs'], '2');
+
+  first.destroy();
+  assert.equal(styles[0].attributes['data-wizz-refs'], '1');
+  assert.equal(document.head.childNodes.filter((node) => node.nodeName === 'STYLE').length, 1);
+
+  second.destroy();
+  assert.equal(document.head.childNodes.filter((node) => node.nodeName === 'STYLE').length, 0);
+});
+
+test('different styled components keep distinct stylesheets', () => {
+  const compile = (componentSource) => new Function('document',
+    `${generateComponent(assignNodeIds(analyzeDependencies(parseComponent(componentSource)))).replace('export default ', '')}\nreturn mountComponent;`);
+  const document = createHeadDocument();
+
+  const first = compile('<main><h2>A</h2></main><wizz:style>h2 { font-size: 30px }</wizz:style>')(document)(createHeadTarget());
+  const second = compile('<main><h2>B</h2></main><wizz:style>h2 { font-size: 24px }</wizz:style>')(document)(createHeadTarget());
+
+  const styles = document.head.childNodes.filter((node) => node.nodeName === 'STYLE');
+  assert.equal(styles.length, 2);
+  assert.notEqual(styles[0].attributes['data-wizz-style'], styles[1].attributes['data-wizz-style']);
+  // Insertion prepends, so head order is newest-first; match by content.
+  const bySize = styles.map((style) => (style.textContent.includes('30px') ? 'big' : 'small')).sort();
+  assert.deepEqual(bySize, ['big', 'small']);
+});
+
+test('unstyled components emit no style machinery or scope attributes', () => {
+  const payload = assignNodeIds(analyzeDependencies(parseComponent(
+    '<main><h2>Title</h2></main>'
+  )));
+  const source = generateComponent(payload);
+  const document = createHeadDocument();
+  const target = createHeadTarget();
+  const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
+
+  assert.ok(!source.includes('createStyleNodes'));
+  assert.ok(!source.includes('data-wizz-style'));
+  mountComponent(target);
+  const root = target.childNodes[0];
+  assert.ok(!('data-wizz-s' in root.attributes));
+  assert.equal(document.head.childNodes.filter((node) => node.nodeName === 'STYLE').length, 0);
+});

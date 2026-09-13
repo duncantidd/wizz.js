@@ -44,12 +44,17 @@ const PROPERTY_ATTRIBUTES = new Set(['value', 'checked', 'disabled']);
  * @param {Array<{name: string}>} componentImports - The component's imports;
  *   rendered tags adopt the matching child hydratable module.
  * @param {Object|null} headBlock - The extracted HeadBlock node, or null.
+ * @param {Object|null} styleBlock - The payload's style record, or null. It
+ *   activates the run machinery for styled-only components: their delivered
+ *   stylesheet carries no delivery tag (styles dedup by scope at apply time,
+ *   never through slice verification), but the marker run must still be
+ *   located and consumed so markers cannot strand in document.head.
  * @param {Object} [options] - Generation options; `options.filePath` is
  *   accepted for symmetry with the other generators (head locations are
  *   compared from the delivered markup, not re-derived).
  * @returns {string} The hydration section source for the factory closure.
  */
-function generateHydrationFunction(templateAST, componentImports = [], headBlock = null, options = {}) {
+function generateHydrationFunction(templateAST, componentImports = [], headBlock = null, options = {}, styleBlock = null) {
   const builder = new CodeBuilder();
   let referenceCounter = 0;
   const nextReference = () => `node_${++referenceCounter}`;
@@ -62,10 +67,11 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
 
   const importedNames = new Set(componentImports.map((component) => component.name));
 
-  // Head machinery activates when this component owns head markup or when a
-  // nested component's head must be threaded through this module during
-  // adoption. Must mirror componentGenerator's headActive condition.
-  const headActive = headBlock != null || componentTagsExist(templateAST, importedNames);
+  // Head machinery activates when this component owns head markup, owns a
+  // style block (styles ride the same delivery run), or when a nested
+  // component's head must be threaded through this module during adoption.
+  // Must mirror componentGenerator's headActive condition.
+  const headActive = headBlock != null || styleBlock != null || componentTagsExist(templateAST, importedNames);
 
   builder.add('// --- Hydration ---');
   builder.add('function __wizzNodeTag(node) {');
@@ -635,10 +641,13 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
   // with a delivery owner was not adopted by any component, so the delivery
   // does not match the client tree. Claimed titles have been moved to the
   // front of document.head by __wizzClaimHead; they carry no delivery tag
-  // anymore, so leftovers are position-independent.
+  // anymore, so leftovers are position-independent. Delivered styles carry no
+  // delivery tag by design (they are adopted by scope at apply time), so the
+  // check treats an absent attribute as claimed — the loose `!= null` covers
+  // both the DOM's null and the test shims' undefined.
   if (headActive) {
     builder.add('  if (problems.length === 0 && __wizzRun) {').indent();
-    builder.add("    const __wizzLeftover = __wizzRun.nodes.filter((node) => node.getAttribute && node.getAttribute('data-wizz-head-id') !== null);");
+    builder.add("    const __wizzLeftover = __wizzRun.nodes.filter((node) => node.getAttribute && node.getAttribute('data-wizz-head-id') != null);");
     builder.add('    if (__wizzLeftover.length > 0) {');
     builder.add("      problems.push(__wizzLeftover.length + ' delivered head nodes were never claimed');");
     builder.add('    } else {');

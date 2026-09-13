@@ -4,6 +4,7 @@ const { generateUpdateFunction } = require('./updateGenerator');
 const { interceptAssignments, findReactiveMutations } = require('./assignmentInterceptor');
 const { assertServerRenderable } = require('./serverGenerator');
 const { generateHydrationFunction } = require('./hydrationGenerator');
+const { scopeCss } = require('../analyzer/cssScanner.js');
 const { VERSIONS } = require('../version.js');
 
 // Defined flush-left and emitted verbatim via Function.prototype.toString so
@@ -13,9 +14,19 @@ const { VERSIONS } = require('../version.js');
 // owning instance for conflict warnings, while `data-wizz-head-id` is the
 // server delivery tag hydration consumes. The `__wizz` prefix is reserved, so
 // author identifiers cannot collide with any of these names.
+//
+// Style nodes (tagged `data-wizz-style` with the component's scope) dedup by
+// scope: a component rendered by several instances must inject its stylesheet
+// exactly once, so an already-present copy is refcounted through
+// `data-wizz-refs` instead of re-inserted and the duplicate node is dropped.
+// The applied list holds the node whose ref THIS call acquired — an inserted
+// copy (refs set to 1) or the found copy (refs incremented) — so release
+// decrements exactly once per acquisition and removes the stylesheet when the
+// last holder lets go.
 function __wizzApplyHead(nodes, loc) {
   const head = document.head;
   const owner = 'h' + (++__wizzHeadOwnerSeq);
+  const applied = [];
   const titles = nodes.filter((node) => node.nodeName === 'TITLE');
   const existing = titles.length > 0
     ? Array.prototype.slice.call(head.querySelectorAll('title[data-wizz-head]'))
@@ -23,16 +34,43 @@ function __wizzApplyHead(nodes, loc) {
   if (titles.length > 0 && existing.length > 0) {
     console.warn('[wizz] Multiple <title> declarations are mounted in the document head; the most recently mounted one wins. Existing: ' + (existing[0].getAttribute('data-wizz-loc') || 'unknown location') + ' Latest: ' + loc);
   }
-  for (const node of nodes) node.setAttribute('data-wizz-head', owner);
+  for (const node of nodes) {
+    if (node.nodeName === 'STYLE' && node.getAttribute('data-wizz-style')) {
+      const scope = node.getAttribute('data-wizz-style');
+      let found = null;
+      for (const candidate of head.querySelectorAll('style[data-wizz-style]')) {
+        if (candidate.getAttribute('data-wizz-style') === scope) { found = candidate; break; }
+      }
+      if (found) {
+        const current = parseInt(found.getAttribute('data-wizz-refs'), 10);
+        found.setAttribute('data-wizz-refs', String((Number.isNaN(current) ? 0 : current) + 1));
+        applied.push(found);
+        continue;
+      }
+      node.setAttribute('data-wizz-refs', '1');
+      applied.push(node);
+      continue;
+    }
+    applied.push(node);
+  }
+  for (const node of applied) node.setAttribute('data-wizz-head', owner);
   // Prepending makes the latest-applied title the document's first title
   // element — the one the document.title getter reads — mirroring the
   // last-in-tree title policy; on release the previous owner's title resumes
   // naturally because the nodes are simply removed again.
-  for (const node of nodes) head.insertBefore(node, head.firstChild);
-  return nodes;
+  for (const node of applied) head.insertBefore(node, head.firstChild);
+  return applied;
 }
 function __wizzReleaseHead(nodes) {
   for (const node of nodes) {
+    if (node.nodeName === 'STYLE' && node.getAttribute('data-wizz-style') && node.parentNode) {
+      // Decrement this holder's ref; the stylesheet survives until the last
+      // holder releases. A missing/invalid count defensively reads as 1.
+      const refs = (parseInt(node.getAttribute('data-wizz-refs'), 10) || 1) - 1;
+      if (refs <= 0) node.parentNode.removeChild(node);
+      else node.setAttribute('data-wizz-refs', String(refs));
+      continue;
+    }
     if (node.parentNode) node.parentNode.removeChild(node);
   }
 }
@@ -129,19 +167,25 @@ function generateComponent(astPayload, options = {}) {
   const props = astPayload.props || [];
 
   // Head machinery turns on when the component owns head markup (fresh mounts
-  // apply and destroy releases it) or — for hydratable modules — when a
-  // nested component's delivered head must be adopted through this module.
+  // apply and destroy releases it), owns a style block (styles hoist through
+  // the same head lifecycle), or — for hydratable modules — when a nested
+  // component's delivered head must be adopted through this module.
   // Gating on static presence keeps head-free, component-free output
   // byte-identical.
   const ownHead = astPayload.head != null;
+  const ownStyle = astPayload.style != null;
   const hasRenderedComponentTags = componentImports.some(({ name }) => renderedImportNames(astPayload.template, name));
-  const headActive = ownHead || (hydratable && hasRenderedComponentTags);
+  const headActive = ownHead || ownStyle || (hydratable && hasRenderedComponentTags);
   // Conflict warnings name a title location when one exists (titles are what
   // conflict), falling back to the block's own location.
   const headLocLiteral = ownHead
     ? JSON.stringify((options.filePath ? `${options.filePath}:` : '')
       + (astPayload.head.children.find((child) => child.name === 'title') ?? astPayload.head).loc.start.line
       + ':' + (astPayload.head.children.find((child) => child.name === 'title') ?? astPayload.head).loc.start.column)
+    : null;
+  const styleLocLiteral = ownStyle
+    ? JSON.stringify((options.filePath ? `${options.filePath}:` : '')
+      + astPayload.style.loc.start.line + ':' + astPayload.style.loc.start.column)
     : null;
 
   // Prop bindings are parent-owned and read-only: any statement-level
@@ -237,7 +281,7 @@ function generateComponent(astPayload, options = {}) {
       const reactiveVars = astPayload.script.filter(decl => decl.isReactive);
 
       builder.add('let isMounted = false;');
-      if (ownHead) {
+      if (ownHead || ownStyle) {
         // Head nodes applied on mount (or adopted during hydration) and
         // released on destroy; null until the initialization block runs.
         builder.add('let headNodes = null;');
@@ -403,9 +447,29 @@ function generateComponent(astPayload, options = {}) {
     builder.dedent().add('}');
   }
 
-  // 4b. Inject the hydration adoption walk for hydratable modules.
+  // 4a-styles. The scoped stylesheet is computed at compile time and baked in
+  // as a literal: textContent (never innerHTML) keeps the author CSS out of
+  // any markup parsing. __wizzApplyHead dedups by scope with refcounts, so a
+  // component rendered by several instances injects one stylesheet.
+  if (ownStyle) {
+    builder.add('');
+    builder.add('// --- Style Creation ---');
+    builder.add('function createStyleNodes() {').indent();
+    builder.add('const nodes = [];');
+    builder.add(`const styleNode = document.createElement('style');`);
+    builder.add(`styleNode.setAttribute('data-wizz-style', ${JSON.stringify(astPayload.style.scope)});`);
+    builder.add(`styleNode.setAttribute('data-wizz-loc', ${styleLocLiteral});`);
+    builder.add(`styleNode.textContent = ${JSON.stringify(scopeCss(astPayload.style.css, astPayload.style.scope))};`);
+    builder.add('nodes.push(styleNode);');
+    builder.add('return nodes;');
+    builder.dedent().add('}');
+  }
+
+  // 4b. Inject the hydration adoption walk for hydratable modules. The style
+  // block rides along so the run machinery activates for styled-only
+  // components (their delivered stylesheet must not strand the run markers).
   if (hydratable) {
-    const hydrationCode = generateHydrationFunction(astPayload.template, componentImports, astPayload.head, options);
+    const hydrationCode = generateHydrationFunction(astPayload.template, componentImports, astPayload.head, options, astPayload.style);
     hydrationCode.split('\n').forEach(line => builder.add(line));
   }
 
@@ -416,8 +480,27 @@ function generateComponent(astPayload, options = {}) {
 
   // 6. Mount the component to the DOM. Hydration adopts the server-rendered
   // root instead of creating one and falls back to a full client mount when
-  // the walk reports any mismatch.
+  // the walk reports any mismatch. Head nodes and style nodes each acquire
+  // their ref through __wizzApplyHead (styles dedup by scope); the combined
+  // list is what destroy releases.
   builder.add('\n// --- Initialization ---');
+  const emitHeadApply = (hydratePath) => {
+    if (ownHead) {
+      builder.add(hydratePath
+        ? '// Adopt the delivered slice; when the run is absent (or this'
+        + ' component\'s slice was not delivered) apply the head fresh instead —'
+        + ' the adoption walk strips any stale delivery before returning null.'
+        : '// Apply before mounting children so their heads prepend in front of'
+        + ' this one — the deepest component\'s title is what document.title reads.');
+      builder.add(hydratePath
+        ? 'headNodes = adoptedHydration.headNodes || __wizzApplyHead(createHeadNodes(), ' + headLocLiteral + ');'
+        : `headNodes = __wizzApplyHead(createHeadNodes(), ${headLocLiteral});`);
+    }
+    if (ownStyle) {
+      builder.add(`const __wizzStyleNodes = __wizzApplyHead(createStyleNodes(), ${styleLocLiteral});`);
+      builder.add('headNodes = headNodes ? headNodes.concat(__wizzStyleNodes) : __wizzStyleNodes;');
+    }
+  };
   const hydrateCreateCall = headActive
     ? 'const adoptedHydration = hydrate ? hydrateCreate(target, state, adoptSelf, headOwner) : null;'
     : 'const adoptedHydration = hydrate ? hydrateCreate(target, state, adoptSelf) : null;';
@@ -426,10 +509,8 @@ function generateComponent(astPayload, options = {}) {
           .add('const childComponents = rootNode.__wizzChildComponents;')
           .add('const listUpdates = rootNode.__wizzListUpdates;')
           .add('target.appendChild(rootNode);');
-    if (ownHead) {
-      // Apply before mounting children so their heads prepend in front of
-      // this one — the deepest component's title is what document.title reads.
-      builder.add(`headNodes = __wizzApplyHead(createHeadNodes(), ${headLocLiteral});`);
+    if (ownHead || ownStyle) {
+      emitHeadApply(false);
     }
     builder.add('rootNode.__wizzMountChildren();');
   } else {
@@ -440,20 +521,14 @@ function generateComponent(astPayload, options = {}) {
           .add('const listUpdates = hydrate ? adoptedHydration.listUpdates : rootNode.__wizzListUpdates;')
           .add('if (!hydrate) {')
           .indent();
-    if (ownHead) {
-      builder.add('target.appendChild(rootNode);');
-      builder.add(`headNodes = __wizzApplyHead(createHeadNodes(), ${headLocLiteral});`);
-      builder.add('rootNode.__wizzMountChildren();');
-    } else {
-      builder.add('target.appendChild(rootNode);');
-      builder.add('rootNode.__wizzMountChildren();');
+    builder.add('target.appendChild(rootNode);');
+    if (ownHead || ownStyle) {
+      emitHeadApply(false);
     }
+    builder.add('rootNode.__wizzMountChildren();');
     builder.dedent().add('} else {').indent();
-    if (ownHead) {
-      // Adopt the delivered slice; when the run is absent (or this
-      // component's slice was not delivered) apply the head fresh instead —
-      // the adoption walk strips any stale delivery before returning null.
-      builder.add('headNodes = adoptedHydration.headNodes || __wizzApplyHead(createHeadNodes(), ' + headLocLiteral + ');');
+    if (ownHead || ownStyle) {
+      emitHeadApply(true);
     }
     builder.dedent().add('}');
   }
@@ -510,9 +585,10 @@ function generateComponent(astPayload, options = {}) {
       .add('isDestroyed = true;')
       .add('destroyHooks.forEach((hook) => hook());')
       .add('childComponents.forEach((component) => component.destroy());');
-  if (ownHead) {
+  if (ownHead || ownStyle) {
     // Released after the child cascade so a child's head returns to the
-    // document before this component's is removed.
+    // document before this component's is removed; shared styles survive
+    // until their last holder releases.
     builder.add('if (headNodes) __wizzReleaseHead(headNodes);');
   }
   builder.add('trackedListeners.forEach(({ node, eventName, handler }) => node.removeEventListener(eventName, handler));');

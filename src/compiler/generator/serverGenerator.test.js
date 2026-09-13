@@ -627,3 +627,113 @@ test('head-free component-free server modules keep their previous output shape',
   assert.ok(!('head' in rendered));
   assert.deepEqual(rendered, { html: '<main><p>Hi</p></main>', state: {} });
 });
+
+test('styled components deliver a scoped style tag through the head run', async () => {
+  const { moduleSource, head } = await renderSource(
+    '<main><h2>Title</h2></main><wizz:style>h2 { font-size: 30px }</wizz:style>'
+  );
+
+  assert.ok(moduleSource.includes('__wizzStyleScopes'));
+  assert.ok(head.includes('<style data-wizz-style='));
+  assert.ok(head.includes('h2[data-wizz-s="'));
+  assert.ok(head.includes('{ font-size: 30px }'));
+  // The scope in the tag matches the scope stamped on the markup.
+  const scope = head.match(/data-wizz-style="([^"]+)"/)[1];
+  assert.ok(head.includes(`<style data-wizz-style="${scope}"`));
+  assert.ok(head.includes(`data-wizz-s="${scope}"`));
+});
+
+test('the style tag carries no data-wizz-head-id delivery tag', async () => {
+  const { head } = await renderSource(
+    '<main><h2>T</h2></main><wizz:style>h2 { color: red }</wizz:style>'
+  );
+
+  const styleTag = head.match(/<style[^>]*>/)[0];
+  assert.ok(styleTag.includes('data-wizz-style='));
+  assert.ok(!styleTag.includes('data-wizz-head-id'));
+});
+
+test('a shared styleScopes accumulator dedupes styles across renders', async () => {
+  const moduleSource = generateServer(
+    '<main><h2>T</h2></main><wizz:style>h2 { color: red }</wizz:style>'
+  );
+  const mod = await loadServerModule(moduleSource);
+  const shared = [];
+  const first = mod.renderComponent({}, { styleScopes: shared });
+  const second = mod.renderComponent({}, { styleScopes: shared });
+
+  assert.equal((first.head.match(/<style/g) || []).length, 1);
+  assert.equal(second.head, '');
+  // The page-level fresh call (no accumulator) delivers its own style.
+  const standalone = mod.renderComponent();
+  assert.equal((standalone.head.match(/<style/g) || []).length, 1);
+});
+
+test('styles bubble through a parent with component tags', async () => {
+  const child = '<div class="card"><h2>Card</h2></div><wizz:style>h2 { font-size: 24px }</wizz:style>';
+  const parent = '<script>import Card from "./Card.wizz";</script><main><Card /></main>';
+  const { html, head } = await renderSource(
+    parent,
+    {},
+    { 'Card.wizz': child },
+    { componentServerRenderable: { Card: true } }
+  );
+
+  // Exactly one style tag despite one component instance; the child's scope
+  // appears on its own markup.
+  assert.equal((head.match(/<style/g) || []).length, 1);
+  const scope = head.match(/data-wizz-style="([^"]+)"/)[1];
+  assert.ok(head.includes(`h2[data-wizz-s="${scope}"] { font-size: 24px }`));
+});
+
+test('two instances of one styled component deliver a single style tag', async () => {
+  const child = '<div class="card"><h2>Card</h2></div><wizz:style>h2 { font-size: 24px }</wizz:style>';
+  const { head, html } = await renderSource(
+    '<script>import Card from "./Card.wizz";</script><main><Card /><Card /></main>',
+    {},
+    { 'Card.wizz': child },
+    { componentServerRenderable: { Card: true } }
+  );
+
+  assert.equal((html.match(/<div class="card"/g) || []).length, 2);
+  assert.equal((head.match(/<style/g) || []).length, 1);
+});
+
+test('CSS angle brackets are escaped for raw-text style delivery', async () => {
+  const { head } = await renderSource(
+    '<main><p>Hi</p></main><wizz:style>p::after { content: "<b>" }</wizz:style>'
+  );
+
+  assert.ok(head.includes('content: "\\3c b>"'));
+  assert.ok(!head.includes('content: "<b>"'));
+});
+
+test('style-only components turn on the head machinery', async () => {
+  const { moduleSource, ...rendered } = await renderSource(
+    '<main><p>Hi</p></main><wizz:style>p { color: red }</wizz:style>'
+  );
+
+  assert.ok(moduleSource.includes('renderComponent(props = {}, options = {})'));
+  assert.ok('head' in rendered);
+  assert.ok(rendered.head.includes('<style'));
+});
+
+test('two styled components with conflicting h2 rules keep distinct scopes', async () => {
+  const big = '<div class="big"><h2>Big</h2></div><wizz:style>h2 { font-size: 30px }</wizz:style>';
+  const small = '<div class="small"><h2>Small</h2></div><wizz:style>h2 { font-size: 24px }</wizz:style>';
+  const { html, head } = await renderSource(
+    '<script>import Big from "./Big.wizz";\nimport Small from "./Small.wizz";</script>'
+    + '<main><Big /><Small /></main>',
+    {},
+    { 'Big.wizz': big, 'Small.wizz': small },
+    { componentServerRenderable: { Big: true, Small: true } }
+  );
+
+  const styles = head.match(/<style data-wizz-style="([^"]+)"[^>]*>[^]*?<\/style>/g) || [];
+  assert.equal(styles.length, 2);
+  const scopes = styles.map((tag) => tag.match(/data-wizz-style="([^"]+)"/)[1]);
+  assert.notEqual(scopes[0], scopes[1]);
+  assert.ok(head.includes(`h2[data-wizz-s="${scopes[0]}"] { font-size: 30px }`));
+  assert.ok(head.includes(`h2[data-wizz-s="${scopes[1]}"] { font-size: 24px }`));
+  assert.ok(html.includes('data-wizz-s='));
+});
