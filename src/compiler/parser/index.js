@@ -1,7 +1,7 @@
 const { tokenize } = require('./tokenizer.js');
 const { parseTemplate } = require('./templateParser.js');
 const { integrateExpressions } = require('./integrator.js');
-const { extractScriptBlock } = require('./extractor.js');
+const { extractScriptBlock, extractHeadBlock } = require('./extractor.js');
 const { extractComponentImports } = require('./componentImportExtractor.js');
 const { extractProps } = require('./propExtractor.js');
 const { scanState } = require('./stateScanner.js');
@@ -28,6 +28,10 @@ function parseComponent(source) {
   // 4. Extract the <script> block and remove its node from the visual DOM tree
   const scriptContent = extractScriptBlock(integratedTemplateAST);
   const { imports, script } = extractComponentImports(scriptContent);
+
+  // 4b. Extract the top-level <wizz:head> block (if any) into its own payload
+  // field. Body-emitting stages see a template with the head already pruned.
+  const headBlock = extractHeadBlock(integratedTemplateAST);
 
   // 5. Extract `export let` prop declarations before scanning state so the
   // statements are removed from the script and recorded for the generator.
@@ -56,6 +60,7 @@ function parseComponent(source) {
   // 7. Return the Final Handoff Object
   return {
     template: integratedTemplateAST,
+    head: headBlock,
     script: [...propDeclarations, ...scriptDeclarations],
     rawScript: scriptWithoutProps || '',
     imports,

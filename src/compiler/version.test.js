@@ -7,18 +7,15 @@ test('exposes exactly the compiler, syntax, and output versions', () => {
 });
 
 test('pins the current contract versions so bumps are deliberate', () => {
-  // 1.5.0 / syntax 1.1.0 / output 1.5.0: milestone 14 (1.4.0) added the full
-  // template surface server-side. 1.5.0 fixes the if-with-else traversal bug
-  // the broadened surface exposed: the parser's `children` alias repoints to
-  // the alternate at {:else}, so the dependency analyzer, ID assigner, and
-  // component-ref collector missed consequent content — reactive elements and
-  // component tags in a taken-branch-with-else generated no IDs/deps at all.
-  // Generated output changes (corrected IDs, dependency flags, and refs) for
-  // those templates, so compiler and output bump together with syntax pinned.
+  // 1.6.0 / syntax 1.2.0 / output 1.6.0: milestone 15 added the <wizz:head>
+  // block — new component syntax (HeadBlock node, parser diagnostics) and an
+  // additive output surface (server `head` field beside `{ html, state }`;
+  // client mount/destroy head management and hydration head adoption). Both
+  // contracts grew, so compiler, syntax, and output bump together.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.5.0',
-    syntax: '1.1.0',
-    output: '1.5.0'
+    compiler: '1.6.0',
+    syntax: '1.2.0',
+    output: '1.6.0'
   });
 });
 
@@ -35,7 +32,7 @@ test('the version table is frozen so callers cannot mutate the contract', () => 
     'use strict';
     VERSIONS.syntax = '9.9.9';
   }, TypeError);
-  assert.equal(VERSIONS.syntax, '1.1.0');
+  assert.equal(VERSIONS.syntax, '1.2.0');
 });
 
 test('the compiler major version leads or matches every contract major version', () => {

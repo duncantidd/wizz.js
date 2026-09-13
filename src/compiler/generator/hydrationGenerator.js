@@ -30,12 +30,26 @@ const PROPERTY_ATTRIBUTES = new Set(['value', 'checked', 'disabled']);
  * imported component tags are adopted through the child module's hydrateRoot
  * export, which remounts inside the child's own root on mismatch so a nested
  * fallback never fails the parent.
+ *
+ * Milestone 15 extends adoption to the delivered head run: when the page
+ * renders head markup, the walk locates the `<!--wizz:head-start-->` /
+ * `<!--wizz:head-end-->` run in document.head, verifies this component's
+ * slice (nodes tagged with its owner path) positionally against what
+ * createHeadNodes() would build, claims it, and consumes the run by removing
+ * the markers once every delivered head node was claimed by some component.
+ * Unclaimed leftovers or verification failures fall back to a fresh mount,
+ * which strips the stale delivery first — a nested (self-adopted) component
+ * only ever strips its own slice so its failure never breaks the parent.
  * @param {Object} templateAST - The analyzed template AST.
  * @param {Array<{name: string}>} componentImports - The component's imports;
  *   rendered tags adopt the matching child hydratable module.
+ * @param {Object|null} headBlock - The extracted HeadBlock node, or null.
+ * @param {Object} [options] - Generation options; `options.filePath` is
+ *   accepted for symmetry with the other generators (head locations are
+ *   compared from the delivered markup, not re-derived).
  * @returns {string} The hydration section source for the factory closure.
  */
-function generateHydrationFunction(templateAST, componentImports = []) {
+function generateHydrationFunction(templateAST, componentImports = [], headBlock = null, options = {}) {
   const builder = new CodeBuilder();
   let referenceCounter = 0;
   const nextReference = () => `node_${++referenceCounter}`;
@@ -47,6 +61,11 @@ function generateHydrationFunction(templateAST, componentImports = []) {
   }
 
   const importedNames = new Set(componentImports.map((component) => component.name));
+
+  // Head machinery activates when this component owns head markup or when a
+  // nested component's head must be threaded through this module during
+  // adoption. Must mirror componentGenerator's headActive condition.
+  const headActive = headBlock != null || componentTagsExist(templateAST, importedNames);
 
   builder.add('// --- Hydration ---');
   builder.add('function __wizzNodeTag(node) {');
@@ -79,7 +98,14 @@ function generateHydrationFunction(templateAST, componentImports = []) {
     builder.add('}');
   }
 
-  builder.add('function hydrateCreate(target, state, adoptSelf) {');
+  builder.add(headActive
+    ? 'function hydrateCreate(target, state, adoptSelf, headOwner) {'
+    : 'function hydrateCreate(target, state, adoptSelf) {');
+  if (headActive) {
+    // Identity of the head slice this walk adopts: pages own the root run;
+    // nested components receive their scoped owner path from the parent.
+    builder.add("  const __wizzHeadOwner = headOwner || 'r';");
+  }
   builder.add('  const problems = [];');
   builder.add('  const pendingListeners = [];');
   builder.add('  const childComponents = [];');
@@ -109,6 +135,123 @@ function generateHydrationFunction(templateAST, componentImports = []) {
   (templateAST.children || []).forEach(preAllocateRefs);
   for (const componentRef of componentRefs.values()) {
     builder.add(`  let ${componentRef} = null;`);
+  }
+
+  // --- Delivered head adoption ---
+  // Pages (!adoptSelf) locate the marker-delimited run the dev server
+  // injected before </head>; self-adopted nested components find their slice
+  // by owner path anywhere in document.head (the run markers belong to the
+  // page and may already be consumed).
+  if (headActive) {
+    builder.add('  let __wizzHeadNodes = null;');
+    builder.add('  let __wizzRun = null;');
+    builder.add('  let __wizzOwn = null;');
+    builder.add('  if (!adoptSelf) {').indent();
+    builder.add('    __wizzRun = __wizzFindHeadRun();');
+    builder.add('    if (__wizzRun) {');
+    builder.add("      __wizzOwn = __wizzRun.nodes.filter((node) => node.getAttribute && node.getAttribute('data-wizz-head-id') === __wizzHeadOwner);");
+    builder.add('    }');
+    builder.dedent().add('  } else {').indent();
+    builder.add("    __wizzOwn = Array.prototype.slice.call(document.head.childNodes).filter((node) => node.getAttribute && node.getAttribute('data-wizz-head-id') === __wizzHeadOwner);");
+    builder.dedent().add('  }');
+    if (headBlock) {
+      // Verify this component's slice positionally against compile-time
+      // expectations derived from the head block, then claim it. The
+      // expectations are data, not created nodes: hydration must not build
+      // throwaway DOM just to compare it. A page with an absent run (no head
+      // markers at all) leaves __wizzOwn null and falls back to a fresh
+      // apply in mountInstance; a nested component whose slice is missing
+      // fails verification and remounts fresh inside its own root, which
+      // never breaks the parent walk.
+      builder.add('  if (__wizzOwn) {').indent();
+      builder.add('    const __wizzExpected = [');
+      headBlock.children.forEach((child, index) => {
+        const parts = [`tag: ${JSON.stringify(child.name)}`];
+        if (child.name === 'title') {
+          const segments = [];
+          let pendingText = '';
+          for (const grandChild of child.children || []) {
+            if (grandChild.type === 'Text') {
+              pendingText += grandChild.value;
+              continue;
+            }
+            if (grandChild.type === 'Expression') {
+              if (pendingText !== '') {
+                segments.push(JSON.stringify(pendingText));
+                pendingText = '';
+              }
+              segments.push(`String(${grandChild.value})`);
+              continue;
+            }
+            throw new SyntaxError(`<${grandChild.name}> is not allowed inside <title> at ${grandChild.loc?.start?.line ?? '?'}:${grandChild.loc?.start?.column ?? '?'}.`);
+          }
+          if (pendingText !== '') segments.push(JSON.stringify(pendingText));
+          parts.push(`text: ${segments.length === 0 ? "''" : segments.join(' + ')}`);
+        } else {
+          parts.push("text: ''");
+        }
+        const attrs = [];
+        const flags = [];
+        for (const attribute of child.attributes || []) {
+          if (attribute.name.startsWith('on:')) continue;
+          if (attribute.dynamic && (attribute.name === 'checked' || attribute.name === 'disabled')) {
+            // Presence is the only representation for boolean attributes.
+            flags.push(`[${JSON.stringify(attribute.name)}, (${attribute.value}) ? '' : null]`);
+            continue;
+          }
+          attrs.push(`[${JSON.stringify(attribute.name)}, ${attribute.dynamic
+            ? `String(${attribute.value})`
+            : JSON.stringify(attribute.value === null ? '' : attribute.value)}]`);
+        }
+        parts.push(`attrs: [${attrs.join(', ')}]`);
+        if (flags.length > 0) parts.push(`flags: [${flags.join(', ')}]`);
+        builder.add(`      { ${parts.join(', ')} }${index < headBlock.children.length - 1 ? ',' : ''}`);
+      });
+      builder.add('    ];');
+      builder.add('    if (__wizzOwn.length !== __wizzExpected.length) {');
+      builder.add("      problems.push('expected ' + __wizzExpected.length + ' head nodes, found ' + __wizzOwn.length);");
+      builder.add('    } else {').indent();
+      builder.add('      let __wizzHeadOk = true;');
+      builder.add('      for (let i = 0; i < __wizzExpected.length; i++) {').indent();
+      builder.add('        const __wizzGot = __wizzOwn[i];');
+      builder.add('        const __wizzWant = __wizzExpected[i];');
+      builder.add("        if (__wizzNodeTag(__wizzGot) !== __wizzExpected[i].tag) {");
+      builder.add("          problems.push('expected head node ' + i + ' to be <' + __wizzExpected[i].tag + '>, found ' + __wizzDescribe(__wizzGot));");
+      builder.add('          __wizzHeadOk = false;');
+      builder.add('          break;');
+      builder.add('        }');
+      // Title text and empty void elements compare through textContent.
+      builder.add("        if ((__wizzGot.textContent || '') !== __wizzExpected[i].text) {");
+      builder.add("          problems.push('head node ' + i + ' text mismatch');");
+      builder.add('          __wizzHeadOk = false;');
+      builder.add('          break;');
+      builder.add('        }');
+      builder.add('        for (let a = 0; a < __wizzExpected[i].attrs.length; a++) {').indent();
+      builder.add('          const __wizzAttr = __wizzExpected[i].attrs[a];');
+      builder.add("          if (__wizzGot.getAttribute(__wizzAttr[0]) !== __wizzAttr[1]) {");
+      builder.add("            problems.push('head node ' + i + ' attribute ' + __wizzAttr[0] + ' mismatch');");
+      builder.add('            __wizzHeadOk = false;');
+      builder.add('            break;');
+      builder.add('          }');
+      builder.dedent().add('        }');
+      builder.add('        if (!__wizzHeadOk) break;');
+      builder.add('        for (let f = 0; f < (__wizzExpected[i].flags || []).length; f++) {').indent();
+      builder.add('          const __wizzFlag = __wizzExpected[i].flags[f];');
+      builder.add("          if ((__wizzGot.getAttribute(__wizzFlag[0]) !== null) !== (__wizzFlag[1] !== null)) {");
+      builder.add("            problems.push('head node ' + i + ' attribute ' + __wizzFlag[0] + ' mismatch');");
+      builder.add('            __wizzHeadOk = false;');
+      builder.add('            break;');
+      builder.add('          }');
+      builder.dedent().add('        }');
+      builder.add('        if (!__wizzHeadOk) break;');
+      builder.dedent().add('      }');
+      builder.add('      if (__wizzHeadOk) {');
+      builder.add('        __wizzClaimHead(__wizzOwn);');
+      builder.add('        __wizzHeadNodes = __wizzOwn;');
+      builder.add('      }');
+      builder.dedent().add('    }');
+      builder.dedent().add('  }');
+    }
   }
 
   // The mount point's first element is adopted as the component root; a
@@ -476,9 +619,10 @@ function generateHydrationFunction(templateAST, componentImports = []) {
   for (const adoption of componentAdoptions) {
     const componentNode = adoption.node;
     const idLiteral = JSON.stringify(String(componentNode.componentId));
+    const headOwnerArg = headActive ? `, __wizzHeadOwner + ${JSON.stringify(`/${componentNode.componentId}`)}` : '';
     builder.add('  if (problems.length === 0) {').indent();
     builder.add(`    const __wizzSlice_${componentNode.componentId} = __wizzReadSlice(state, ${idLiteral});`);
-    builder.add(`    const __wizzChild_${componentNode.componentId} = __wizzHydrate_${componentNode.name}.hydrateRoot(${adoption.ref}, ${buildComponentPropsSource(componentNode)}, __wizzSlice_${componentNode.componentId});`);
+    builder.add(`    const __wizzChild_${componentNode.componentId} = __wizzHydrate_${componentNode.name}.hydrateRoot(${adoption.ref}, ${buildComponentPropsSource(componentNode)}, __wizzSlice_${componentNode.componentId}${headOwnerArg});`);
     builder.add(`    childComponents.push(__wizzChild_${componentNode.componentId});`);
     const hasReactiveProps = (componentNode.attributes || []).some((attribute) => attribute.dynamic && attribute.dependencies?.length > 0);
     if (hasReactiveProps) {
@@ -487,14 +631,45 @@ function generateHydrationFunction(templateAST, componentImports = []) {
     builder.dedent().add('  }');
   }
 
-  builder.add('  if (problems.length > 0) {');
+  // Consume the run only after every claim succeeded: any node still tagged
+  // with a delivery owner was not adopted by any component, so the delivery
+  // does not match the client tree. Claimed titles have been moved to the
+  // front of document.head by __wizzClaimHead; they carry no delivery tag
+  // anymore, so leftovers are position-independent.
+  if (headActive) {
+    builder.add('  if (problems.length === 0 && __wizzRun) {').indent();
+    builder.add("    const __wizzLeftover = __wizzRun.nodes.filter((node) => node.getAttribute && node.getAttribute('data-wizz-head-id') !== null);");
+    builder.add('    if (__wizzLeftover.length > 0) {');
+    builder.add("      problems.push(__wizzLeftover.length + ' delivered head nodes were never claimed');");
+    builder.add('    } else {');
+    builder.add('      __wizzRun.startMarker.parentNode.removeChild(__wizzRun.startMarker);');
+    builder.add('      __wizzRun.endMarker.parentNode.removeChild(__wizzRun.endMarker);');
+    builder.add('    }');
+    builder.dedent().add('  }');
+  }
+
+  builder.add('  if (problems.length > 0) {').indent();
   builder.add("    console.warn('[wizz] hydration mismatch: ' + problems.join('; ') + '. Falling back to client rendering.');");
+  if (headActive) {
+    // A failed adoption must leave no head fragments behind: the fresh mount
+    // re-applies this component's head, so adopted slices are released and
+    // unclaimed delivery remains are stripped — the whole run for a page,
+    // only the component's own slice for a nested remount.
+    builder.add('    if (__wizzHeadNodes) __wizzReleaseHead(__wizzHeadNodes);');
+    builder.add('    if (!adoptSelf) {');
+    builder.add('      if (__wizzRun) __wizzStripHeadRun();');
+    builder.add('    } else {');
+    builder.add('      __wizzStripOwnedHeadSlice(__wizzHeadOwner);');
+    builder.add('    }');
+  }
   builder.add('    while (target.childNodes.length > 0) target.removeChild(target.childNodes[0]);');
   builder.add('    return null;');
-  builder.add('  }');
+  builder.dedent().add('  }');
   builder.add('  pendingListeners.forEach((pending) => trackListener(pending[0], pending[1], pending[2]));');
-  builder.add('  return { node: rootNode, childComponents, listUpdates };');
-  builder.add('}');
+  builder.add(headActive
+    ? '  return { node: rootNode, childComponents, listUpdates, headNodes: __wizzHeadNodes };'
+    : '  return { node: rootNode, childComponents, listUpdates };');
+  builder.dedent().add('}');
 
   return builder.generate();
 }

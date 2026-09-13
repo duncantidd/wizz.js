@@ -24,16 +24,82 @@ function createDocument(target, options = {}) {
     remove() { this.removed = true; }
   };
 
+  // The document head with the surface the generated head helpers use:
+  // parentNode-tracked insertion/removal and the title[data-wizz-head]
+  // ownership probe. appendChild moves an already-attached node, matching
+  // real DOM behaviour when a claim relocates a delivered node.
+  const head = {
+    childNodes: [],
+    get firstChild() { return this.childNodes[0] ?? null; },
+    appendChild(node) {
+      const existing = this.childNodes.indexOf(node);
+      if (existing !== -1) this.childNodes.splice(existing, 1);
+      this.childNodes.push(node);
+      node.parentNode = this;
+      return node;
+    },
+    insertBefore(node, referenceNode) {
+      const existing = this.childNodes.indexOf(node);
+      if (existing !== -1) this.childNodes.splice(existing, 1);
+      if (referenceNode == null) {
+        this.childNodes.push(node);
+        node.parentNode = this;
+        return node;
+      }
+      const index = this.childNodes.indexOf(referenceNode);
+      if (index === -1) throw new Error('insertBefore reference node not found');
+      this.childNodes.splice(index, 0, node);
+      node.parentNode = this;
+      return node;
+    },
+    removeChild(node) {
+      const index = this.childNodes.indexOf(node);
+      if (index !== -1) this.childNodes.splice(index, 1);
+      node.parentNode = null;
+      return node;
+    },
+    querySelectorAll(selector) {
+      const match = /^([a-zA-Z]+)\[([a-zA-Z-]+)\]$/.exec(selector);
+      if (!match) throw new Error(`Unsupported test selector: ${selector}`);
+      return this.childNodes.filter(
+        (node) => node.nodeType === 1
+          && node.nodeName === match[1].toUpperCase()
+          && node.attributes?.[match[2]] !== undefined
+      );
+    }
+  };
+
   return {
     stateScript,
+    head,
     getElementById(id) {
       return id === 'app' ? target : null;
     },
     createElement(name) {
-      return { name, childNodes: [], appendChild(node) { this.childNodes.push(node); } };
+      return {
+        name,
+        nodeName: name.toUpperCase(),
+        nodeType: 1,
+        attributes: {},
+        childNodes: [],
+        setAttribute(attributeName, value) { this.attributes[attributeName] = String(value); },
+        removeAttribute(attributeName) { delete this.attributes[attributeName]; },
+        getAttribute(attributeName) { return this.attributes[attributeName] ?? null; },
+        get textContent() {
+          if (this.childNodes.some((node) => node.nodeType === 1)) return '';
+          return this.childNodes.map((node) => (node.nodeType === 3 ? node.nodeValue : '')).join('');
+        },
+        set textContent(value) { this.childNodes.length = 0; this.childNodes.push({ nodeType: 3, nodeValue: value }); },
+        appendChild(node) { this.childNodes.push(node); },
+        addEventListener() {},
+        removeEventListener() {}
+      };
     },
     createTextNode(nodeValue) {
-      return { nodeValue };
+      return { nodeType: 3, nodeValue };
+    },
+    createComment(nodeValue) {
+      return { nodeType: 8, nodeValue };
     },
     querySelector(selector) {
       if (selector === 'script[type="application/wizz-state"]') {
@@ -503,4 +569,53 @@ test('a hydration render superseded by a newer render abandons instead of double
   assert.equal(hydrateCalls, 0);
   assert.deepEqual(mountCalls, ['/about']);
   assert.equal(target.childNodes.length, 0);
+});
+test('navigation swaps component head titles and removes the previous page head nodes', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'App.wizz'), '<wizz:head><title>Home</title></wizz:head><main><h1>Home</h1></main>');
+  writeFile(
+    path.join(inputDirectory, 'pages', 'About.wizz'),
+    '<wizz:head><title>About</title><meta name="page" content="about"></wizz:head><main><p>About</p></main>'
+  );
+  buildProject(inputDirectory, outputDirectory, { log() {}, error() {} });
+  writeFile(path.join(outputDirectory, 'package.json'), '{"type":"module"}');
+
+  const target = {
+    childNodes: [],
+    appendChild(node) { this.childNodes.push(node); },
+    removeChild(node) { const index = this.childNodes.indexOf(node); if (index !== -1) this.childNodes.splice(index, 1); }
+  };
+  const originalDocument = global.document;
+  const originalWindow = global.window;
+  const document = createDocument(target);
+  global.document = document;
+  global.window = createWindow('/');
+  t.after(() => { global.document = originalDocument; });
+  t.after(() => { global.window = originalWindow; });
+
+  await import(`${pathToFileURL(path.join(outputDirectory, 'runtime', 'main.js')).href}?test=${Date.now()}`);
+  await waitFor(() => target.childNodes.length === 1);
+
+  // Mounting Home applied its head: one owned title in the document head.
+  const headTitles = () => document.head.childNodes
+    .filter((node) => node.nodeName === 'TITLE')
+    .map((node) => node.textContent);
+  assert.deepEqual(headTitles(), ['Home']);
+  const homeTitle = document.head.childNodes.find((node) => node.nodeName === 'TITLE');
+  assert.equal(homeTitle.attributes['data-wizz-head'], 'h1');
+  // buildProject compiles with absolute paths, so the loc is file-qualified.
+  assert.match(homeTitle.attributes['data-wizz-loc'], /\/src\/App\.wizz:1:12$/);
+
+  global.window.dispatchPopState('/about');
+  await waitFor(() => headTitles()[0] === 'About');
+
+  // The Home title node was removed by the destroy cascade; the About title
+  // and its meta now own the head.
+  assert.deepEqual(headTitles(), ['About']);
+  assert.deepEqual(document.head.childNodes.map((node) => node.nodeName), ['META', 'TITLE']);
+  assert.equal(document.head.childNodes.find((node) => node.nodeName === 'META').attributes['content'], 'about');
 });

@@ -142,3 +142,147 @@ test('rejects each blocks with malformed syntax', () => {
     /Each blocks require `collection as item` or `collection as item \(item\.key\)` syntax\./
   );
 });
+test('parses a top-level wizz:head block with only the allowed head elements', () => {
+  const source = '<wizz:head><title>Hello</title><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="/a.css"></wizz:head><main>Body</main>';
+  const root = parseTemplate(tokenize(source));
+
+  assert.equal(root.children.length, 2);
+  const head = root.children[0];
+  assert.equal(head.type, 'HeadBlock');
+  assert.equal(head.name, 'wizz:head');
+  assert.equal(head.loc.start.line, 1);
+  assert.equal(head.loc.start.column, 1);
+
+  const [title, meta, link] = head.children;
+  assert.equal(title.type, 'Element');
+  assert.equal(title.name, 'title');
+  assert.deepEqual(
+    title.children.map((child) => ({ type: child.type, value: child.value })),
+    [{ type: 'Text', value: 'Hello' }]
+  );
+  assert.equal(meta.name, 'meta');
+  assert.deepEqual(meta.attributes, [
+    { name: 'name', value: 'viewport' },
+    { name: 'content', value: 'width=device-width' }
+  ]);
+  assert.equal(link.name, 'link');
+  assert.deepEqual(link.attributes, [
+    { name: 'rel', value: 'stylesheet' },
+    { name: 'href', value: '/a.css' }
+  ]);
+  assert.equal(root.children[1].name, 'main');
+});
+
+test('treats meta and link as void inside head blocks', () => {
+  // Unclosed meta must not swallow the following title (the common authoring form)
+  const unclosed = parseTemplate(tokenize('<wizz:head><meta name="a"><title>t</title></wizz:head>'));
+  assert.deepEqual(unclosed.children[0].children.map((child) => child.name), ['meta', 'title']);
+
+  // Self-closing forms work too
+  const selfClosed = parseTemplate(tokenize('<wizz:head><meta name="a" /><link rel="b" /></wizz:head>'));
+  assert.deepEqual(selfClosed.children[0].children.map((child) => child.name), ['meta', 'link']);
+  assert.deepEqual(selfClosed.children[0].children.map((child) => child.children.length), [0, 0]);
+
+  // And they can never receive a closing tag
+  assert.throws(
+    () => parseTemplate(tokenize('<wizz:head><meta name="a"></meta></wizz:head>')),
+    /The void element <meta> cannot have a closing tag at 1:\d+\./
+  );
+});
+
+test('skips whitespace between head elements and allows expression title text', () => {
+  const source = '<wizz:head>\n  <title>Page: {title}</title>\n  <meta content={description}>\n</wizz:head><main></main>';
+  const root = parseTemplate(tokenize(source));
+  const head = root.children[0];
+
+  assert.equal(head.children.length, 2);
+  const title = head.children[0];
+  assert.deepEqual(
+    title.children.map((child) => ({ type: child.type, value: child.value })),
+    [
+      { type: 'Text', value: 'Page: ' },
+      { type: 'Expression', value: 'title' }
+    ]
+  );
+  assert.equal(head.children[1].name, 'meta');
+  assert.deepEqual(head.children[1].attributes, [{ name: 'content', value: 'description', dynamic: true }]);
+});
+
+test('parses a self-closing empty head block', () => {
+  const root = parseTemplate(tokenize('<wizz:head /><main>Body</main>'));
+  assert.equal(root.children[0].type, 'HeadBlock');
+  assert.deepEqual(root.children[0].children, []);
+  assert.equal(root.children[1].name, 'main');
+});
+
+test('rejects head blocks nested inside elements', () => {
+  assert.throws(
+    () => parseTemplate(tokenize('<main><wizz:head></wizz:head></main>')),
+    /<wizz:head> must be a top-level block; it cannot be nested inside <main> at 1:7\./
+  );
+});
+
+test('rejects a second head block in the same component', () => {
+  assert.throws(
+    () => parseTemplate(tokenize('<wizz:head></wizz:head><wizz:head></wizz:head>')),
+    /A component can declare only one <wizz:head> block at 1:24\./
+  );
+});
+
+test('rejects attributes on the head block itself', () => {
+  assert.throws(
+    () => parseTemplate(tokenize('<wizz:head lang="en"></wizz:head>')),
+    /<wizz:head> does not accept attributes at 1:1\./
+  );
+});
+
+test('rejects unsupported elements inside head blocks with located diagnostics', () => {
+  const source = '<wizz:head>\n  <div></div>\n</wizz:head>';
+  assert.throws(
+    () => parseTemplate(tokenize(source)),
+    /<div> is not allowed inside <wizz:head> — only <title>, <meta>, and <link> are supported at 2:3\./
+  );
+});
+
+test('rejects text outside title inside head blocks', () => {
+  assert.throws(
+    () => parseTemplate(tokenize('<wizz:head>hello</wizz:head>')),
+    /Only <title>, <meta>, and <link> elements are allowed inside <wizz:head> at 1:12\./
+  );
+});
+
+test('rejects expressions placed directly inside head blocks', () => {
+  assert.throws(
+    () => parseTemplate(tokenize('<wizz:head>{title}</wizz:head>')),
+    /Expressions are not allowed directly inside <wizz:head> — put them inside <title> text at 1:12\./
+  );
+});
+
+test('rejects block directives inside head blocks', () => {
+  assert.throws(
+    () => parseTemplate(tokenize('<wizz:head>{#if flag}<title>t</title>{/if}</wizz:head>')),
+    /Block directives are not supported inside <wizz:head> at 1:12\./
+  );
+  assert.throws(
+    () => parseTemplate(tokenize('<wizz:head>{#each items as item}<title>t</title>{/each}</wizz:head>')),
+    /Block directives are not supported inside <wizz:head> at 1:12\./
+  );
+});
+
+test('rejects elements nested inside title inside head blocks', () => {
+  assert.throws(
+    () => parseTemplate(tokenize('<wizz:head><title><b>x</b></title></wizz:head>')),
+    /<b> is not allowed inside <title> at 1:19\./
+  );
+});
+
+test('reports unclosed head blocks and nested unclosed titles', () => {
+  assert.throws(
+    () => parseTemplate(tokenize('<wizz:head>')),
+    /Unclosed tag <wizz:head> starting at 1:1\./
+  );
+  assert.throws(
+    () => parseTemplate(tokenize('<wizz:head><title>t')),
+    /Unclosed tag <title> starting at 1:12\./
+  );
+});

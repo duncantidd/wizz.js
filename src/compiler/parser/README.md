@@ -17,10 +17,11 @@ component source
   -> parseTemplate
   -> integrateExpressions
   -> extractScriptBlock
+  -> extractHeadBlock
   -> extractComponentImports
   -> extractProps
   -> scanState
-  -> { template, script, rawScript, imports, props }
+  -> { template, script, rawScript, head, imports, props }
 ```
 
 The parser is build-time Node.js code. It does not execute component JavaScript or create DOM nodes. Its job is to preserve enough source structure and location data for the analyzer and generator to make correct later decisions.
@@ -106,6 +107,22 @@ All template nodes originating from source have `loc.start` and `loc.end` positi
 { type: 'IfBlock', test: 'flag', consequent: [], alternate: [], children: [], loc: { start: { offset: 6, line: 1, column: 7 }, end: {} } }
 ```
 
+```js
+// The <wizz:head> block: extracted from the AST by extractHeadBlock() before
+// generation, delivered through the payload's `head` field. Its children are
+// Elements restricted to title (with text/interpolation children) and the
+// void meta/link (static and dynamic attributes).
+{
+  type: 'HeadBlock',
+  name: 'wizz:head',
+  children: [
+    { type: 'Element', name: 'title', children: [{ type: 'Expression', value: 'title', /* ... */ }], loc: {} },
+    { type: 'Element', name: 'meta', attributes: [{ name: 'name', value: 'x' }, { name: 'content', value: 'd', dynamic: true }], children: [], loc: {} }
+  ],
+  loc: {}
+}
+```
+
 ## Supported Language Surface
 
 The current implementation is intentionally small. Documentation should distinguish support that exists today from syntax that may be familiar from JavaScript but is not yet parsed.
@@ -121,6 +138,7 @@ The current implementation is intentionally small. Documentation should distingu
 | Component imports | Default imports ending in `.wizz`, such as `import Counter from './Counter.wizz';` | Imported modules are rewritten to `.js` in generated output. Named, namespace, dynamic, and non-Wizz imports are outside this contract. |
 | Component props | `export let name = 'Guest';` and bare `export let count;` declarations | One prop per statement, terminated with a semicolon. `export` followed by anything other than `let` is an error. Prop names cannot be reserved words, `props`, `__proto__`, or use the reserved `__wizz` prefix. |
 | Script scanning | Semicolon-terminated `let`/`const` assignments and named `function` declarations | It is a targeted regex scanner, not a JavaScript parser. `var`, classes, arrow functions, and syntax without the recognized forms are not reported. |
+| Head blocks | Exactly one root-level `<wizz:head>` containing only `<title>`, `<meta>`, and `<link>` | No attributes on the block, no nesting, no second block. Bare text, expressions, or directives directly inside the block are rejected; elements inside `<title>` are rejected; void closes (`</meta>`) are rejected. `<wizz:style>` is deferred to the styles milestone. |
 
 ## Files
 
@@ -134,9 +152,10 @@ This is the module downstream compiler stages should use. It owns the ordering o
 2. `parseTemplate()` verifies nesting and builds the template tree.
 3. `integrateExpressions()` adds expression ASTs to interpolation nodes.
 4. `extractScriptBlock()` removes script content from the render tree while returning that content.
-5. `extractComponentImports()` lifts `.wizz` imports out of the script.
-6. `extractProps()` lifts `export let` prop declarations out of the script and records them.
-7. `scanState()` turns recognized declarations into lightweight metadata.
+5. `extractHeadBlock()` prunes the root-level `<wizz:head>` block and returns the `HeadBlock` node (or `null`).
+6. `extractComponentImports()` lifts `.wizz` imports out of the script.
+7. `extractProps()` lifts `export let` prop declarations out of the script and records them.
+8. `scanState()` turns recognized declarations into lightweight metadata.
 
 It throws `TypeError` unless `source` is a string. A component without `<script>` receives `script: []`, `rawScript: ''`, `imports: []`, and `props: []`, keeping the compiler handoff stable and avoiding special cases downstream.
 
@@ -238,6 +257,10 @@ That translation ensures a developer can find a bad expression from the original
 Traversal visits children in reverse order. That allows `splice()` to remove a child safely while iteration continues and means multiple script blocks, if present, are all pruned. Because `scriptContent` is overwritten on each match, the returned value is the earliest script in source order after reverse traversal completes. The component facade normalizes `null` to `rawScript: ''`.
 
 Script reconstruction handles both `Text` and `Expression` children. Normally the tokenizer's `SCRIPT` state makes a script entirely `Text`; wrapping an expression child back in `{}` keeps reconstruction resilient if an AST is supplied from another source or transformed before extraction.
+
+**Export:** `extractHeadBlock(ast)` (also from this module)
+
+`extractHeadBlock()` finds the root-level `HeadBlock` node the template parser created for `<wizz:head>`, splices it out of `Root.children` so body generation never sees it, and returns the node — or `null` when the component declares no head. The block's children (title text, static and dynamic attributes) ride along inside the returned node for the generators to consume.
 
 ### `componentImportExtractor.js` - Component Import Extraction
 

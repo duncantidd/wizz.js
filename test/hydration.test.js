@@ -20,7 +20,7 @@ async function flushUpdates() {
 // tests can prove hydration adopts markup instead of recreating it.
 function createEnhancedDocument() {
   const elements = new Map();
-  const metrics = { elements: 0, textNodes: 0, textWrites: 0, addedListeners: 0, removedListeners: 0 };
+  const metrics = { elements: 0, textNodes: 0, textWrites: 0, addedListeners: 0, removedListeners: 0, createdNames: [] };
 
   function makeTextNode(initialValue) {
     return {
@@ -38,6 +38,7 @@ function createEnhancedDocument() {
     return {
       nodeType: 1,
       name,
+      nodeName: name.toUpperCase(),
       tagName: name.toUpperCase(),
       attributes: {},
       childNodes: [],
@@ -48,8 +49,21 @@ function createEnhancedDocument() {
           elements.set(`[data-wizz-id="${value}"]`, this);
         }
       },
+      removeAttribute(attributeName) {
+        delete this.attributes[attributeName];
+      },
       getAttribute(attributeName) {
         return this.attributes[attributeName] ?? null;
+      },
+      // Real DOM textContent concatenates descendant text; head verification
+      // reads it on adopted title nodes, and the fresh-title path writes it.
+      get textContent() {
+        if (this.childNodes.some((node) => node.nodeType === 1)) return '';
+        return this.childNodes.map((node) => (node.nodeType === 3 ? node.nodeValue : '')).join('');
+      },
+      set textContent(value) {
+        this.childNodes.length = 0;
+        this.childNodes.push(makeTextNode(value));
       },
       querySelector(selector) {
         const find = (node) => {
@@ -90,12 +104,64 @@ function createEnhancedDocument() {
     };
   }
 
+  // The document head, with the parentNode-tracking surface the head helpers
+  // use: insertBefore/appendChild/removeChild maintain `node.parentNode`
+  // (claim/release depend on it), and querySelectorAll answers the
+  // `title[data-wizz-head]` ownership probe.
+  const headElement = {
+    nodeType: 1,
+    name: 'head',
+    nodeName: 'HEAD',
+    tagName: 'HEAD',
+    childNodes: [],
+    get firstChild() { return this.childNodes[0] ?? null; },
+    appendChild(node) {
+      const existing = this.childNodes.indexOf(node);
+      if (existing !== -1) this.childNodes.splice(existing, 1);
+      this.childNodes.push(node);
+      node.parentNode = this;
+      return node;
+    },
+    insertBefore(node, referenceNode) {
+      // Browsers move an already-attached node rather than duplicating it.
+      const existing = this.childNodes.indexOf(node);
+      if (existing !== -1) this.childNodes.splice(existing, 1);
+      if (referenceNode == null) {
+        this.childNodes.push(node);
+        node.parentNode = this;
+        return node;
+      }
+      const index = this.childNodes.indexOf(referenceNode);
+      if (index === -1) throw new Error('insertBefore reference node not found');
+      this.childNodes.splice(index, 0, node);
+      node.parentNode = this;
+      return node;
+    },
+    removeChild(node) {
+      const index = this.childNodes.indexOf(node);
+      if (index !== -1) this.childNodes.splice(index, 1);
+      node.parentNode = null;
+      return node;
+    },
+    querySelectorAll(selector) {
+      const match = /^([a-zA-Z]+)\[([a-zA-Z-]+)\]$/.exec(selector);
+      if (!match) throw new Error(`Unsupported test selector: ${selector}`);
+      return this.childNodes.filter(
+        (node) => node.nodeType === 1
+          && node.nodeName === match[1].toUpperCase()
+          && node.attributes?.[match[2]] !== undefined
+      );
+    }
+  };
+
   return {
     metrics,
     makeElement,
     makeTextNode,
+    head: headElement,
     createElement(name) {
       metrics.elements++;
+      metrics.createdNames.push(name);
       return makeElement(name);
     },
     createTextNode(initialValue) {
@@ -536,4 +602,138 @@ test('escaping survives the full round trip for hostile text and attribute conte
   assert.equal(paragraph.attributes.title, '"<b>&amp;');
   assert.equal(paragraph.childNodes.length, 1);
   assert.equal(paragraph.childNodes[0].nodeValue, '"<b>&amp;');
+});
+
+// Compiles both targets for an inline head-declaring page into a temporary
+// ESM project and imports them (cache-busted) with the shim document and a
+// pre-seeded shell title installed.
+async function loadHeadModules(t, pageSource) {
+  const projectDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-head-test-'));
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(projectDirectory, 'package.json'), '{"type":"module"}');
+
+  const { source: serverSource } = compileServer(pageSource, { filePath: 'src/Page.wizz' });
+  fs.writeFileSync(path.join(projectDirectory, 'server.js'), serverSource);
+  const { source: clientSource } = compile(pageSource, { filePath: 'src/Page.wizz', hydratable: true });
+  fs.writeFileSync(path.join(projectDirectory, 'client.js'), clientSource);
+
+  const bust = `?test=${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const serverModule = await import(`${pathToFileURL(path.join(projectDirectory, 'server.js')).href}${bust}`);
+
+  const document = createEnhancedDocument();
+  // A title authored by the static shell (outside any wizz component) — it
+  // must survive component mounts and resume as the active title when the
+  // component's head is released.
+  const shellTitle = document.createElement('title');
+  shellTitle.textContent = 'Shell';
+  document.head.appendChild(shellTitle);
+
+  const originalDocument = global.document;
+  global.document = document;
+  t.after(() => { global.document = originalDocument; });
+  const clientModule = await import(`${pathToFileURL(path.join(projectDirectory, 'client.js')).href}${bust}`);
+
+  const metricsBefore = { ...document.metrics };
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(message);
+  t.after(() => { console.warn = originalWarn; });
+
+  const render = () => {
+    const { html, head, state } = serverModule.renderComponent();
+    return { html, head, state, stateScript: serverModule.serializeInitialState(state) };
+  };
+  return { document, clientModule, metricsBefore, warnings, render };
+}
+
+// Places the delivered head run into document.head exactly as the dev server
+// would have emitted it into the page: marker-delimited, after any shell nodes.
+function deliverHeadRun(document, headMarkup) {
+  document.head.appendChild(document.createComment('wizz:head-start'));
+  for (const node of parseMarkup(headMarkup, document)) document.head.appendChild(node);
+  document.head.appendChild(document.createComment('wizz:head-end'));
+}
+
+test('delivers the component head and adopts it without duplication', async (t) => {
+  const { document, clientModule, metricsBefore, warnings, render } = await loadHeadModules(
+    t,
+    '<wizz:head><title>Page {who}</title><meta name="x" content={tag}></wizz:head><main><h1>{who}</h1></main><script>\nlet who = "A";\nlet tag = "t1";\n</' + 'script>'
+  );
+  const { html, head, state } = render();
+
+  assert.match(head, /^<title data-wizz-head-id="r" data-wizz-loc="src\/Page\.wizz:1:12">Page A<\/title><meta data-wizz-head-id="r" data-wizz-loc="src\/Page\.wizz:1:37" name="x" content="t1">$/);
+  deliverHeadRun(document, head);
+  const target = deliverMarkup(document, html);
+
+  const component = clientModule.hydrateComponent(target, {}, state);
+
+  assert.equal(warnings.length, 0);
+  assert.ok(component);
+  // Adoption created nothing: the delivered head nodes are claimed as-is.
+  assert.equal(document.metrics.elements, metricsBefore.elements);
+  assert.equal(document.metrics.textNodes, metricsBefore.textNodes);
+
+  // Claimed ownership is re-tagged, the delivery tags consumed, and the
+  // component title now leads the head (the one document.title reads).
+  const titleNode = document.head.childNodes.find((node) => node.nodeName === 'TITLE' && node.textContent === 'Page A');
+  const metaNode = document.head.childNodes.find((node) => node.nodeName === 'META');
+  assert.equal(document.head.childNodes[0], titleNode);
+  assert.equal(titleNode.attributes['data-wizz-head'], 'h1');
+  assert.ok(!('data-wizz-head-id' in titleNode.attributes));
+  assert.equal(metaNode.attributes['data-wizz-head'], 'h1');
+  assert.ok(!('data-wizz-head-id' in metaNode.attributes));
+  assert.deepEqual(
+    document.head.childNodes.map((node) => node.nodeName),
+    ['TITLE', 'TITLE', 'META'],
+    'component title leads the head; the shell title and claimed meta follow'
+  );
+  // The marker-delimited run is fully consumed.
+  assert.ok(!document.head.childNodes.some((node) => node.nodeValue === 'wizz:head-start' || node.nodeValue === 'wizz:head-end'));
+
+  component.destroy();
+  assert.deepEqual(
+    document.head.childNodes.map((node) => node.nodeName),
+    ['TITLE'],
+    'release removes the adopted head and the shell title resumes'
+  );
+  assert.equal(document.head.childNodes[0].textContent, 'Shell');
+});
+
+test('a tampered delivered title falls back to a fresh head with no duplicates', async (t) => {
+  const { document, clientModule, metricsBefore, warnings, render } = await loadHeadModules(
+    t,
+    '<wizz:head><title>Page {who}</title></wizz:head><main><h1>{who}</h1></main><script>\nlet who = "A";\n</' + 'script>'
+  );
+  const { html, head, state } = render();
+  deliverHeadRun(document, head);
+
+  // Simulate head drift: someone edited the delivered title between delivery
+  // and hydration. The compile-time expectation no longer matches.
+  const deliveredTitle = document.head.childNodes.find((node) => node.nodeName === 'TITLE' && node.textContent === 'Page A');
+  deliveredTitle.childNodes[0].nodeValue = 'Tampered';
+
+  const target = deliverMarkup(document, html);
+  const component = clientModule.hydrateComponent(target, {}, state);
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /^\[wizz\] hydration mismatch: /);
+  assert.match(warnings[0], /head node 0 text mismatch/);
+  assert.ok(component);
+
+  // The stale run is stripped entirely and the fresh mount applied its own
+  // head: exactly one wizz title with the correct evaluated text remains,
+  // ahead of the shell title.
+  const titles = document.head.childNodes.filter((node) => node.nodeName === 'TITLE');
+  assert.deepEqual(titles.map((node) => node.textContent), ['Page A', 'Shell']);
+  assert.ok(!document.head.childNodes.some((node) => node.nodeValue === 'wizz:head-start' || node.nodeValue === 'wizz:head-end'));
+  assert.ok(!document.head.childNodes.some((node) => node.getAttribute('data-wizz-head-id') !== null));
+  // The fallback remount recreates the body tree (main + h1) plus the fresh
+  // title element — but nothing else in the head.
+  assert.equal(document.metrics.elements, metricsBefore.elements + 3);
+  // (createdNames indices align with the elements count, which the snapshot
+  // predates.)
+  assert.deepEqual(document.metrics.createdNames.slice(metricsBefore.elements), ['main', 'h1', 'title']);
+
+  component.destroy();
+  assert.deepEqual(document.head.childNodes.map((node) => node.nodeName), ['TITLE']);
 });

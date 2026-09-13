@@ -88,7 +88,7 @@ async function renderServerRoute(routeEntry, indexPath, response) {
   // never deliver a stale render after an edit.
   const { mtimeMs } = fs.statSync(routeEntry.serverModulePath);
   const serverModule = await import(`${pathToFileURL(routeEntry.serverModulePath).href}?v=${mtimeMs}`);
-  const { html, state } = serverModule.renderComponent();
+  const { html, state, head } = serverModule.renderComponent();
   const stateScript = serverModule.serializeInitialState(state);
   const shell = fs.readFileSync(indexPath, 'utf8');
   const mountPoint = '<div id="app"></div>';
@@ -97,9 +97,21 @@ async function renderServerRoute(routeEntry, indexPath, response) {
     throw new Error(`Document shell has no <div id="app"></div> mount point: ${indexPath}`);
   }
 
+  // Marker-delimited so the client's hydrateCreate can locate the delivered
+  // run and consume it after a successful adoption. No title de-duplication
+  // is attempted here: per-owner slice verification on the client requires
+  // every component's own nodes to be delivered verbatim; precedence is
+  // resolved at mount time, where the deepest component's title is moved to
+  // the head front (the one document.title reads).
+  const headRun = head
+    ? `<!--wizz:head-start-->${head}<!--wizz:head-end-->`
+    : '';
+
   // Function-form replacement: rendered HTML may contain `$` sequences
   // (`$&`, `$'`, `$$`) that string-form replacement would expand.
-  const document = shell.replace(mountPoint, () => `<div id="app">${html}</div>\n  ${stateScript}`);
+  const document = shell
+    .replace(mountPoint, () => `<div id="app">${html}</div>\n  ${stateScript}`)
+    .replace('</head>', () => `${headRun}</head>`);
 
   response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
   response.end(document);

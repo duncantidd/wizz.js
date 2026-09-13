@@ -96,6 +96,7 @@ The current analyzer is intentionally conservative and works with the parser's p
 | `{user.name + count}` | `['user', 'count']` | Dependencies follow expression traversal order. |
 | `{title}` where `title` is `const` | `[]` | `const` declarations are currently non-reactive. |
 | Static text or ordinary elements | No `dependencies` property | Only parsed interpolation nodes participate in dependency tracking. |
+| `<wizz:head>` contents | Not analyzed | The head block is pruned by the parser's `extractHeadBlock()` before analysis; its expressions ride the same dynamic-attribute/text evaluation paths as body markup at generation time, so they carry no separate dependency metadata (head follows navigation, not reactive state — reactive head updates are out of scope). |
 
 `assignNodeIds()` marks an element when one of its **immediate children** is a reactive expression or when it has a reactive dynamic attribute. It does not mark ancestors merely because a descendant is reactive. For example, in `<section><div><p>{count}</p></div></section>`, only the `p` is assigned an ID.
 
