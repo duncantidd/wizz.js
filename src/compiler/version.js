@@ -15,17 +15,23 @@
 //     `hydrateComponent(target, props, state)` and
 //     `hydrateRoot(rootNode, props, state)`, which adopt server-rendered
 //     markup (including blocks, lists, and nested components) through the
-//     documented hydration traversal. Within one major version, generated
-//     modules keep this surface and their runtime behavior.
+//     documented hydration traversal. For components compiled from a
+//     `<wizz:head>` template (or rendering head-declaring children), the
+//     surface additionally carries the additive `head` field: server modules
+//     export `renderComponent(props, options)` returning
+//     `{ html, head, state }` with `head` the serialized head markup string,
+//     and client modules manage the document head on mount/destroy and
+//     adopt the delivered head during hydration. Within one major version,
+//     generated modules keep this surface and their runtime behavior.
 //
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.5.0',
-  syntax: '1.1.0',
-  output: '1.5.0'
+  compiler: '1.6.0',
+  syntax: '1.2.0',
+  output: '1.6.0'
 });
 
 module.exports = { VERSIONS };
