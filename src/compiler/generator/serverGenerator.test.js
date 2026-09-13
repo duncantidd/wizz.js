@@ -737,3 +737,31 @@ test('two styled components with conflicting h2 rules keep distinct scopes', asy
   assert.ok(head.includes(`h2[data-wizz-s="${scopes[1]}"] { font-size: 24px }`));
   assert.ok(html.includes('data-wizz-s='));
 });
+
+test('moduleQuery decorates child import specifiers for development cache busting', () => {
+  const moduleSource = generateServer(
+    '<script>import Counter from "./Counter.wizz";</script><main><Counter /></main>',
+    { componentServerRenderable: { Counter: true }, moduleQuery: '?v=1739-1' }
+  );
+
+  assert.match(moduleSource, /^import \* as __wizzServer_Counter from "\.\/Counter\.server\.js\?v=1739-1";$/m);
+});
+
+test('moduleQuery is empty by default, keeping production specifiers clean', () => {
+  const moduleSource = generateServer(
+    '<script>import Counter from "./Counter.wizz";</script><main><Counter /></main>',
+    { componentServerRenderable: { Counter: true } }
+  );
+
+  assert.match(moduleSource, /^import \* as __wizzServer_Counter from "\.\/Counter\.server\.js";$/m);
+});
+
+test('moduleQuery rejects values that are not URL query strings', () => {
+  assert.throws(
+    () => generateServer(
+      '<script>import Counter from "./Counter.wizz";</script><main><Counter /></main>',
+      { componentServerRenderable: { Counter: true }, moduleQuery: 'v=1' }
+    ),
+    /moduleQuery must be a URL query string/
+  );
+});

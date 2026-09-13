@@ -10,6 +10,9 @@ const MIME_TYPES = {
   '.js': 'text/javascript; charset=utf-8'
 };
 
+// Monotonic per-process build counter backing each rebuild's module query.
+let moduleQuerySequence = 0;
+
 function copyDocumentShell(projectDirectory, outputDirectory) {
   for (const fileName of ['index.html', 'App.css']) {
     const sourcePath = path.join(projectDirectory, fileName);
@@ -27,7 +30,15 @@ function assertDocumentShell(outputDirectory) {
 }
 
 function buildApplication(inputDirectory, outputDirectory, projectDirectory, logger, build = buildProject) {
-  const result = build(inputDirectory, outputDirectory, logger);
+  // Each rebuild stamps child `.server.js` import specifiers with a fresh
+  // query so the dev server's in-process module cache re-evaluates the whole
+  // child graph: Node's cache keys on the full URL and queries never
+  // propagate through static imports, so without the stamp a component edit
+  // would keep serving the first build's stale markup and styles until the
+  // server restarted. Timestamp plus sequence survives rapid test rebuilds.
+  moduleQuerySequence += 1;
+  const moduleQuery = `?v=${Date.now()}-${moduleQuerySequence}`;
+  const result = build(inputDirectory, outputDirectory, logger, { moduleQuery });
   copyDocumentShell(projectDirectory, outputDirectory);
 
   if (result.failedCount > 0) {

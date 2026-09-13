@@ -264,12 +264,21 @@ function generateServerComponent(astPayload, options = {}) {
 
   // Child server modules are imported, not inlined: the build mirrors the
   // source layout into the output directory, so a component's relative
-  // specifier resolves identically beside the generated module.
+  // specifier resolves identically beside the generated module. The optional
+  // moduleQuery decorates those specifiers so a long-lived development
+  // server's in-process module cache re-evaluates the whole child graph
+  // after a rebuild — queries never propagate through static imports, so
+  // without it a cached child module would keep serving stale markup and
+  // styles. Production builds omit the option and emit clean specifiers.
+  const moduleQuery = typeof options.moduleQuery === 'string' ? options.moduleQuery : '';
+  if (moduleQuery !== '' && !/^\?[A-Za-z0-9._%+=-]*$/.test(moduleQuery)) {
+    throw new TypeError(`moduleQuery must be a URL query string starting with '?' or empty: ${JSON.stringify(moduleQuery)}`);
+  }
   const emittedImports = new Set();
   for (const component of componentImports) {
     if (!usedImportNames.has(component.name) || emittedImports.has(component.name)) continue;
     emittedImports.add(component.name);
-    const serverPath = component.source.replace(/\.wizz$/, '.server.js');
+    const serverPath = component.source.replace(/\.wizz$/, '.server.js') + moduleQuery;
     builder.add(`import * as __wizzServer_${component.name} from ${JSON.stringify(serverPath)};`);
   }
   if (emittedImports.size > 0) builder.add('');

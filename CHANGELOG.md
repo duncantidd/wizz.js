@@ -28,6 +28,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The hydration generator's leftover-run check reads delivery tags loosely (`!= null`), so absent `data-wizz-head-id` attributes read as claimed identically in real DOMs (`null`) and test shims (`undefined`).
 - The document shell is now copied into the output directory by `wizz build` (previously hand-placed); `wizz dev` continues to require it at serve time.
 
+#### Fixed
+
+- Editing a child component no longer requires restarting `wizz dev`: each rebuild stamps child `.server.js` import specifiers with a fresh `?v=<timestamp>-<sequence>` query (a new `moduleQuery` compile option threaded from the dev server through `buildProject`/`compileServer` into the server generator), because Node's module cache keys on the full URL and queries never propagate through static imports — without the stamp, a rebuild re-evaluated only the page module while its cached children kept serving the first build's stale markup, scope hashes, and styles. Production builds omit the option and emit clean specifiers, byte-identical to before.
+
 #### Docs
 
 - ROADMAP §16 records the implementation notes; the compiler READMEs document the `StyleBlock` node, the raw-text style mode, the CSS scanner, scope stamping, and the style delivery/refcounting contract; STRUCTURE.md and the CHANGELOG are synced.

@@ -520,6 +520,59 @@ test('a styled component rendered twice on one page injects its stylesheet once'
   assert.equal((markup.match(/data-wizz-s=/g) || []).length, 6);
 });
 
+test('a component edit reaches the served document without restarting the dev server', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), DOCUMENT_SHELL);
+  fs.mkdirSync(path.join(projectDirectory, 'src'), { recursive: true });
+  writeFile(
+    path.join(projectDirectory, 'src', 'Card.wizz'),
+    '<article><h2>Card</h2></article><wizz:style>h2 { color: black }</wizz:style>'
+  );
+  writeFile(
+    path.join(projectDirectory, 'src', 'App.wizz'),
+    '<script>import Card from "./Card.wizz";</script><main><Card /></main>'
+  );
+
+  const watchListeners = [];
+  const developmentServer = startDevelopmentServer({
+    projectDirectory,
+    port: 0,
+    logger: createLogger(),
+    watch(directory, options, listener) {
+      watchListeners.push(listener);
+      return { close() {} };
+    }
+  });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  const before = await (await fetch(`${url}/`)).text();
+  assert.match(before, /h2\[data-wizz-s="[a-z0-9]+"\] \{ color: black \}/);
+
+  // Edit the CHILD component (not the page) and rebuild through the watcher.
+  // Node's module cache keys on the full URL and queries never propagate
+  // through static imports, so the rebuild stamps child `.server.js`
+  // specifiers with a fresh query — without it, every rebuild kept serving
+  // the first build's stale child markup and styles until restart.
+  writeFile(
+    path.join(projectDirectory, 'src', 'Card.wizz'),
+    '<article><h2 class="card-heading">Card v2</h2></article><wizz:style>h2 { color: black } .card-heading { color: pink }</wizz:style>'
+  );
+  watchListeners[0]('change', 'Card.wizz');
+  await flushUpdates();
+
+  const after = await (await fetch(`${url}/`)).text();
+  assert.match(after, /Card v2/);
+  assert.match(after, /class="card-heading"/);
+  // Class terminals take the scope attribute prepended (scanner contract).
+  assert.match(after, /\[data-wizz-s="[a-z0-9]+"\]\.card-heading \{ color: pink \}/);
+  // The fresh scope hash must appear identically in the markup and the style.
+  const scopeMatch = /<h2 class="card-heading" data-wizz-s="([a-z0-9]+)"/.exec(after);
+  assert.ok(scopeMatch, 'the delivered h2 carries the new scope');
+  assert.match(after, new RegExp(`h2\\[data-wizz-s="${scopeMatch[1]}"\\] \\{ font-size|color`));
+});
+
 test('renders fresh server modules after a watch rebuild (no stale cache)', async (t) => {
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));

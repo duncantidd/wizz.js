@@ -120,7 +120,7 @@ function resolveImportPath(inputPath, importSource, discoveredFiles) {
  * meaningful render order); a cycle is reported as ineligibility for every
  * file involved rather than recursing forever.
  */
-function computeServerEligibility(inputFiles, compiledByInputPath, failureReasonsByInputPath) {
+function computeServerEligibility(inputFiles, compiledByInputPath, failureReasonsByInputPath, options = {}) {
   const discoveredFiles = new Set(inputFiles);
   const eligibilityByInputPath = new Map();
   const serverBuildsByInputPath = new Map();
@@ -154,7 +154,14 @@ function computeServerEligibility(inputFiles, compiledByInputPath, failureReason
       }
 
       const gateOptions = { componentServerRenderable, componentIneligibilityReasons };
-      const serverResult = compileServer(rawWizzCode, { filePath: inputPath, ...gateOptions });
+      const serverResult = compileServer(rawWizzCode, {
+        filePath: inputPath,
+        ...gateOptions,
+        // Decorates child import specifiers so a development server's module
+        // cache re-evaluates the child graph after a rebuild; empty for
+        // production builds.
+        moduleQuery: options.moduleQuery
+      });
       const hydratableResult = compile(rawWizzCode, { filePath: inputPath, hydratable: true, ...gateOptions });
 
       serverBuildsByInputPath.set(inputPath, { serverResult, hydratableResult });
@@ -346,7 +353,7 @@ function emitRouteManifest(inputDirectory, outputDirectory, inputFiles, serverRe
   );
 }
 
-function buildProject(inputDirectory, outputDirectory, logger = console) {
+function buildProject(inputDirectory, outputDirectory, logger = console, options = {}) {
   const resolvedInputDirectory = path.resolve(inputDirectory);
   const resolvedOutputDirectory = path.resolve(outputDirectory);
 
@@ -386,7 +393,10 @@ function buildProject(inputDirectory, outputDirectory, logger = console) {
   const { eligibilityByInputPath, serverBuildsByInputPath } = computeServerEligibility(
     inputFiles,
     compiledByInputPath,
-    failureReasonsByInputPath
+    failureReasonsByInputPath,
+    // Threaded through so the development server can decorate child import
+    // specifiers per rebuild; production builds leave it empty.
+    { moduleQuery: options.moduleQuery }
   );
 
   // Pass 3 — server artifacts for eligible files (pages AND components: a

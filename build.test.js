@@ -748,3 +748,25 @@ test('finds the document shell at the project root for the src layout', (t) => {
   assert.match(shell, /<link rel="stylesheet" href="\/app\.css">/);
   assert.equal(logger.messages.filter((message) => message.includes('document shell')).length, 0);
 });
+
+test('threads moduleQuery into child server import specifiers', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'Card.wizz'), '<article><h2>Card</h2></article>');
+  writeFile(
+    path.join(inputDirectory, 'App.wizz'),
+    '<script>import Card from "./Card.wizz";</script><main><Card /></main>'
+  );
+
+  buildProject(inputDirectory, outputDirectory, createLogger(), { moduleQuery: '?v=42-1' });
+
+  const appServer = fs.readFileSync(path.join(outputDirectory, 'App.server.js'), 'utf8');
+  assert.match(appServer, /^import \* as __wizzServer_Card from "\.\/Card\.server\.js\?v=42-1";$/m);
+  // The child module itself receives the option too, though it renders no
+  // component tags and therefore emits no imports.
+  const cardServer = fs.readFileSync(path.join(outputDirectory, 'Card.server.js'), 'utf8');
+  assert.doesNotMatch(cardServer, /^import \* as __wizzServer_/m);
+});
