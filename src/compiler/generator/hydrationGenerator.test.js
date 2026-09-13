@@ -23,10 +23,14 @@ function createDocument() {
     return {
       nodeType: 1,
       name,
+      nodeName: name.toUpperCase(),
       tagName: name,
       attributes: {},
       childNodes: [],
       listeners: {},
+      removeAttribute(attributeName) {
+        delete this.attributes[attributeName];
+      },
       setAttribute(attributeName, value) {
         this.attributes[attributeName] = value;
         if (attributeName === 'data-wizz-id') {
@@ -85,6 +89,38 @@ function createDocument() {
 
   return {
     metrics,
+    head: {
+      nodeType: 1,
+      nodeName: 'HEAD',
+      childNodes: [],
+      get firstChild() {
+        return this.childNodes[0] ?? null;
+      },
+      appendChild(node) {
+        this.childNodes.push(node);
+        node.parentNode = this;
+      },
+      insertBefore(node, referenceNode) {
+        const existing = this.childNodes.indexOf(node);
+        if (existing !== -1) this.childNodes.splice(existing, 1);
+        const index = referenceNode == null
+          ? this.childNodes.length
+          : this.childNodes.indexOf(referenceNode);
+        this.childNodes.splice(index === -1 ? this.childNodes.length : index, 0, node);
+        node.parentNode = this;
+      },
+      removeChild(node) {
+        const index = this.childNodes.indexOf(node);
+        if (index !== -1) this.childNodes.splice(index, 1);
+        node.parentNode = null;
+      },
+      querySelectorAll(selector) {
+        const match = selector.match(/^([A-Za-z]+)\[([a-zA-Z-]+)\]$/);
+        if (!match) return [];
+        return this.childNodes.filter((node) => node.nodeName === match[1].toUpperCase()
+          && node.getAttribute(match[2]) != null);
+      }
+    },
     createElement,
     createTextNode(nodeValue) {
       metrics.textNodes += 1;
@@ -538,4 +574,238 @@ test('falls back when the mount point is empty or tagged differently', () => {
   } finally {
     console.warn = originalWarn;
   }
+});
+
+function createHeadTarget() {
+  return createTarget();
+}
+
+function buildDeliveredHead(document, { titleText = 'P T', titleOwner = 'r', withMeta = true, extraOwnerTagged = [] } = {}) {
+  document.head.appendChild(document.createComment('wizz:head-start'));
+  const titleNode = document.createElement('title');
+  titleNode.setAttribute('data-wizz-head-id', titleOwner);
+  titleNode.setAttribute('data-wizz-loc', '1:12');
+  titleNode.textContent = titleText;
+  document.head.appendChild(titleNode);
+  let metaNode = null;
+  if (withMeta) {
+    metaNode = document.createElement('meta');
+    metaNode.setAttribute('data-wizz-head-id', titleOwner);
+    metaNode.setAttribute('content', 'D');
+    document.head.appendChild(metaNode);
+  }
+  for (const owner of extraOwnerTagged) {
+    const node = document.createElement('link');
+    node.setAttribute('data-wizz-head-id', owner);
+    document.head.appendChild(node);
+  }
+  document.head.appendChild(document.createComment('wizz:head-end'));
+  const shellTitle = document.createElement('title');
+  shellTitle.textContent = 'Shell';
+  document.head.appendChild(shellTitle);
+  return { titleNode, metaNode };
+}
+
+test('emits the head adoption walk only when head markup or component tags exist', () => {
+  const headless = generateHydratable('<main><p>Hi</p></main>');
+  assert.doesNotMatch(headless, /__wizzHeadOwner/);
+  assert.doesNotMatch(headless, /hydrateCreate\(target, state, adoptSelf, headOwner\)/);
+  assert.doesNotMatch(headless, /__wizzFindHeadRun/);
+
+  const withHead = generateHydratable('<wizz:head><title>T</title></wizz:head><main><p>Hi</p></main>');
+  assert.match(withHead, /function hydrateCreate\(target, state, adoptSelf, headOwner\) \{/);
+  assert.match(withHead, /__wizzFindHeadRun\(\)/);
+  assert.match(withHead, /headNodes: __wizzHeadNodes \};/);
+
+  // A component tag threads the owner path even when the parent has no head
+  // of its own — the child's delivered head must be attributable.
+  const withChild = generateHydratable(
+    '<script>\nimport Counter from "./Counter.wizz";\n</script><main><Counter /></main>',
+    { componentServerRenderable: { Counter: true } }
+  );
+  assert.match(withChild, /__wizzHeadOwner \+ "\/1"/);
+});
+
+test('adopts the delivered head run, claims it, and consumes the markers', async () => {
+  const componentSource = '<wizz:head><title>P {t}</title><meta content={d}></wizz:head><main><p>{m}</p></main><script>\nlet t = "T";\nlet d = "D";\nlet m = "M";\n</' + 'script>';
+  const document = createDocument();
+  const { hydrateComponent } = new Function(
+    'document',
+    stripModule(generateHydratable(componentSource)) + '\nreturn { mountComponent, hydrateComponent, hydrateRoot };'
+  )(document);
+
+  const { titleNode, metaNode } = buildDeliveredHead(document, { titleText: 'P T' });
+  const main = document.createElement('main');
+  const p = document.createElement('p');
+  p.setAttribute('data-wizz-id', '1');
+  p.childNodes.push(document.createTextNode('M'));
+  main.childNodes.push(p);
+  const target = createHeadTarget();
+  target.childNodes.push(main);
+
+  const elementsBefore = document.metrics.elements;
+  const component = hydrateComponent(target, {}, { t: 'T', d: 'D', m: 'M' });
+  assert.ok(component);
+  assert.equal(document.metrics.elements, elementsBefore, 'adoption must create no head nodes');
+
+  // The title was claimed (ownership re-tagged, delivery tag consumed) and
+  // moved ahead of the shell title so the deepest mounted title is the one
+  // document.title reads.
+  assert.equal(document.head.childNodes[0], titleNode);
+  assert.equal(titleNode.attributes['data-wizz-head'], 'h1');
+  assert.ok(!('data-wizz-head-id' in titleNode.attributes));
+  assert.equal(titleNode.textContent, 'P T');
+  assert.equal(metaNode.attributes['data-wizz-head'], 'h1');
+  assert.ok(!('data-wizz-head-id' in metaNode.attributes));
+  assert.deepEqual(document.head.childNodes.map((node) => node.nodeName), ['TITLE', 'META', 'TITLE']);
+  // The marker-delimited run is consumed: markers removed, no leftovers.
+  assert.ok(!document.head.childNodes.some((node) => node.nodeValue === 'wizz:head-start' || node.nodeValue === 'wizz:head-end'));
+
+  component.destroy();
+  assert.deepEqual(document.head.childNodes.map((node) => node.nodeName), ['TITLE'],
+    'destroy releases adopted head nodes and leaves the shell title');
+});
+
+test('a head text mismatch falls back to a fresh mount with exactly one title', async () => {
+  const componentSource = '<wizz:head><title>P {t}</title></wizz:head><main><p>{m}</p></main><script>let t = "T"; let m = "M";</' + 'script>';
+  const document = createDocument();
+  const { hydrateComponent } = new Function(
+    'document',
+    stripModule(generateHydratable(componentSource)) + '\nreturn { mountComponent, hydrateComponent, hydrateRoot };'
+  )(document);
+
+  buildDeliveredHead(document, { titleText: 'Tampered', withMeta: false });
+  const main = document.createElement('main');
+  const p = document.createElement('p');
+  p.setAttribute('data-wizz-id', '1');
+  p.childNodes.push(document.createTextNode('M'));
+  main.childNodes.push(p);
+  const target = createHeadTarget();
+  target.childNodes.push(main);
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(message);
+  try {
+    const component = hydrateComponent(target, {}, { t: 'T', m: 'M' });
+    assert.ok(component, 'the fallback mount succeeds');
+    assert.equal(warnings.length, 1, 'exactly one mismatch warning');
+    assert.match(warnings[0], /head node 0 text mismatch/);
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  // The stale run is stripped and the fresh mount applied its own head: one
+  // wizz title with the correct evaluated text, no markers, no duplicates.
+  const titles = document.head.childNodes.filter((node) => node.nodeName === 'TITLE');
+  assert.deepEqual(titles.map((node) => node.textContent || ''), ['P T', 'Shell']);
+  assert.ok(!document.head.childNodes.some((node) => node.nodeValue === 'wizz:head-start' || node.nodeValue === 'wizz:head-end'));
+  assert.ok(!document.head.childNodes.some((node) => node.getAttribute('data-wizz-head-id') !== null));
+});
+
+test('unclaimed delivered head nodes fail consumption and are stripped', async () => {
+  const componentSource = '<wizz:head><title>P {t}</title></wizz:head><main><p>{m}</p></main><script>let t = "T"; let m = "M";</' + 'script>';
+  const document = createDocument();
+  const { hydrateComponent } = new Function(
+    'document',
+    stripModule(generateHydratable(componentSource)) + '\nreturn { mountComponent, hydrateComponent, hydrateRoot };'
+  )(document);
+
+  // The delivered meta belongs to a component the client never renders, so
+  // no component claims it and the run cannot be consumed.
+  buildDeliveredHead(document, { titleText: 'P T', withMeta: false, extraOwnerTagged: ['r/99'] });
+  const main = document.createElement('main');
+  const p = document.createElement('p');
+  p.setAttribute('data-wizz-id', '1');
+  p.childNodes.push(document.createTextNode('M'));
+  main.childNodes.push(p);
+  const target = createHeadTarget();
+  target.childNodes.push(main);
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(message);
+  try {
+    const component = hydrateComponent(target, {}, { t: 'T', m: 'M' });
+    assert.ok(component);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /delivered head nodes were never claimed/);
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.ok(!document.head.childNodes.some((node) => node.nodeValue === 'wizz:head-start' || node.nodeValue === 'wizz:head-end'));
+  assert.ok(!document.head.childNodes.some((node) => node.getAttribute && node.getAttribute('data-wizz-head-id') !== null));
+  const titles = document.head.childNodes.filter((node) => node.nodeName === 'TITLE');
+  assert.equal(titles.length, 2, 'the fresh mount applied exactly one wizz title beside the shell title');
+});
+
+test('nested head adoption claims the child slice by owner path', async () => {
+  const childSource = '<wizz:head><title>Kid</title><meta name="k" content="v"></wizz:head><section><p>{c}</p></section><script>let c = "C";</' + 'script>';
+  const parentSource = '<script>\nimport Kid from "./Kid.wizz";\nlet g = "G";\n</script><wizz:head><title>Shell</title></wizz:head><main><h1>{g}</h1><Kid /></main>';
+
+  const document = createDocument();
+  const childMod = new Function(
+    'document',
+    stripModule(generateHydratable(childSource)) + '\nreturn { mountComponent, hydrateComponent, hydrateRoot };'
+  )(document);
+  const parentMod = new Function(
+    'document', 'Kid', '__wizzHydrate_Kid',
+    stripModule(generateHydratable(parentSource, { componentServerRenderable: { Kid: true } })) + '\nreturn { mountComponent, hydrateComponent, hydrateRoot };'
+  )(document, childMod.mountComponent, { hydrateRoot: childMod.hydrateRoot });
+
+  // Delivered run: the page's title (owner r), then the child's slice
+  // (owner r/1) in tree order, then the shell title.
+  document.head.appendChild(document.createComment('wizz:head-start'));
+  const pageTitle = document.createElement('title');
+  pageTitle.setAttribute('data-wizz-head-id', 'r');
+  pageTitle.setAttribute('data-wizz-loc', '2:12');
+  pageTitle.textContent = 'Shell';
+  document.head.appendChild(pageTitle);
+  const childTitle = document.createElement('title');
+  childTitle.setAttribute('data-wizz-head-id', 'r/1');
+  childTitle.setAttribute('data-wizz-loc', '1:12');
+  childTitle.textContent = 'Kid';
+  document.head.appendChild(childTitle);
+  const childMeta = document.createElement('meta');
+  childMeta.setAttribute('data-wizz-head-id', 'r/1');
+  childMeta.setAttribute('name', 'k');
+  childMeta.setAttribute('content', 'v');
+  document.head.appendChild(childMeta);
+  document.head.appendChild(document.createComment('wizz:head-end'));
+
+  const main = document.createElement('main');
+  const heading = document.createElement('h1');
+  heading.setAttribute('data-wizz-id', '1');
+  heading.childNodes.push(document.createTextNode('G'));
+  const childRoot = document.createElement('section');
+  const childP = document.createElement('p');
+  childP.setAttribute('data-wizz-id', '1');
+  childP.childNodes.push(document.createTextNode('C'));
+  childRoot.childNodes.push(childP);
+  main.childNodes.push(heading, childRoot);
+  const target = createHeadTarget();
+  target.childNodes.push(main);
+
+  const state = { g: 'G', __wizz: { components: { '1': { c: 'C' } } } };
+  const elementsBefore = document.metrics.elements;
+  const parent = parentMod.hydrateComponent(target, {}, state);
+  assert.ok(parent);
+  assert.equal(document.metrics.elements, elementsBefore, 'nested head adoption must create no elements');
+
+  // The child's title is the first title element (deepest declaration wins);
+  // both slices are claimed and the markers are consumed.
+  assert.equal(document.head.childNodes[0], childTitle);
+  // Each module owns its own __wizzHeadOwnerSeq, so the child module's first
+  // instance is also 'h1'. The tag is informational; slice lookup uses the
+  // server owner path ('r/1'), which cannot collide.
+  assert.equal(childTitle.attributes['data-wizz-head'], 'h1');
+  assert.ok(!('data-wizz-head-id' in childMeta.attributes));
+  assert.equal(pageTitle.getAttribute('data-wizz-head'), 'h1');
+  assert.ok(!document.head.childNodes.some((node) => node.nodeValue === 'wizz:head-start'));
+
+  // The destroy cascade releases the child's head before the page's.
+  parent.destroy();
+  assert.deepEqual(document.head.childNodes.filter((node) => node.nodeName === 'TITLE').map((node) => node.textContent || ''), [],
+    'both adopted heads are released on destroy');
 });

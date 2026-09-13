@@ -10,6 +10,57 @@ async function flushUpdates() {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+// Extends the standard shim with the document.head surface the head
+// machinery uses: markers, owned-node queries, and move-or-insert.
+function createHeadDocument() {
+  const document = createDocument();
+  document.head = {
+    nodeType: 1,
+    nodeName: 'HEAD',
+    childNodes: [],
+    get firstChild() {
+      return this.childNodes[0] ?? null;
+    },
+    appendChild(node) {
+      this.childNodes.push(node);
+      node.parentNode = this;
+    },
+    insertBefore(node, referenceNode) {
+      const existingIndex = this.childNodes.indexOf(node);
+      if (existingIndex !== -1) this.childNodes.splice(existingIndex, 1);
+      const referenceIndex = referenceNode == null
+        ? this.childNodes.length
+        : this.childNodes.indexOf(referenceNode);
+      this.childNodes.splice(referenceIndex === -1 ? this.childNodes.length : referenceIndex, 0, node);
+      node.parentNode = this;
+    },
+    removeChild(node) {
+      const index = this.childNodes.indexOf(node);
+      if (index !== -1) this.childNodes.splice(index, 1);
+      node.parentNode = null;
+    },
+    querySelectorAll(selector) {
+      const match = selector.match(/^([A-Za-z]+)\[([a-zA-Z-]+)\]$/);
+      if (!match) return [];
+      return this.childNodes.filter((node) => node.nodeName === match[1].toUpperCase()
+        && node.getAttribute(match[2]) != null);
+    }
+  };
+  return document;
+}
+
+function createHeadTarget() {
+  return {
+    childNodes: [],
+    appendChild(node) {
+      this.childNodes.push(node);
+    },
+    removeChild(node) {
+      this.childNodes.splice(this.childNodes.indexOf(node), 1);
+    }
+  };
+}
+
 function createDocument() {
   const elements = new Map();
 
@@ -17,9 +68,13 @@ function createDocument() {
     createElement(name) {
       return {
         name,
+        nodeName: name.toUpperCase(),
         attributes: {},
         childNodes: [],
         listeners: {},
+        removeAttribute(attributeName) {
+          delete this.attributes[attributeName];
+        },
         setAttribute(attributeName, value) {
           this.attributes[attributeName] = value;
           if (attributeName === 'data-wizz-id') {
@@ -803,4 +858,112 @@ test('hydratable compiles reject the server-renderable boundary', () => {
     componentServerRenderable: { Counter: true }
   });
   assert.doesNotMatch(unusedSource, /__wizzHydrate_Counter/);
+});
+
+test('applies head nodes ahead of existing head content on fresh mount and releases them on destroy', () => {
+  const payload = assignNodeIds(analyzeDependencies(parseComponent(
+    '<wizz:head><title>Home</title><meta name="viewport" content="width=device-width"></wizz:head><main><p>Hi</p></main>'
+  )));
+  const source = generateComponent(payload);
+  const document = createHeadDocument();
+  const target = createHeadTarget();
+  const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
+
+  const shellTitle = document.createElement('title');
+  shellTitle.textContent = 'Shell';
+  document.head.appendChild(shellTitle);
+
+  const component = mountComponent(target);
+
+  // Nodes are prepended, so the wizz title sits ahead of the shell's static
+  // title — the one document.title reads.
+  assert.deepEqual(document.head.childNodes.map((node) => node.nodeName), ['META', 'TITLE', 'TITLE']);
+  const title = document.head.childNodes[1];
+  assert.equal(title.textContent, 'Home');
+  assert.equal(title.attributes['data-wizz-loc'], '1:12');
+  assert.ok(title.attributes['data-wizz-head'], 'the applied run is tagged with the owning instance');
+  assert.equal(document.head.childNodes[0].attributes.name, 'viewport');
+  assert.equal(document.head.childNodes[0].attributes.content, 'width=device-width');
+
+  component.destroy();
+  // Released nodes are removed; the shell title survives untouched.
+  assert.deepEqual(document.head.childNodes.map((node) => node.nodeName), ['TITLE']);
+  assert.equal(document.head.childNodes[0], shellTitle);
+});
+
+test('evaluates head expressions at mount time', () => {
+  const payload = assignNodeIds(analyzeDependencies(parseComponent(
+    '<script>\nlet pageTitle = "Docs";\nlet depth = "wide";\n</script><wizz:head><title>Wizz — {pageTitle}</title><meta name="audience" content={depth}></wizz:head><main><p>Hi</p></main>'
+  )));
+  const source = generateComponent(payload);
+  const document = createHeadDocument();
+  const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
+
+  mountComponent(createHeadTarget());
+
+  const title = document.head.childNodes.find((node) => node.nodeName === 'TITLE');
+  assert.equal(title.textContent, 'Wizz — Docs');
+  const meta = document.head.childNodes.find((node) => node.nodeName === 'META');
+  assert.equal(meta.attributes.content, 'wide');
+});
+
+test('warns once naming both locations when a second mounted head declares a title', () => {
+  const compileMount = (componentSource) => new Function('document',
+    `${generateComponent(assignNodeIds(analyzeDependencies(parseComponent(componentSource)))).replace('export default ', '')}\nreturn mountComponent;`);
+
+  const document = createHeadDocument();
+  const first = compileMount('<wizz:head><title>First</title></wizz:head><main><p>a</p></main>')(document);
+  const second = compileMount('<wizz:head>\n  <title>Second</title>\n</wizz:head><main><p>b</p></main>')(document);
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(message);
+  const firstInstance = first(createHeadTarget());
+  const secondInstance = second(createHeadTarget());
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /Multiple <title> declarations/);
+  assert.match(warnings[0], /1:12/);
+  assert.match(warnings[0], /2:3/);
+  // Both titles stay mounted while both instances live; the most recent one
+  // is the first title element, which is what document.title reads.
+  const titles = document.head.childNodes.filter((node) => node.nodeName === 'TITLE');
+  assert.deepEqual(titles.map((node) => node.textContent), ['Second', 'First']);
+
+  // Releasing the second instance lets the first's title win again.
+  secondInstance.destroy();
+  assert.deepEqual(
+    document.head.childNodes.filter((node) => node.nodeName === 'TITLE').map((node) => node.textContent),
+    ['First']
+  );
+});
+
+test('ignores event directives on head nodes', () => {
+  const payload = assignNodeIds(analyzeDependencies(parseComponent(
+    '<script>function go() {}</script><wizz:head><meta on:click={go} name="x"></wizz:head><main><p>Hi</p></main>'
+  )));
+  const source = generateComponent(payload);
+  const document = createHeadDocument();
+  const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
+
+  mountComponent(createHeadTarget());
+
+  const meta = document.head.childNodes.find((node) => node.nodeName === 'META');
+  assert.ok(meta, 'the head node itself is still created');
+  assert.deepEqual(meta.listeners, {}, 'head nodes never receive event listeners');
+});
+
+test('head-free component-free modules emit no head machinery', () => {
+  const plain = generateComponent(assignNodeIds(analyzeDependencies(parseComponent('<main><p>Hi</p></main>'))));
+  assert.doesNotMatch(plain, /__wizzApplyHead/);
+  assert.doesNotMatch(plain, /__wizzHeadOwnerSeq/);
+  assert.doesNotMatch(plain, /headNodes/);
+  assert.doesNotMatch(plain, /mountInstance\(target, props, hydrate, state, adoptSelf, headOwner\)/);
+
+  const hydratableHeadless = generateComponent(
+    assignNodeIds(analyzeDependencies(parseComponent('<main><p>Hi</p></main>'))),
+    { hydratable: true }
+  );
+  assert.doesNotMatch(hydratableHeadless, /__wizzApplyHead/);
+  assert.doesNotMatch(hydratableHeadless, /hydrateCreate\(target, state, adoptSelf, headOwner\)/);
 });

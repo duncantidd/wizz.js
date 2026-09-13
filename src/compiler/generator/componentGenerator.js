@@ -6,6 +6,96 @@ const { assertServerRenderable } = require('./serverGenerator');
 const { generateHydrationFunction } = require('./hydrationGenerator');
 const { VERSIONS } = require('../version.js');
 
+// Defined flush-left and emitted verbatim via Function.prototype.toString so
+// the generated module carries exactly this head-management implementation
+// (the same pattern as the server target's escaping helpers). Head nodes are
+// plain DOM nodes held in the instance closure; `data-wizz-head` marks the
+// owning instance for conflict warnings, while `data-wizz-head-id` is the
+// server delivery tag hydration consumes. The `__wizz` prefix is reserved, so
+// author identifiers cannot collide with any of these names.
+function __wizzApplyHead(nodes, loc) {
+  const head = document.head;
+  const owner = 'h' + (++__wizzHeadOwnerSeq);
+  const titles = nodes.filter((node) => node.nodeName === 'TITLE');
+  const existing = titles.length > 0
+    ? Array.prototype.slice.call(head.querySelectorAll('title[data-wizz-head]'))
+    : [];
+  if (titles.length > 0 && existing.length > 0) {
+    console.warn('[wizz] Multiple <title> declarations are mounted in the document head; the most recently mounted one wins. Existing: ' + (existing[0].getAttribute('data-wizz-loc') || 'unknown location') + ' Latest: ' + loc);
+  }
+  for (const node of nodes) node.setAttribute('data-wizz-head', owner);
+  // Prepending makes the latest-applied title the document's first title
+  // element — the one the document.title getter reads — mirroring the
+  // last-in-tree title policy; on release the previous owner's title resumes
+  // naturally because the nodes are simply removed again.
+  for (const node of nodes) head.insertBefore(node, head.firstChild);
+  return nodes;
+}
+function __wizzReleaseHead(nodes) {
+  for (const node of nodes) {
+    if (node.parentNode) node.parentNode.removeChild(node);
+  }
+}
+function __wizzClaimHead(nodes) {
+  const owner = 'h' + (++__wizzHeadOwnerSeq);
+  for (const node of nodes) {
+    node.setAttribute('data-wizz-head', owner);
+    node.removeAttribute('data-wizz-head-id');
+  }
+  const titles = Array.prototype.slice.call(document.head.querySelectorAll('title[data-wizz-head]'));
+  if (titles.length > 1) {
+    console.warn('[wizz] Multiple <title> declarations are mounted in the document head; the most recently mounted one wins. Existing: ' + (titles[0].getAttribute('data-wizz-loc') || 'unknown location') + ' Latest: ' + (titles[1].getAttribute('data-wizz-loc') || 'unknown location'));
+  }
+  // Move the freshly claimed titles to the front so the deepest component's
+  // title is the one document.title reads, reproducing the fresh-mount order
+  // without re-creating the adopted nodes.
+  for (const node of nodes) {
+    if (node.nodeName === 'TITLE' && node.parentNode === document.head) {
+      document.head.insertBefore(node, document.head.firstChild);
+    }
+  }
+}
+function __wizzFindHeadRun() {
+  const head = document.head;
+  if (!head) return null;
+  let startMarker = null;
+  let endMarker = null;
+  for (const node of head.childNodes) {
+    if (node.nodeType !== 8) continue;
+    if (node.nodeValue === 'wizz:head-start') startMarker = node;
+    else if (node.nodeValue === 'wizz:head-end') { endMarker = node; break; }
+  }
+  if (!startMarker || !endMarker) return null;
+  const nodes = [];
+  let inside = false;
+  for (const node of head.childNodes) {
+    if (node === startMarker) { inside = true; continue; }
+    if (node === endMarker) break;
+    if (inside) nodes.push(node);
+  }
+  return { startMarker, endMarker, nodes };
+}
+function __wizzStripHeadRun() {
+  const run = __wizzFindHeadRun();
+  if (!run) return;
+  run.startMarker.parentNode.removeChild(run.startMarker);
+  run.endMarker.parentNode.removeChild(run.endMarker);
+  for (const node of run.nodes) {
+    if (node.parentNode) node.parentNode.removeChild(node);
+  }
+}
+// Removes a component's unclaimed server-delivered head slice (tagged with
+// its owner path) before a fresh remount applies its head again.
+function __wizzStripOwnedHeadSlice(owner) {
+  const head = document.head;
+  if (!head) return;
+  for (const node of Array.prototype.slice.call(head.childNodes)) {
+    if (node.getAttribute && node.getAttribute('data-wizz-head-id') === owner) {
+      node.parentNode.removeChild(node);
+    }
+  }
+}
+
 /**
  * Wraps the parsed component into a single, importable Factory Closure.
  * @param {Object} astPayload - The Final Handoff Object (must include rawScript).
@@ -21,6 +111,8 @@ const { VERSIONS } = require('../version.js');
  * @param {Object<string, string>} [options.componentIneligibilityReasons] -
  *   Import names mapped to the child's own gate failure, chained into the
  *   thrown diagnostic.
+ * @param {string} [options.filePath] - Path of the component file, used to
+ *   qualify the `data-wizz-loc` diagnostics emitted on head nodes.
  * @returns {string} The final compiled JavaScript module.
  */
 function generateComponent(astPayload, options = {}) {
@@ -35,6 +127,22 @@ function generateComponent(astPayload, options = {}) {
   const builder = new CodeBuilder();
       const componentImports = astPayload.imports || [];
   const props = astPayload.props || [];
+
+  // Head machinery turns on when the component owns head markup (fresh mounts
+  // apply and destroy releases it) or — for hydratable modules — when a
+  // nested component's delivered head must be adopted through this module.
+  // Gating on static presence keeps head-free, component-free output
+  // byte-identical.
+  const ownHead = astPayload.head != null;
+  const hasRenderedComponentTags = componentImports.some(({ name }) => renderedImportNames(astPayload.template, name));
+  const headActive = ownHead || (hydratable && hasRenderedComponentTags);
+  // Conflict warnings name a title location when one exists (titles are what
+  // conflict), falling back to the block's own location.
+  const headLocLiteral = ownHead
+    ? JSON.stringify((options.filePath ? `${options.filePath}:` : '')
+      + (astPayload.head.children.find((child) => child.name === 'title') ?? astPayload.head).loc.start.line
+      + ':' + (astPayload.head.children.find((child) => child.name === 'title') ?? astPayload.head).loc.start.column)
+    : null;
 
   // Prop bindings are parent-owned and read-only: any statement-level
   // mutation of a prop name inside the child script is a compile-time error.
@@ -66,6 +174,27 @@ function generateComponent(astPayload, options = {}) {
       }
       if (componentImports.length > 0) builder.add('');
 
+  // The head helpers are emitted from their in-generator definitions so the
+  // generated module carries exactly this implementation. createHeadNodes()
+  // is emitted later, inside mountInstance, because it evaluates the
+  // component's expressions at mount time.
+  if (headActive) {
+    builder.add('// --- Head Management ---');
+    builder.add('let __wizzHeadOwnerSeq = 0;');
+    builder.add(__wizzApplyHead.toString());
+    builder.add('');
+    builder.add(__wizzReleaseHead.toString());
+    builder.add('');
+    builder.add(__wizzClaimHead.toString());
+    builder.add('');
+    builder.add(__wizzFindHeadRun.toString());
+    builder.add('');
+    builder.add(__wizzStripHeadRun.toString());
+    builder.add('');
+    builder.add(__wizzStripOwnedHeadSlice.toString());
+    builder.add('');
+  }
+
   // 1. Factory Function Signature. `props` carries the values the parent
   // passed to the component tag; missing keys fall back to declared defaults.
   // Hydratable modules route both public entries through one mountInstance
@@ -83,16 +212,22 @@ function generateComponent(astPayload, options = {}) {
           .dedent()
           .add('}')
           .add('')
-          .add('export function hydrateRoot(rootNode, props = {}, state = null) {')
+          .add(headActive
+            ? 'export function hydrateRoot(rootNode, props = {}, state = null, headOwner = null) {'
+            : 'export function hydrateRoot(rootNode, props = {}, state = null) {')
           .indent()
           .add('// Nested adoption entry: rootNode is already in the parent\'s DOM at')
           .add('// the component tag\'s position, so a mismatch remounts inside it')
           .add('// and never detaches anything from the parent tree.')
-          .add('return mountInstance(rootNode, props, true, state, true);')
+          .add(headActive
+            ? 'return mountInstance(rootNode, props, true, state, true, headOwner);'
+            : 'return mountInstance(rootNode, props, true, state, true);')
           .dedent()
           .add('}')
           .add('')
-          .add('function mountInstance(target, props, hydrate, state, adoptSelf) {')
+          .add(headActive
+            ? 'function mountInstance(target, props, hydrate, state, adoptSelf, headOwner) {'
+            : 'function mountInstance(target, props, hydrate, state, adoptSelf) {')
           .indent();
   } else {
     builder.add('export default function mountComponent(target, props = {}) {')
@@ -102,6 +237,11 @@ function generateComponent(astPayload, options = {}) {
       const reactiveVars = astPayload.script.filter(decl => decl.isReactive);
 
       builder.add('let isMounted = false;');
+      if (ownHead) {
+        // Head nodes applied on mount (or adopted during hydration) and
+        // released on destroy; null until the initialization block runs.
+        builder.add('let headNodes = null;');
+      }
       builder.add('let isDestroyed = false;');
       builder.add('let batchScheduled = false;');
       builder.add('let pendingChanges = {};');
@@ -198,9 +338,74 @@ function generateComponent(astPayload, options = {}) {
 
   createCode.split('\n').forEach(line => builder.add(line));
 
+  // 4a. Inject the head node factory inside mountInstance: it closes over the
+  // author's bindings and evaluates dynamic head values at mount time, the
+  // same way the server target evaluates them at render time. Event
+  // directives are skipped — head nodes never receive listeners, since the
+  // head follows navigation rather than state changes.
+  if (ownHead) {
+    builder.add('');
+    builder.add('// --- Head Creation ---');
+    builder.add('function createHeadNodes() {').indent();
+    builder.add('const nodes = [];');
+
+    const emitHeadAttribute = (nodeRef, attribute) => {
+      if (attribute.name.startsWith('on:')) return;
+      if (attribute.dynamic) {
+        if (attribute.name === 'checked' || attribute.name === 'disabled') {
+          // Absence is the false representation for boolean attributes.
+          builder.add(`if (${attribute.value}) ${nodeRef}.setAttribute(${JSON.stringify(attribute.name)}, '');`);
+          return;
+        }
+        builder.add(`${nodeRef}.setAttribute(${JSON.stringify(attribute.name)}, String(${attribute.value}));`);
+        return;
+      }
+      builder.add(`${nodeRef}.setAttribute(${JSON.stringify(attribute.name)}, ${JSON.stringify(attribute.value === null ? '' : attribute.value)});`);
+    };
+
+    // Title is RCDATA in HTML, so its text runs coalesce into a single text
+    // node instead of comment-separated adjacency markers.
+    const emitTitleContent = (nodeRef, titleNode) => {
+      const segments = [];
+      let pendingText = '';
+      for (const child of titleNode.children || []) {
+        if (child.type === 'Text') {
+          pendingText += child.value;
+          continue;
+        }
+        if (child.type === 'Expression') {
+          if (pendingText !== '') {
+            segments.push(JSON.stringify(pendingText));
+            pendingText = '';
+          }
+          segments.push(`String(${child.value})`);
+          continue;
+        }
+        throw new SyntaxError(`<${child.name}> is not allowed inside <title> at ${child.loc?.start?.line ?? '?'}:${child.loc?.start?.column ?? '?'}.`);
+      }
+      if (pendingText !== '') segments.push(JSON.stringify(pendingText));
+      builder.add(`${nodeRef}.textContent = ${segments.length === 0 ? "''" : segments.join(' + ')};`);
+    };
+
+    let headNodeCounter = 0;
+    for (const child of astPayload.head.children || []) {
+      const nodeRef = `__wizzHeadNode_${++headNodeCounter}`;
+      builder.add(`const ${nodeRef} = document.createElement(${JSON.stringify(child.name)});`);
+      if (child.name === 'title') {
+        const at = `${child.loc.start.line}:${child.loc.start.column}`;
+        builder.add(`${nodeRef}.setAttribute('data-wizz-loc', ${JSON.stringify((options.filePath ? `${options.filePath}:` : '') + at)});`);
+        emitTitleContent(nodeRef, child);
+      }
+      (child.attributes || []).forEach((attribute) => emitHeadAttribute(nodeRef, attribute));
+      builder.add(`nodes.push(${nodeRef});`);
+    }
+    builder.add('return nodes;');
+    builder.dedent().add('}');
+  }
+
   // 4b. Inject the hydration adoption walk for hydratable modules.
   if (hydratable) {
-    const hydrationCode = generateHydrationFunction(astPayload.template, componentImports);
+    const hydrationCode = generateHydrationFunction(astPayload.template, componentImports, astPayload.head, options);
     hydrationCode.split('\n').forEach(line => builder.add(line));
   }
 
@@ -213,24 +418,44 @@ function generateComponent(astPayload, options = {}) {
   // root instead of creating one and falls back to a full client mount when
   // the walk reports any mismatch.
   builder.add('\n// --- Initialization ---');
+  const hydrateCreateCall = headActive
+    ? 'const adoptedHydration = hydrate ? hydrateCreate(target, state, adoptSelf, headOwner) : null;'
+    : 'const adoptedHydration = hydrate ? hydrateCreate(target, state, adoptSelf) : null;';
   if (!hydratable) {
     builder.add('const rootNode = create(ctx);')
           .add('const childComponents = rootNode.__wizzChildComponents;')
           .add('const listUpdates = rootNode.__wizzListUpdates;')
-          .add('target.appendChild(rootNode);')
-          .add('rootNode.__wizzMountChildren();');
+          .add('target.appendChild(rootNode);');
+    if (ownHead) {
+      // Apply before mounting children so their heads prepend in front of
+      // this one — the deepest component's title is what document.title reads.
+      builder.add(`headNodes = __wizzApplyHead(createHeadNodes(), ${headLocLiteral});`);
+    }
+    builder.add('rootNode.__wizzMountChildren();');
   } else {
-    builder.add('const adoptedHydration = hydrate ? hydrateCreate(target, state, adoptSelf) : null;')
+    builder.add(hydrateCreateCall)
           .add('if (hydrate && !adoptedHydration) return mountComponent(target, props);')
           .add('const rootNode = hydrate ? adoptedHydration.node : create(ctx);')
           .add('const childComponents = hydrate ? adoptedHydration.childComponents : rootNode.__wizzChildComponents;')
           .add('const listUpdates = hydrate ? adoptedHydration.listUpdates : rootNode.__wizzListUpdates;')
           .add('if (!hydrate) {')
-          .indent()
-          .add('target.appendChild(rootNode);')
-          .add('rootNode.__wizzMountChildren();')
-          .dedent()
-          .add('}');
+          .indent();
+    if (ownHead) {
+      builder.add('target.appendChild(rootNode);');
+      builder.add(`headNodes = __wizzApplyHead(createHeadNodes(), ${headLocLiteral});`);
+      builder.add('rootNode.__wizzMountChildren();');
+    } else {
+      builder.add('target.appendChild(rootNode);');
+      builder.add('rootNode.__wizzMountChildren();');
+    }
+    builder.dedent().add('} else {').indent();
+    if (ownHead) {
+      // Adopt the delivered slice; when the run is absent (or this
+      // component's slice was not delivered) apply the head fresh instead —
+      // the adoption walk strips any stale delivery before returning null.
+      builder.add('headNodes = adoptedHydration.headNodes || __wizzApplyHead(createHeadNodes(), ' + headLocLiteral + ');');
+    }
+    builder.dedent().add('}');
   }
 
   const initialChanges = reactiveVars.map(decl => `${decl.name}: true`).join(', ');
@@ -284,8 +509,13 @@ function generateComponent(astPayload, options = {}) {
         .indent()
       .add('isDestroyed = true;')
       .add('destroyHooks.forEach((hook) => hook());')
-      .add('childComponents.forEach((component) => component.destroy());')
-      .add('trackedListeners.forEach(({ node, eventName, handler }) => node.removeEventListener(eventName, handler));');
+      .add('childComponents.forEach((component) => component.destroy());');
+  if (ownHead) {
+    // Released after the child cascade so a child's head returns to the
+    // document before this component's is removed.
+    builder.add('if (headNodes) __wizzReleaseHead(headNodes);');
+  }
+  builder.add('trackedListeners.forEach(({ node, eventName, handler }) => node.removeEventListener(eventName, handler));');
   if (hydratable) {
     // A self-adopted root (nested hydration) belongs to the parent's tree;
     // the parent's destroy removes it, so the child must leave it in place.
