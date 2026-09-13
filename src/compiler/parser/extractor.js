@@ -35,8 +35,24 @@ function extractScriptBlock(ast) {
   }
 
   walk(ast, null, null);
-  
+
   return scriptContent;
 }
 
-module.exports = { extractScriptBlock };
+/**
+ * Removes the top-level <wizz:head> block (if any) from the template AST and
+ * returns it. Head markup is a page-level declaration, never body markup, so
+ * the parser enforces it at root level and every later stage — body DOM
+ * generation, the update pass, ID assignment, and the server renderability
+ * gate — receives a tree with the block already pruned out.
+ * @param {Object} ast - The fully integrated Template AST (Root node)
+ * @returns {Object|null} The HeadBlock node, or null when the component declares no head.
+ */
+function extractHeadBlock(ast) {
+  const index = ast.children.findIndex((child) => child.type === 'HeadBlock');
+  if (index === -1) return null;
+  const [headBlock] = ast.children.splice(index, 1);
+  return headBlock;
+}
+
+module.exports = { extractScriptBlock, extractHeadBlock };
