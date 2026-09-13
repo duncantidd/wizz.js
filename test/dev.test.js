@@ -409,6 +409,47 @@ test('server-renders component tags and blocks through the import graph', async 
   assert.match(await pageHydrateBuild.text(), /import \* as __wizzHydrate_TestProps from "\.\/components\/TestProps\.hydrate\.js";/);
 });
 
+test('injects the component head run into the document head before </head>', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), DOCUMENT_SHELL);
+  fs.mkdirSync(path.join(projectDirectory, 'src'), { recursive: true });
+  // The page declares a head; the child contributes one too (its slice
+  // travels with the page's run, tagged with its own owner path).
+  writeFile(
+    path.join(projectDirectory, 'src', 'App.wizz'),
+    '<script>import Kid from "./Kid.wizz";</script><wizz:head><title>Page</title><meta name="viewport" content="w=1"></wizz:head><main><Kid /></main>'
+  );
+  writeFile(
+    path.join(projectDirectory, 'src', 'Kid.wizz'),
+    '<wizz:head><title>Kid</title></wizz:head><p>Kid</p>'
+  );
+
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger: createLogger() });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  const document = await (await fetch(`${url}/`)).text();
+  // The run sits inside <head>, ahead of the closing tag, wrapped in the
+  // marker comments the client consumes after a successful adoption.
+  assert.match(document, /<!--wizz:head-start-->[\s\S]*<!--wizz:head-end--><\/head>/);
+  // Tree order: the page's head precedes the child's, matching render order;
+  // every delivered node is tagged with its owner path for slice adoption.
+  const run = document.slice(document.indexOf('wizz:head-start'), document.indexOf('wizz:head-end'));
+  const titleOrder = [...run.matchAll(/<title([^>]*)>([^<]*)<\/title>/g)].map((match) => [match[1], match[2]]);
+  assert.deepEqual(
+    titleOrder.map(([attrs, text]) => [attrs.replace(/ data-wizz-loc="[^"]*"/, ''), text]),
+    [
+      [' data-wizz-head-id="r"', 'Page'],
+      [' data-wizz-head-id="r/1"', 'Kid']
+    ]
+  );
+  // Each location attribute names the declaring file (dev compiles with the
+  // absolute source path), so conflicts can be pinned to their origins.
+  assert.match(run, /<title data-wizz-head-id="r" data-wizz-loc="[^"]*\/src\/App\.wizz:1:\d+">/);
+  assert.match(run, /<title data-wizz-head-id="r\/1" data-wizz-loc="[^"]*\/src\/Kid\.wizz:1:\d+">/);
+});
+
 test('renders fresh server modules after a watch rebuild (no stale cache)', async (t) => {
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
