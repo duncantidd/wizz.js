@@ -1,5 +1,6 @@
 <script>
   import Counter from "./components/Counter.wizz";
+  import Card from "./components/Card.wizz";
   const frameworkName = "wizz.js";
 
   let name = "friend";
@@ -29,4 +30,5 @@
   <h1>Hello {name} Welcome to {frameworkName}!</h1>
   <p>Zero dependencies. 100% compiled.</p>
   <Counter />
+  <Card />
 </main>
