@@ -126,3 +126,41 @@ test('rejects duplicate prop declarations but keeps legal block-scoped shadowing
     '<script>export let name = "x"; { let name = "local"; }</script><p>{name}</p>'
   ));
 });
+
+test('extracts a style block into the payload with a deterministic scope', () => {
+  const source = '<main><h2>Titles</h2></main>\n<wizz:style>\n  h2 { font-size: 30px }\n</wizz:style>';
+  const component = parseComponent(source);
+
+  assert.equal(component.template.children[0].name, 'main');
+  assert.notEqual(component.style, null);
+  assert.equal(component.style.css, 'h2 { font-size: 30px }');
+  assert.match(component.style.scope, /^s[0-9a-z]+$/);
+  assert.equal(component.style.loc.start.line, 2);
+  // Same source, same scope — server and client builds must agree.
+  assert.equal(parseComponent(source).style.scope, component.style.scope);
+});
+
+test('styles stay null and templates stay byte-identical without a style block', () => {
+  const component = parseComponent('<main><h2>Title</h2></main>');
+
+  assert.equal(component.style, null);
+  assert.equal(component.template.children.length, 1);
+});
+
+test('different sources hash to different style scopes', () => {
+  const first = parseComponent('<main><h2>A</h2></main><wizz:style>h2 { font-size: 30px }</wizz:style>');
+  const second = parseComponent('<main><h2>B</h2></main><wizz:style>h2 { font-size: 24px }</wizz:style>');
+
+  assert.notEqual(first.style.scope, second.style.scope);
+});
+
+test('rejects a style block nested inside an element through the full pipeline', () => {
+  assert.throws(
+    () => parseComponent('<main><wizz:style>h2 {}</wizz:style></main>'),
+    /<wizz:style> must be a top-level block/
+  );
+  assert.throws(
+    () => parseComponent('<main><style>h2 { color: red }</style></main>'),
+    /Plain <style> blocks are not supported — use <wizz:style>/
+  );
+});
