@@ -244,8 +244,8 @@ Implementation notes: the tokenizer treats `<wizz:style>` as a raw-text element 
 
 ## Later Ecosystem Work
 
-- ~~**MCP:** Expose the Wizz project structure, component language contract, compiler diagnostics, build command, and development workflow through a Model Context Protocol server so AI agents can inspect an application and safely create or update Wizz web applications autonomously. Keep filesystem permissions explicit and project-scoped; do not make the core compiler depend on an AI runtime.~~
-- ~~**ORM:** Keep it separate from the core renderer/compiler so application persistence choices do not define component semantics.~~
+- **MCP:** Expose the Wizz project structure, component language contract, compiler diagnostics, build command, and development workflow through a Model Context Protocol server so AI agents can inspect an application and safely create or update Wizz web applications autonomously. Keep filesystem permissions explicit and project-scoped; do not make the core compiler depend on an AI runtime.
+- **ORM:** Keep it separate from the core renderer/compiler so application persistence choices do not define component semantics.
 
 ## Development Server Decision
 
