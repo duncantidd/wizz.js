@@ -301,6 +301,31 @@ The development command builds `src` into `dist`, copies `index.html` and `App.c
 
 Requests for browser routes such as `http://localhost:3000/Home` receive the document shell, allowing the client router to select the matching component. Server-renderable routes (see below) instead receive the shell with the rendered markup already inside the mount point plus the serialized state script, and the router hydrates it on first load. Existing output files such as `/runtime/main.js` and `/pages/Home.js` are served directly; missing asset paths return HTTP 404.
 
+## Scoped Component Styles
+
+A component may declare one `<wizz:style>` block holding plain CSS. Every element that component renders carries a generated `data-wizz-s` scope attribute, and each selector's terminal element gains that attribute — so two components can both style an `h2` and keep their own sizes:
+
+```html
+<script>
+  import Card from './Card.wizz';
+</script>
+
+<main>
+  <Card />
+  <h2>Page heading</h2>
+</main>
+
+<wizz:style>
+  h2 {
+    font-size: 24px;
+  }
+</wizz:style>
+```
+
+The block's contents are raw text: CSS braces, colons, and quotes never reach the template expression lexer, and expressions are not interpolated into CSS — styles are trusted author input like scripts, which sidesteps the injection class entirely. The block is root-level (one per component, no attributes, no nesting), and a plain `<style>` element is rejected with a diagnostic pointing at `<wizz:style>` so the scoping contract stays explicit. An `h2` in the page itself — like the one above — carries no scope attribute and matches no component rule. Document-wide styles (resets, shared tokens) keep living in the document stylesheet as they always have.
+
+Delivery is automatic and never duplicates: `wizz dev` server-renders one `<style>` tag per styled component into the document head (a component imported by several pages injects exactly once per document), hydration adopts the delivered stylesheet instead of recreating it, and client mounts share one refcounted stylesheet per component scope. `wizz build` extracts every component's scoped rules into `dist/app.css` — computed with the same scoping pass the generators use, including `@media` descent and scope-suffixed `@keyframes` names — and injects `<link rel="stylesheet" href="/app.css">` into the copied document shell, so production pages arrive styled from the first paint with zero runtime work.
+
 ## Compatibility and Versioning
 
 Wizz's compatibility contract has three semver versions, defined in `src/compiler/version.js`: the compiler itself, the component syntax contract, and the generated output contract.

@@ -51,7 +51,8 @@ The returned payload has the shape established by the parser and enriched by the
 {
   template: { /* parsed template AST with dependency and ID metadata */ },
   script: [ /* recognized declaration metadata */ ],
-  rawScript: 'let count = 0;'
+  rawScript: 'let count = 0;',
+  style: null | { css: '<raw wizz:style CSS>', scope: 's1ab2c3', loc: { /* block location */ } }
 }
 ```
 
@@ -169,7 +170,7 @@ The optional `options` value is normalized defensively. Omitting it, passing `nu
 
 Its responsibilities are:
 
-1. Parse raw component source into the standard `{ template, script, rawScript }` handoff.
+1. Parse raw component source into the standard `{ template, script, rawScript, style }` handoff (a `<wizz:style>` block becomes the `style` field: raw CSS plus its deterministic scope hash).
 2. Add reactive dependency metadata to parsed interpolation expressions.
 3. Assign `data-wizz-id` attributes to elements that require targeted updates.
 4. Generate the mountable ES module source, stamped with the compatibility versions (`compileServer()` generates the server-rendering module instead; `hydratable: true` adds the hydration traversal and its surface gate).

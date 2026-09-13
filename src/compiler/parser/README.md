@@ -18,10 +18,11 @@ component source
   -> integrateExpressions
   -> extractScriptBlock
   -> extractHeadBlock
+  -> extractStyleBlock
   -> extractComponentImports
   -> extractProps
   -> scanState
-  -> { template, script, rawScript, head, imports, props }
+  -> { template, script, rawScript, head, style, imports, props }
 ```
 
 The parser is build-time Node.js code. It does not execute component JavaScript or create DOM nodes. Its job is to preserve enough source structure and location data for the analyzer and generator to make correct later decisions.
@@ -123,6 +124,19 @@ All template nodes originating from source have `loc.start` and `loc.end` positi
 }
 ```
 
+```js
+// The <wizz:style> block: extracted from the AST by extractStyleBlock() before
+// generation and delivered through the payload's `style` field. The raw CSS
+// text is opaque author input — no expressions are parsed inside it — and
+// index.js stamps the deterministic scope hash alongside the CSS.
+{
+  type: 'StyleBlock',
+  name: 'wizz:style',
+  value: 'h2 { font-size: 24px }',
+  loc: {}
+}
+```
+
 ## Supported Language Surface
 
 The current implementation is intentionally small. Documentation should distinguish support that exists today from syntax that may be familiar from JavaScript but is not yet parsed.
@@ -138,7 +152,8 @@ The current implementation is intentionally small. Documentation should distingu
 | Component imports | Default imports ending in `.wizz`, such as `import Counter from './Counter.wizz';` | Imported modules are rewritten to `.js` in generated output. Named, namespace, dynamic, and non-Wizz imports are outside this contract. |
 | Component props | `export let name = 'Guest';` and bare `export let count;` declarations | One prop per statement, terminated with a semicolon. `export` followed by anything other than `let` is an error. Prop names cannot be reserved words, `props`, `__proto__`, or use the reserved `__wizz` prefix. |
 | Script scanning | Semicolon-terminated `let`/`const` assignments and named `function` declarations | It is a targeted regex scanner, not a JavaScript parser. `var`, classes, arrow functions, and syntax without the recognized forms are not reported. |
-| Head blocks | Exactly one root-level `<wizz:head>` containing only `<title>`, `<meta>`, and `<link>` | No attributes on the block, no nesting, no second block. Bare text, expressions, or directives directly inside the block are rejected; elements inside `<title>` are rejected; void closes (`</meta>`) are rejected. `<wizz:style>` is deferred to the styles milestone. |
+| Head blocks | Exactly one root-level `<wizz:head>` containing only `<title>`, `<meta>`, and `<link>` | No attributes on the block, no nesting, no second block. Bare text, expressions, or directives directly inside the block are rejected; elements inside `<title>` are rejected; void closes (`</meta>`) are rejected. |
+| Style blocks | Exactly one root-level `<wizz:style>` block of raw CSS text | No attributes, no nesting, no second block, no self-closing form with content. A plain `<style>` element is rejected with a diagnostic pointing at `<wizz:style>`. CSS braces, colons, and quotes are raw text — they never reach the expression lexer — and expressions are not interpolated into CSS. |
 
 ## Files
 
@@ -153,9 +168,10 @@ This is the module downstream compiler stages should use. It owns the ordering o
 3. `integrateExpressions()` adds expression ASTs to interpolation nodes.
 4. `extractScriptBlock()` removes script content from the render tree while returning that content.
 5. `extractHeadBlock()` prunes the root-level `<wizz:head>` block and returns the `HeadBlock` node (or `null`).
-6. `extractComponentImports()` lifts `.wizz` imports out of the script.
-7. `extractProps()` lifts `export let` prop declarations out of the script and records them.
-8. `scanState()` turns recognized declarations into lightweight metadata.
+6. `extractStyleBlock()` prunes the root-level `<wizz:style>` block and returns the `StyleBlock` node (or `null`); the facade then computes the component's deterministic scope hash and attaches `style: { css, scope, loc }`.
+7. `extractComponentImports()` lifts `.wizz` imports out of the script.
+8. `extractProps()` lifts `export let` prop declarations out of the script and records them.
+9. `scanState()` turns recognized declarations into lightweight metadata.
 
 It throws `TypeError` unless `source` is a string. A component without `<script>` receives `script: []`, `rawScript: ''`, `imports: []`, and `props: []`, keeping the compiler handoff stable and avoiding special cases downstream.
 
@@ -175,7 +191,7 @@ It throws `TypeError` unless `source` is a string. A component without `<script>
 
 The positional fields are recorded here, at the point exact character information still exists. `start` and `end` are zero-based offsets; `loc` uses one-based line and column values.
 
-`STATES` names the scanner's modes: text, tag parsing, quoted and brace-delimited attribute parsing, interpolation parsing, quoted interpolation strings, escape handling, and script content. Exporting it makes the state vocabulary explicit for tests and future maintenance.
+`STATES` names the scanner's modes: text, tag parsing, quoted and brace-delimited attribute parsing, interpolation parsing, quoted interpolation strings, escape handling, and the raw-text content modes for `<script>` and `<wizz:style>`. Exporting it makes the state vocabulary explicit for tests and future maintenance.
 
 Important behavior:
 
@@ -183,7 +199,7 @@ Important behavior:
 - `emitTag()` centralizes open, close, and self-closing tag token construction.
 - `commitAttribute()` stores boolean attributes (`value: null`), quoted values, and the contents of brace-delimited directive values without their surrounding braces.
 - `EXPRESSION`, `EXPRESSION_STRING`, and `EXPRESSION_ESCAPE` track brace depth and quotes, so a nested object literal or a brace inside a string does not prematurely end `{...}`.
-- `SCRIPT` treats everything as text until the exact `</script>` sequence. This preserves JavaScript such as `"Hello, {name}"` rather than tokenizing its braces as template interpolations.
+- `SCRIPT` and `STYLE` treat everything as text until the exact `</script>` / `</wizz:style>` sequence. This preserves JavaScript such as `"Hello, {name}"` and CSS such as `p { color: red; }` rather than tokenizing their braces as template interpolations. All raw-text entries share one `enterRawText()` helper so open-tag variants (`<script defer>`) re-enter raw mode correctly.
 - `fail()` consistently reports source coordinates for malformed markup, missing quotes, and unclosed tags or expressions.
 
 The tokenizer establishes lexical structure only. It does not validate matching opening and closing tags; that is the template parser's responsibility.
@@ -261,6 +277,10 @@ Script reconstruction handles both `Text` and `Expression` children. Normally th
 **Export:** `extractHeadBlock(ast)` (also from this module)
 
 `extractHeadBlock()` finds the root-level `HeadBlock` node the template parser created for `<wizz:head>`, splices it out of `Root.children` so body generation never sees it, and returns the node — or `null` when the component declares no head. The block's children (title text, static and dynamic attributes) ride along inside the returned node for the generators to consume.
+
+**Export:** `extractStyleBlock(ast)` (also from this module)
+
+`extractStyleBlock()` performs the same splice for the root-level `StyleBlock` node the template parser created for `<wizz:style>`, so the raw CSS never reaches body generation.
 
 ### `componentImportExtractor.js` - Component Import Extraction
 
