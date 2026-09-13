@@ -7,15 +7,16 @@ test('exposes exactly the compiler, syntax, and output versions', () => {
 });
 
 test('pins the current contract versions so bumps are deliberate', () => {
-  // 1.6.0 / syntax 1.2.0 / output 1.6.0: milestone 15 added the <wizz:head>
-  // block — new component syntax (HeadBlock node, parser diagnostics) and an
-  // additive output surface (server `head` field beside `{ html, state }`;
-  // client mount/destroy head management and hydration head adoption). Both
-  // contracts grew, so compiler, syntax, and output bump together.
+  // 1.7.0 / syntax 1.3.0 / output 1.7.0: milestone 16 added the <wizz:style>
+  // block — new component syntax (StyleBlock node, raw-text mode, plain
+  // <style> diagnostics) and an output change (every element a styled
+  // component renders carries the data-wizz-s scope attribute; head
+  // management dedups scoped <style> nodes with refcounting). Both contracts
+  // grew, so compiler, syntax, and output bump together.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.6.0',
-    syntax: '1.2.0',
-    output: '1.6.0'
+    compiler: '1.7.0',
+    syntax: '1.3.0',
+    output: '1.7.0'
   });
 });
 
@@ -32,7 +33,7 @@ test('the version table is frozen so callers cannot mutate the contract', () => 
     'use strict';
     VERSIONS.syntax = '9.9.9';
   }, TypeError);
-  assert.equal(VERSIONS.syntax, '1.2.0');
+  assert.equal(VERSIONS.syntax, '1.3.0');
 });
 
 test('the compiler major version leads or matches every contract major version', () => {
