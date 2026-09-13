@@ -4,6 +4,10 @@ const path = require('node:path');
 
 // Single public compiler entry point: parsing, analysis, ID assignment, generation.
 const { compile, compileServer } = require('./src/compiler');
+const { scopeCss } = require('./src/compiler/analyzer/cssScanner');
+
+const STYLESHEET_FILENAME = 'app.css';
+const STYLESHEET_HREF_PATTERN = /href\s*=\s*(["'])\/app\.css\1/;
 
 function parseBuildArguments(argv) {
   if (!Array.isArray(argv)) {
@@ -191,6 +195,72 @@ function copyRuntimeModules(outputDirectory) {
   fs.cpSync(runtimeSourceDirectory, runtimeOutputDirectory, { recursive: true });
 }
 
+/**
+ * Collects every compiled component's scoped CSS in discovery order (the
+ * client payloads are cached in the order discoverWizzFiles found them, so
+ * the extracted stylesheet is byte-stable across identical builds). Scoping
+ * runs through the same scopeCss the generators use, so the extracted
+ * stylesheet always agrees with the markup it scopes.
+ */
+function extractComponentStyles(inputDirectory, compiledByInputPath) {
+  const styles = [];
+
+  for (const [inputPath, compiled] of compiledByInputPath) {
+    if (!compiled.payload.style) continue;
+    styles.push({
+      filePath: path.relative(inputDirectory, inputPath).split(path.sep).join('/'),
+      css: scopeCss(compiled.payload.style.css, compiled.payload.style.scope)
+    });
+  }
+
+  return styles;
+}
+
+function writeExtractedStyles(outputDirectory, styles) {
+  if (styles.length === 0) return false;
+
+  // A per-file header comment keeps the extracted stylesheet debuggable;
+  // CSS comments are inert, so delivery semantics are unaffected.
+  const stylesheet = styles
+    .map(({ filePath, css }) => `/* ${filePath} */\n${css}`)
+    .join('\n\n');
+  fs.writeFileSync(path.join(outputDirectory, STYLESHEET_FILENAME), `${stylesheet}\n`, 'utf8');
+  return true;
+}
+
+/**
+ * Copies the project's document shell into the output directory, injecting
+ * the app.css link before </head> when component styles were extracted. A
+ * shell that already links /app.css is left untouched (no double link), and
+ * a project without a shell keeps today's behavior — the dev server reports
+ * the missing shell at serve time.
+ */
+function copyDocumentShell(inputDirectory, outputDirectory, hasStyles, logger = console) {
+  const shellPath = path.join(inputDirectory, 'index.html');
+  if (!fs.existsSync(shellPath)) {
+    if (hasStyles) {
+      logger.log(`Note: component styles were extracted to ${STYLESHEET_FILENAME}, but no index.html document shell was found at the input directory root to link it from.`);
+    }
+    return false;
+  }
+
+  let shell = fs.readFileSync(shellPath, 'utf8');
+  if (hasStyles && !STYLESHEET_HREF_PATTERN.test(shell)) {
+    if (!/<\/head/i.test(shell)) {
+      logger.log(`Note: the document shell has no <head> element, so the extracted ${STYLESHEET_FILENAME} is not linked.`);
+    } else {
+      // Function-form replacement: the shell may contain `$` sequences
+      // (`$&`, `$'`, `$$`) that string-form replacement would expand.
+      shell = shell.replace(/([ \t]*)<\/head(\s*)?>/i, (match, indent) => (
+        `${indent}<link rel="stylesheet" href="/${STYLESHEET_FILENAME}">\n${indent}</head>`
+      ));
+    }
+  }
+
+  fs.writeFileSync(path.join(outputDirectory, 'index.html'), shell, 'utf8');
+  return true;
+}
+
 function getRoutePath(inputDirectory, inputPath) {
   const relativePath = path.relative(inputDirectory, inputPath);
   const segments = relativePath.split(path.sep);
@@ -327,6 +397,14 @@ function buildProject(inputDirectory, outputDirectory, logger = console) {
   copyRuntimeModules(resolvedOutputDirectory);
   emitRouteManifest(resolvedInputDirectory, resolvedOutputDirectory, inputFiles, serverRenderableByInputPath);
 
+  // Pass 4 — style extraction and shell copy: production builds get one
+  // app.css carrying every component's scoped rules, linked from the copied
+  // shell so first paint is styled with zero runtime work. The dev server's
+  // per-document <style> injection keeps working unchanged on top of this.
+  const extractedStyles = extractComponentStyles(resolvedInputDirectory, compiledByInputPath);
+  writeExtractedStyles(resolvedOutputDirectory, extractedStyles);
+  copyDocumentShell(resolvedInputDirectory, resolvedOutputDirectory, extractedStyles.length > 0, logger);
+
   return {
     compiledCount: inputFiles.length - failedCount,
     failedCount
@@ -353,6 +431,9 @@ module.exports = {
   buildProject,
   compileWizzFile,
   computeServerEligibility,
+  copyDocumentShell,
+  extractComponentStyles,
+  writeExtractedStyles,
   copyRuntimeModules,
   discoverWizzFiles,
   emitRouteManifest,
