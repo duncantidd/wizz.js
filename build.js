@@ -229,6 +229,20 @@ function writeExtractedStyles(outputDirectory, styles) {
 }
 
 /**
+ * Locates the project's document shell. Projects either keep index.html
+ * beside their components (the input directory itself) or at the project
+ * root with components in a subdirectory (the conventional `wizz build src
+ * dist` layout), so both locations are probed before giving up.
+ */
+function findDocumentShell(inputDirectory) {
+  const inputShell = path.join(inputDirectory, 'index.html');
+  if (fs.existsSync(inputShell)) return inputShell;
+  const parentShell = path.join(inputDirectory, '..', 'index.html');
+  if (fs.existsSync(parentShell)) return parentShell;
+  return null;
+}
+
+/**
  * Copies the project's document shell into the output directory, injecting
  * the app.css link before </head> when component styles were extracted. A
  * shell that already links /app.css is left untouched (no double link), and
@@ -236,10 +250,10 @@ function writeExtractedStyles(outputDirectory, styles) {
  * the missing shell at serve time.
  */
 function copyDocumentShell(inputDirectory, outputDirectory, hasStyles, logger = console) {
-  const shellPath = path.join(inputDirectory, 'index.html');
-  if (!fs.existsSync(shellPath)) {
+  const shellPath = findDocumentShell(inputDirectory);
+  if (shellPath === null) {
     if (hasStyles) {
-      logger.log(`Note: component styles were extracted to ${STYLESHEET_FILENAME}, but no index.html document shell was found at the input directory root to link it from.`);
+      logger.log(`Note: component styles were extracted to ${STYLESHEET_FILENAME}, but no index.html document shell was found (looked in the input directory and its parent) to link it from.`);
     }
     return false;
   }
@@ -433,6 +447,7 @@ module.exports = {
   computeServerEligibility,
   copyDocumentShell,
   extractComponentStyles,
+  findDocumentShell,
   writeExtractedStyles,
   copyRuntimeModules,
   discoverWizzFiles,

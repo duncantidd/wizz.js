@@ -727,3 +727,24 @@ test('builds styled components without a document shell', (t) => {
   assert.equal(fs.existsSync(path.join(outputDirectory, 'index.html')), false);
   assert.match(logger.messages.join('\n'), /no index\.html document shell was found/);
 });
+
+test('finds the document shell at the project root for the src layout', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  // The conventional layout: components in src/, index.html at the root.
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(
+    path.join(inputDirectory, 'App.wizz'),
+    '<main><p>App</p></main><wizz:style>p { margin: 0 }</wizz:style>'
+  );
+  writeFile(path.join(projectDirectory, 'index.html'), '<!DOCTYPE html>\n<html><head></head><body><div id="app"></div></body></html>');
+
+  const logger = createLogger();
+  buildProject(inputDirectory, outputDirectory, logger);
+
+  const shell = fs.readFileSync(path.join(outputDirectory, 'index.html'), 'utf8');
+  assert.match(shell, /<link rel="stylesheet" href="\/app\.css">/);
+  assert.equal(logger.messages.filter((message) => message.includes('document shell')).length, 0);
+});
