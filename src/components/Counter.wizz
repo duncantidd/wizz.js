@@ -2,7 +2,7 @@
   let count = persist('count', 0);
   let rawClicks = 0;
 
-   export let showReset = false;
+  export let showReset = false;
 
   function increment() {
     count += 1;
