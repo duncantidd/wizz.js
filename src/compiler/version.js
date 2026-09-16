@@ -26,17 +26,35 @@
 //     the `data-wizz-s` scope attribute in markup (server HTML, client
 //     `create()`, and hydration walks agree) and the head surface dedups
 //     scoped `<style>` nodes by their `data-wizz-style` attribute with
-//     `data-wizz-refs` refcounting. Within one major version, generated
+//     `data-wizz-refs` refcounting. For components declaring
+//     `let name = persist(key, default)` state, the surface additionally
+//     carries the additive `persist` capability: client initializers read the
+//     value through the `__wizzPersistRead` helper, statement mutations write
+//     through `__wizzPersistWrite`, and mounts subscribe through
+//     `__wizzPersistSubscribe`, whose shared per-page bus keeps instances
+//     converged across tabs via BroadcastChannel with a storage-event
+//     fallback (server modules render the declared default instead and ship
+//     the value for hydration; the client hydration walk verifies the
+//     delivered markup against that delivered state and restores the
+//     storage-read values once it returns, so client storage stays the
+//     mounted truth). Within one major version, generated
 //     modules keep this surface and their runtime behavior.
+//
+//     The marker is accepted only as a top-level `let` initializer: a
+//     persist() call inside a block or function body, or nested inside
+//     another persist() default, is a located compile error (the generated
+//     machinery it would emit references a variable the mount scope never
+//     has). An author who binds the name `persist` themselves opts out of
+//     marker recognition entirely.
 //
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.7.0',
-  syntax: '1.3.0',
-  output: '1.7.0'
+  compiler: '1.8.1',
+  syntax: '1.4.0',
+  output: '1.8.1'
 });
 
 module.exports = { VERSIONS };

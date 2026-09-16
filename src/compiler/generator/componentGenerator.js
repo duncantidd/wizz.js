@@ -2,6 +2,7 @@ const { CodeBuilder } = require('./codeBuilder');
 const { generateCreateFunction, collectComponentRefNames } = require('./domGenerator');
 const { generateUpdateFunction } = require('./updateGenerator');
 const { interceptAssignments, findReactiveMutations } = require('./assignmentInterceptor');
+const { rewritePersistInitializers } = require('./persistInitializer');
 const { assertServerRenderable } = require('./serverGenerator');
 const { generateHydrationFunction } = require('./hydrationGenerator');
 const { scopeCss } = require('../analyzer/cssScanner.js');
@@ -134,6 +135,104 @@ function __wizzStripOwnedHeadSlice(owner) {
   }
 }
 
+// --- Persistent state (milestone 17) ---
+// These four functions are emitted into generated modules via toString() the
+// same way the head helpers are. The channel, per-key registry, and storage
+// listener are shared through a globalThis singleton so one bus serves every
+// module on the page; the functions themselves stay per-module definitions.
+// Storage is untrusted input: reads parse defensively and fall back to the
+// default, writes are guarded so quota or private-mode failures leave the
+// in-memory state intact, and values replace wholesale (never merged), which
+// keeps hostile stored objects away from any merge vector.
+
+function __wizzStateBus() {
+  if (globalThis.__wizzStateBus) return globalThis.__wizzStateBus;
+  const bindings = new Map();
+  const bus = { bindings };
+  function deliver(key, value) {
+    const subscribers = bindings.get(key);
+    if (!subscribers) return;
+    for (const subscriber of Array.from(subscribers)) subscriber(value);
+  }
+  bus.deliver = deliver;
+  let channel = null;
+  if (typeof BroadcastChannel === 'function') {
+    try {
+      channel = new BroadcastChannel('wizz-state');
+      channel.onmessage = (event) => {
+        const data = event.data;
+        if (data && typeof data.key === 'string') deliver(data.key, data.value);
+      };
+    } catch (error) {
+      channel = null;
+    }
+    // Node-style environments expose unref() so an idle bus never holds the
+    // process open (tests, SSR); browsers have no unref and skip this.
+    if (channel && typeof channel.unref === 'function') channel.unref();
+  }
+  bus.channel = channel;
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    // Fallback for environments without BroadcastChannel. A tab's own write
+    // never fires its storage event (the writer already delivered locally),
+    // and a removed key (newValue null) leaves mounted state alone until the
+    // next mount reads storage.
+    window.addEventListener('storage', (event) => {
+      if (event.key === null || event.newValue === null || !bindings.has(event.key)) return;
+      let value;
+      try {
+        value = JSON.parse(event.newValue);
+      } catch (error) {
+        return; // corrupt entry: mounted state stays; the next mount re-reads
+      }
+      deliver(event.key, value);
+    });
+  }
+  globalThis.__wizzStateBus = bus;
+  return bus;
+}
+
+function __wizzPersistRead(key, fallback) {
+  try {
+    const storage = globalThis.localStorage;
+    if (!storage) return fallback;
+    const raw = storage.getItem(key);
+    if (raw === null) return fallback;
+    return JSON.parse(raw);
+  } catch (error) {
+    return fallback; // absent, corrupted, or unreadable storage: the default wins
+  }
+}
+
+function __wizzPersistWrite(key, value) {
+  const bus = __wizzStateBus();
+  try {
+    const storage = globalThis.localStorage;
+    if (storage) storage.setItem(key, JSON.stringify(value));
+  } catch (error) {} // quota or private mode: in-memory state still updates
+  if (bus.channel) {
+    try {
+      bus.channel.postMessage({ key, value });
+    } catch (error) {}
+  }
+  bus.deliver(key, value); // same-tab components sharing the key converge
+}
+
+function __wizzPersistSubscribe(key, callback) {
+  const bus = __wizzStateBus();
+  let subscribers = bus.bindings.get(key);
+  if (!subscribers) {
+    subscribers = new Set();
+    bus.bindings.set(key, subscribers);
+  }
+  subscribers.add(callback);
+  return () => {
+    const current = bus.bindings.get(key);
+    if (!current) return;
+    current.delete(callback);
+    if (current.size === 0) bus.bindings.delete(key);
+  };
+}
+
 /**
  * Wraps the parsed component into a single, importable Factory Closure.
  * @param {Object} astPayload - The Final Handoff Object (must include rawScript).
@@ -165,6 +264,10 @@ function generateComponent(astPayload, options = {}) {
   const builder = new CodeBuilder();
       const componentImports = astPayload.imports || [];
   const props = astPayload.props || [];
+  // Persistent state rides the ordinary reactive pipeline (same dependency
+  // tracking, change flags, and update walk); only the initializer, the
+  // storage write, and the cross-tab subscription differ.
+  const persistentVars = astPayload.script.filter((declaration) => declaration.isPersistent);
 
   // Head machinery turns on when the component owns head markup (fresh mounts
   // apply and destroy releases it), owns a style block (styles hoist through
@@ -236,6 +339,22 @@ function generateComponent(astPayload, options = {}) {
     builder.add(__wizzStripHeadRun.toString());
     builder.add('');
     builder.add(__wizzStripOwnedHeadSlice.toString());
+    builder.add('');
+  }
+
+  // Persistent state helpers are emitted from their in-generator definitions
+  // (same pattern as the head helpers) so every generated module carries
+  // exactly this implementation. Components without persistent state keep
+  // byte-identical output.
+  if (persistentVars.length > 0) {
+    builder.add('// --- Persistent State Helpers ---');
+    builder.add(__wizzStateBus.toString());
+    builder.add('');
+    builder.add(__wizzPersistRead.toString());
+    builder.add('');
+    builder.add(__wizzPersistWrite.toString());
+    builder.add('');
+    builder.add(__wizzPersistSubscribe.toString());
     builder.add('');
   }
 
@@ -330,12 +449,54 @@ function generateComponent(astPayload, options = {}) {
   });
 
   if (astPayload.rawScript) {
+    // Persistent markers are replaced first — the client target reads the
+    // persisted value through the runtime helper at declaration time, before
+    // the first create pass, so the first paint already shows it — then
+    // assignments are intercepted, which for persistent names also writes
+    // the new value back through storage.
+    const clientScript = persistentVars.length > 0
+      ? rewritePersistInitializers(
+        astPayload.rawScript,
+        astPayload.script,
+        (declaration) => `__wizzPersistRead(${JSON.stringify(declaration.storageKey)}, (${declaration.defaultValue}))`
+      )
+      : astPayload.rawScript;
     // Split by newline and add to builder to maintain proper indentation
             const interceptedScript = interceptAssignments(
-                  astPayload.rawScript,
-                  reactiveVars.map(decl => decl.name)
+                  clientScript,
+                  reactiveVars.map(decl => decl.name),
+                  persistentVars.map((declaration) => ({ name: declaration.name, storageKey: declaration.storageKey }))
             );
             interceptedScript.split('\n').forEach(line => builder.add(line));
+  }
+
+  // Persistent state subscribes through the shared page bus: an incoming
+  // value from another tab (or another mounted instance in this tab) is
+  // adopted only when it differs, then rides the ordinary change-flag path.
+  // Destroy hooks unregister the bindings so a destroyed instance never
+  // receives values.
+  if (persistentVars.length > 0) {
+    builder.add('');
+    builder.add('// --- Persistent State ---');
+    builder.add('const __wizzPersistUnsubscribe = [];');
+    for (const declaration of persistentVars) {
+      builder.add(`__wizzPersistUnsubscribe.push(__wizzPersistSubscribe(${JSON.stringify(declaration.storageKey)}, (value) => {`).indent();
+      builder.add(`if (Object.is(value, ${declaration.name})) return;`);
+      builder.add(`${declaration.name} = value;`);
+      builder.add(`queueUpdate({ ${declaration.name}: true });`);
+      builder.dedent().add('}));');
+    }
+    builder.add('destroyHooks.push(() => { for (const unsubscribe of __wizzPersistUnsubscribe) unsubscribe(); });');
+    if (hydratable) {
+      // The adoption walk verifies the delivered markup by re-evaluating the
+      // template's expressions, and the server rendered that markup from the
+      // serialized state — so the seeding block below temporarily installs
+      // the server's values. This captures the storage-read ones; the
+      // initialization block restores them as soon as the walk returns,
+      // handing authority back to client storage before the initial update
+      // pass syncs the adopted markup to the persisted values.
+      builder.add(`const __wizzPersistHydration = { ${persistentVars.map(declaration => `${declaration.name}: ${declaration.name}`).join(', ')} };`);
+    }
   }
 
   // Hydration: server-rendered initial state overrides the script-computed
@@ -344,6 +505,14 @@ function generateComponent(astPayload, options = {}) {
   // means a hostile `__proto__` key in the serialized state cannot pollute
   // Object.prototype.
   if (hydratable) {
+    // Persistent variables are seeded too: the delivered markup was rendered
+    // from this state, so the adoption walk's expression checks must
+    // re-evaluate against the server's values to verify it — evaluating them
+    // against the storage-read value makes every stored value that differs
+    // from the default fail the walk and fall back. Client storage stays
+    // authoritative for the mounted instance: the captured storage-read
+    // values are restored right after the walk returns, and the initial
+    // update pass below syncs the adopted markup to them.
     const seedableVars = reactiveVars.filter(decl => !decl.isProp);
     if (seedableVars.length > 0) {
       builder.add('\n// --- Initial State ---');
@@ -514,8 +683,18 @@ function generateComponent(astPayload, options = {}) {
     }
     builder.add('rootNode.__wizzMountChildren();');
   } else {
-    builder.add(hydrateCreateCall)
-          .add('if (hydrate && !adoptedHydration) return mountComponent(target, props);')
+    builder.add(hydrateCreateCall);
+    if (hydratable && persistentVars.length > 0) {
+      // Back to client storage as the source of truth. On the adopt path the
+      // initial update pass below writes these over the verified markup; the
+      // mismatch fallback re-enters mountComponent, whose script re-reads
+      // storage. Restoring here is a no-op for plain mounts (hydrate false),
+      // which never seeded in the first place.
+      for (const declaration of persistentVars) {
+        builder.add(`${declaration.name} = __wizzPersistHydration.${declaration.name};`);
+      }
+    }
+    builder.add('if (hydrate && !adoptedHydration) return mountComponent(target, props);')
           .add('const rootNode = hydrate ? adoptedHydration.node : create(ctx);')
           .add('const childComponents = hydrate ? adoptedHydration.childComponents : rootNode.__wizzChildComponents;')
           .add('const listUpdates = hydrate ? adoptedHydration.listUpdates : rootNode.__wizzListUpdates;')

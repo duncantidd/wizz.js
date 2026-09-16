@@ -298,6 +298,8 @@ Statement extents are resolved on the shared scriptLexer token stream (`../scrip
 
 The default expression runs to the first `;` back at the declaration's own nesting depth; a terminating semicolon is required, and an identifier directly after a completed operand (the start of a new statement) or a bare comma (a second declarator) is rejected rather than silently absorbed. Defaults are author-script expressions — full JavaScript — not the narrower template expression grammar.
 
+`persist()` cannot initialize a prop: a default whose text starts with `persist\s*\(` throws a located `SyntaxError` (`persist() cannot initialize the prop '<name>'; props are parent-owned…`), because a prop's value is parent-owned and storage-reading it client-side would split ownership between two components.
+
 `RESERVED_PROP_NAMES` is the set of names that cannot be props: strict-mode reserved words, the generated closure's `props` parameter, `__proto__`, and every `__wizz`-prefixed name, which the framework reserves for generated identifiers.
 
 ### `stateScanner.js` - Lightweight Script Declaration Scanner
@@ -312,6 +314,18 @@ It performs two global scans:
 2. `functionRegex` recognizes named `function` declarations and emits `FunctionDeclaration` nodes with their names.
 
 Variables are reported before functions because each regular expression completes its full scan before the next begins; this is part of the current output contract even when functions appear first in the script source. The scanner deliberately stops short of full JavaScript semantics. Future syntax support should replace or extend this module with a real JavaScript parser rather than continually broadening the regular expressions.
+
+#### Persistent-state markers
+
+When a variable declaration's initializer text starts with `persist\s*\(`, `scanState()` parses the marker instead of recording the raw text alone. A persistent declaration keeps every field above and adds `isPersistent: true`, `storageKey` (the cooked string-literal first argument), `defaultValue` (the source text of the second argument, trimmed), and the `initialValueStart`/`initialValueEnd` offsets of the whole `persist(…)` span — offsets, not re-matched text, so look-alike `persist(...)` text in earlier comments or strings cannot redirect the generator's later splice. Plain declarations keep their node shape byte-for-byte (no new fields), which the tests pin with a deepEqual.
+
+Marker parsing is hand-rolled for the same reason the rest of the scanner is: no full parser, but no false confidence either. `walkPersistArguments()` tracks a mode stack (round/curly/square brackets, single/double/template quotes with the quote character itself as the mode, line and block comments) and splits only top-level commas, so defaults may contain object literals, nested calls, and comment noise. Everything malformed is a located compile error, never a silent guess: `persist()` on a `const` (it must be reactive), a missing or non-string-literal key (only simple `\`-escape sequences are cooked; `\x41`-style escapes reject), an argument count other than two, statements after the closing parenthesis, a missing closing parenthesis, mismatched brackets, and template-literal interpolation in the default (the default must survive string splicing into arbitrary target code, and interpolated expressions cannot). The default expression itself is carried as opaque source text — the generator decides how to embed it.
+
+#### Marker placement
+
+The marker must initialize a **top-level** `let` declaration, and the scanner enforces it because the generators hoist every state reference to the component's mount scope: a marker inside a function body or block would emit read/write/subscribe machinery that references a variable existing only in the callback's own scope, and the first template evaluation would die with a `ReferenceError` of the declaration's own name — a component this rejects never worked, so the located error strictly replaces the runtime failure (`persist() must initialize a top-level let declaration; 'rawClicks' is declared inside a block or function body at 2:17.`). A `persist()` call nested inside another `persist()` default would survive the initializer splice verbatim and fail at runtime with `persist is not defined`; it is rejected too (`persist() cannot be nested inside another persist() default…`).
+
+Placement detection walks the script with `lexicalModesBefore()` — the same quote/comment/bracket mode stack as `walkPersistArguments()`, extended with regex-literal handling: a `/` opens a literal unless the previous significant character continues an expression (identifier character, closing bracket, quote, dot, or operator tail), so a regex literal containing quotes or comment starters cannot leave phantom modes open and make a top-level marker look nested. Division after prefix operators (`x++ /2/`) is the accepted residual ambiguity. An author who binds the name `persist` themselves — a `function persist()` or a `let/const persist =` — opts out of marker recognition entirely: no marker is recognized and no marker diagnostic applies, so scripts that compiled before the marker syntax existed keep compiling.
 
 ## Tests
 

@@ -7,16 +7,27 @@ test('exposes exactly the compiler, syntax, and output versions', () => {
 });
 
 test('pins the current contract versions so bumps are deliberate', () => {
-  // 1.7.0 / syntax 1.3.0 / output 1.7.0: milestone 16 added the <wizz:style>
-  // block — new component syntax (StyleBlock node, raw-text mode, plain
-  // <style> diagnostics) and an output change (every element a styled
-  // component renders carries the data-wizz-s scope attribute; head
-  // management dedups scoped <style> nodes with refcounting). Both contracts
-  // grew, so compiler, syntax, and output bump together.
+  // 1.8.0 / syntax 1.4.0 / output 1.8.1: milestone 17 added persistent
+  // cross-tab state — new component syntax (the persist(key, default)
+  // initializer marker with its parser diagnostics) and an output change
+  // (client initializers read storage through __wizzPersistRead, mutations
+  // write through __wizzPersistWrite, mounts subscribe through
+  // __wizzPersistSubscribe on a shared per-page bus; server modules render
+  // the default and ship the value for hydration). Both contracts grew, so
+  // compiler, syntax, and output bump together. The output patch bump fixes
+  // hydration for persistent vars: the adoption walk now verifies the
+  // delivered markup against the delivered state (previously it evaluated
+  // persistent expressions against the storage-read value, which forced a
+  // fallback whenever the stored value differed from the default). The
+  // compiler patch bump adds the placement diagnostics: persist() markers
+  // outside a top-level let initializer — inside a function body, a block,
+  // or another persist() default — are located compile errors instead of
+  // runtime ReferenceErrors, and an author-defined persist binding opts out
+  // of marker recognition entirely.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.7.0',
-    syntax: '1.3.0',
-    output: '1.7.0'
+    compiler: '1.8.1',
+    syntax: '1.4.0',
+    output: '1.8.1'
   });
 });
 
@@ -33,7 +44,7 @@ test('the version table is frozen so callers cannot mutate the contract', () => 
     'use strict';
     VERSIONS.syntax = '9.9.9';
   }, TypeError);
-  assert.equal(VERSIONS.syntax, '1.3.0');
+  assert.equal(VERSIONS.syntax, '1.4.0');
 });
 
 test('the compiler major version leads or matches every contract major version', () => {

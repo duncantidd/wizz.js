@@ -294,9 +294,9 @@ The one lexical ambiguity the lexer resolves is `/`: it starts a regular express
 
 ### `assignmentInterceptor.js` - Reactive Mutation Rewriter
 
-**Exports:** `interceptAssignments(rawScript, reactiveVars)`, `findReactiveMutations(rawScript, names)`
+**Exports:** `interceptAssignments(rawScript, reactiveVars, persistentVars)`, `findReactiveMutations(rawScript, names)`
 
-`interceptAssignments()` preserves the component's script source while adding a `queueUpdate({ name: true })` call after each supported mutation of a reactive variable. For example:
+`interceptAssignments()` preserves the component's script source while adding a `queueUpdate({ name: true })` call after each supported mutation of a reactive variable. The optional third argument lists persistent variables as `{ name, storageKey }` pairs: mutations of those names additionally emit `__wizzPersistWrite("key", name)` after the notification, so the new value reaches storage and every subscribed mount. For example:
 
 ```js
 count += 1;
@@ -311,6 +311,22 @@ It is syntax-aware: `scriptLexer.js` tokenizes the script, and rewrites are deci
 Assignments are not rewritten in expression position: inside parentheses that are not function bodies (`if (count = 1)`, call arguments), inside object literals and class field initializers, inside template `${}` interpolations, in unbraced `if`/`else`/`while`/`do` statement bodies, or as a chained assignment beyond the first target. Property chains such as `user.name = "Ada"` and `items[0] = "x"` rewrite with the root reactive name, matching how reactive objects are re-read on update. Supported mutations use `=`, the compound assignment family, and prefix or postfix `++`/`--`, and the original assignment text is preserved rather than reconstructed.
 
 Whenever the extent of a statement cannot be established confidently (unbalanced nesting, an unpaired ternary `:`, an unpaired backtick), the surrounding source passes through untransformed. A missed interception is acceptable, corrupted output is not. The component wrapper provides `queueUpdate()` before executing developer logic; it calls `update()` only after initial mounting completes, which makes initialization assignments safe because DOM creation reads their final values directly.
+
+### `persistInitializer.js` - Persistent Initializer Splicer
+
+**Export:** `rewritePersistInitializers(rawScript, declarations, buildReplacement)`
+
+`rewritePersistInitializers()` replaces each persistent declaration's recorded `persist(key, default)` span with a target-specific initializer, splicing back-to-front by offset so earlier replacements never shift later spans. `buildReplacement(declaration)` receives the declaration node (`storageKey`, `defaultValue`) and returns the replacement text: the client target builds `__wizzPersistRead("key", (default))`, the server target builds `(default)`. Scripts with no persistent declarations pass through byte-identical, `persist(...)` text in comments or strings is never touched (spans, not text matching), and a span that no longer starts with `persist` — compiler-internal drift — throws a located `SyntaxError` naming the bug rather than splicing garbage into author code.
+
+### Persistent State
+
+A `let name = persist(key, default)` declaration is an ordinary reactive variable with a storage key attached. The machinery is emitted only when at least one declaration is persistent — components without one are byte-identical apart from the version stamp — and the three runtime helpers are emitted per-module (like the head helpers, via `Function.prototype.toString`) while the bus they share is a `globalThis.__wizzStateBus` singleton, so one bus serves every module on the page.
+
+- `__wizzPersistRead(key, fallback)` reads `localStorage` defensively: absent storage or a stored `null` yields the fallback, `JSON.parse` failure (corrupted or hostile entry) yields the fallback, and the stored value replaces the variable wholesale — never merged, which keeps hostile stored objects away from any merge vector.
+- `__wizzPersistWrite(key, value)` is appended to every intercepted statement mutation of a persistent variable (after `queueUpdate`, both the semicolon-terminated and automatic-semicolon forms). It writes `JSON.stringify(value)` through a guarded `setItem` (quota or private-mode failures leave the in-memory state intact), posts `{ key, value }` on the bus's BroadcastChannel when one exists, and delivers same-tab so instances sharing the key converge within the writing tab.
+- `__wizzPersistSubscribe(key, callback)` registers the mount's callback in the bus's per-key registry and returns an unsubscribe; the mount pushes one subscription per persistent key and unregisters all of them in a destroy hook. The subscription callback applies the value with an `Object.is` guard — a component's own write does not echo back into it — then assigns and queues an update.
+
+The bus opens one `BroadcastChannel('wizz-state')` per page for cross-tab delivery, with a `storage` event listener as the no-BroadcastChannel fallback (a tab's own storage event never fires for its own write, and a removed key leaves mounted state alone until the next mount reads storage). Node-style channels are `unref`ed so an idle bus never holds a process open. During hydration, persistent variables are seeded from the serialized snapshot like every other reactive var — the delivered markup was rendered from that state, and the adoption walk verifies by re-evaluating expressions, so the walk's checks match the delivery by construction (verifying against the storage-read value instead made every stored value that differed from the default fail the walk and fall back). The captured storage-read values are restored as soon as the walk returns — client storage stays the mounted truth — and because the emitted initial `update()` pass runs unconditionally after adoption, hydrated markup shows the stored value on the first pass with no extra sync machinery. Branch selection stays a mount-time choice (`create()`/`hydrateCreate()` pick the `{#if}` branch; `update()` carries no branch machinery), so an adopted branch whose test reads a persistent var keeps the delivered branch. Server modules rewrite the marker to `(default)` and emit no persistence machinery at all: the server has no storage, the default is what renders, and hydration hands the client initializer the real value.
 
 ### Update Scheduling
 

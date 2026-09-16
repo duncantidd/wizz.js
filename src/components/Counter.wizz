@@ -1,18 +1,26 @@
 <script>
-  let count = 0;
+  let count = persist('count',0);
+  let rawClicks = 0;
 
   function increment() {
     count += 1;
+    rawClicks += 1;
   }
 </script>
 
 <div>
-  <button on:click={increment}>Clicks: {count}</button>
+  <button on:click={increment}>Increment Counter</button>
+  <p>Clicks: {rawClicks}. Persisted clicks: {count}</p>
 </div>
 
 <wizz:style>
   button {
     font-size: 18px;
     padding: 8px 16px;
+    background: yellow;
+    color: #542342;
+  }
+  p {
+    color: yellow;
   }
 </wizz:style>

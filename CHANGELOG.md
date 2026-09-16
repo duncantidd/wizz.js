@@ -11,6 +11,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Milestone 17 — Persistent Cross-Tab State
+
+#### Added
+
+- `persist(key, default)` initializer marker: a reactive `let` declaration can initialize with `persist('storageKey', defaultValue)` to make the variable survive page refreshes and stay reactive across browser tabs while keeping every existing reactive behavior — templates read the bare identifier, mutations rerender, no wrapper object or accessor API. The parser records the marker with its cooked string-literal storage key, the default value's source text, and the exact `persist(…)` source span; everything malformed fails compilation with a located diagnostic (persist on a `const`, missing/non-string key, wrong argument count, trailing statements, unclosed or mismatched brackets, template-literal interpolation in the default, unsupported `\x`-style escapes). `persist()` on a prop is rejected by the prop extractor — props are parent-owned (`src/compiler/parser/stateScanner.js`, `src/compiler/parser/propExtractor.js`).
+- Client persistence machinery, emitted only for components with at least one persistent declaration (persist-free components compile byte-identically apart from the version stamp): the initializer becomes `__wizzPersistRead("key", (default))`, every intercepted statement mutation of the variable additionally writes `__wizzPersistWrite("key", name)` after its `queueUpdate`, and each mount subscribes per key through `__wizzPersistSubscribe` with an `Object.is` guard so its own writes never echo back; a destroy hook unregisters every subscription. Four helpers are emitted per module while the bus itself is a `globalThis.__wizzStateBus` singleton shared by every module on the page (`src/compiler/generator/componentGenerator.js`, `src/compiler/generator/persistInitializer.js`, `src/compiler/generator/assignmentInterceptor.js`).
+- Cross-tab delivery: the bus opens one `BroadcastChannel('wizz-state')` per page (unref'd in Node-style runtimes so tests and SSR never hang on it) and falls back to `storage` events where BroadcastChannel is unavailable — a tab's own write never fires its own storage event, and a removed key leaves mounted state alone until the next mount reads storage. Instances sharing a key converge: same-tab delivery reaches every mounted subscriber, and the `Object.is` guard deduplicates tabs that receive a write through both the channel and the storage event.
+- Untrusted-storage hardening: reads `JSON.parse` defensively with the declared default as the fallback for absent, corrupted, or unreadable entries; stored values replace state wholesale (never merged, removing the merge vector for hostile stored objects); writes are guarded so quota failures or private-mode storage leave the in-memory state and peer delivery intact, and a later mutation persists again once storage recovers.
+- Server-side rendering of persistent variables: the server target rewrites the marker to the plain default (`let theme = ('light');`) and emits no persistence machinery — the server has no storage, so the default is what renders — while the variable still ships in the state snapshot for hydration. Hydration verifies the delivered markup against the delivered state: persistent variables are seeded from the serialized snapshot for the adoption walk's expression checks, and the captured storage-read values are restored once the walk returns, so client storage stays the mounted truth and the emitted initial `update(ctx, { … })` writes the persisted value over the delivered server default (`src/compiler/generator/serverGenerator.js`).
+
+#### Fixed
+
+- Hydration of persistent variables (output patch 1.8.1): the adoption walk verified delivered markup by re-evaluating the template's expressions against the client's current values — for a persistent var, the storage read — while the server had rendered the declared default, so every stored value that differed from the default failed the walk and fell back to a full client mount behind a `[wizz] hydration mismatch` warning (first seen on the showcase Counter). Hydratable modules now seed persistent vars from the serialized state for the walk and restore the storage-read values right after it returns; the integration suite proves adoption by node identity and a clean warning log, including an `{#if}` branch whose test reads a persistent var.
+- Placement diagnostics for the marker (compiler patch 1.8.1): `persist()` inside a function body or block used to compile into machinery that referenced a variable existing only in the callback's scope — the first template evaluation died with `rawClicks is not defined` — and a `persist()` nested inside another `persist()` default survived the splice verbatim and died with `persist is not defined`. Both are now located compile errors, and an author who binds the name `persist` themselves (function or let/const) opts out of marker recognition entirely, so scripts that compiled before the marker syntax existed keep compiling.
+
+#### Changed
+
+- Version contract: compiler 1.8.1, component syntax 1.4.0 (the `persist(key, default)` marker), generated output 1.8.1 (the additive `__wizzPersistRead`/`__wizzPersistWrite`/`__wizzPersistSubscribe` surface on persistent components, with delivered-state verification during hydration).
+
+#### Docs
+
+- ROADMAP §17 records the implementation notes; the parser README documents the marker's node shape and diagnostics, the generator README documents the helpers' runtime contract and the `persistInitializer` splicer, STRUCTURE.md and the README gain a "Persistent Cross-Tab State" section, and the CHANGELOG is synced.
+
 ### Milestone 16 — Scoped Component Stylesheets
 
 #### Added
