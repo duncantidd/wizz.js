@@ -1,16 +1,23 @@
 <script>
-  let count = persist('count',0);
+  let count = persist('count', 0);
   let rawClicks = 0;
+
+   export let showReset = false;
 
   function increment() {
     count += 1;
     rawClicks += 1;
+  }
+
+  function reset() {
+    count = 0;
   }
 </script>
 
 <div>
   <button on:click={increment}>Increment Counter</button>
   <p>Clicks: {rawClicks}. Persisted clicks: {count}</p>
+  {#if showReset}<button on:click={reset}>Reset</button>{/if}
 </div>
 
 <wizz:style>

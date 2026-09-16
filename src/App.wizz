@@ -29,6 +29,6 @@
 <main>
   <h1>Hello {name} Welcome to {frameworkName}!</h1>
   <p>Zero dependencies. 100% compiled.</p>
-  <Counter />
+  <Counter showReset={true} />
   <Card />
 </main>
