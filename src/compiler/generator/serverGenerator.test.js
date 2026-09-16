@@ -765,3 +765,31 @@ test('moduleQuery rejects values that are not URL query strings', () => {
     /moduleQuery must be a URL query string/
   );
 });
+
+// --- Persistent state (milestone 17) ---
+
+test('renders persistent vars with their defaults and snapshots them for hydration', async () => {
+  const { html, state } = await renderSource(
+    "<script>let theme = persist('theme', 'light');</script><p>{theme}</p>"
+  );
+
+  // The server has no storage: the default renders, and hydration hands the
+  // client initializer (which reads storage) the first real value.
+  assert.equal(html, '<p data-wizz-id="1">light</p>');
+  assert.deepEqual(state, { theme: 'light' });
+});
+
+test('server modules rewrite persist markers and omit all persistence machinery', () => {
+  const moduleSource = generateServer(
+    "<script>\nlet theme = persist('theme', 'light');\nlet clicks = 0;\nfunction bump() { clicks += 1; }\n</script><p>{theme}{clicks}</p>"
+  );
+
+  assert.match(moduleSource, /let theme = \('light'\);/);
+  assert.doesNotMatch(moduleSource, /__wizzPersist/);
+  assert.doesNotMatch(moduleSource, /__wizzStateBus/);
+  assert.doesNotMatch(moduleSource, /localStorage/);
+  assert.doesNotMatch(moduleSource, /BroadcastChannel/);
+  // Server scripts stay un-intercepted: mutations do not notify anything.
+  assert.match(moduleSource, /clicks \+= 1;/);
+  assert.doesNotMatch(moduleSource, /queueUpdate/);
+});

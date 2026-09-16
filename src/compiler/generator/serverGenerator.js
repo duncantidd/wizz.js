@@ -1,6 +1,7 @@
 // src/compiler/generator/serverGenerator.js
 const { CodeBuilder } = require('./codeBuilder');
 const { findReactiveMutations } = require('./assignmentInterceptor');
+const { rewritePersistInitializers } = require('./persistInitializer');
 const { buildComponentPropsSource } = require('./domGenerator');
 const { scopeCss } = require('../analyzer/cssScanner.js');
 const { VERSIONS } = require('../version.js');
@@ -334,7 +335,15 @@ function generateServerComponent(astPayload, options = {}) {
     if (/^\s*import\s*[A-Za-z0-9_$*{']/.test(astPayload.rawScript)) {
       throw new SyntaxError('Import statements must each be on their own line inside the component script.');
     }
-    astPayload.rawScript.split('\n').forEach(line => builder.add(line));
+    // persist() markers render as their plain defaults: the server has no
+    // storage, so persistent state is client-authoritative and the persisted
+    // value lands at hydration through the client module's own read.
+    const serverScript = rewritePersistInitializers(
+      astPayload.rawScript,
+      astPayload.script,
+      (declaration) => `(${declaration.defaultValue})`
+    );
+    serverScript.split('\n').forEach(line => builder.add(line));
   }
 
   // --- Lifecycle hooks are part of the author surface; the server collects

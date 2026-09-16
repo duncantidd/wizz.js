@@ -740,3 +740,94 @@ test('leaves mutations of block-local names unrewritten during interception', ()
   assert.equal(rewritten.split('queueUpdate({ count: true });').length - 1, 1);
   assert.match(rewritten, /count = 3; queueUpdate\(\{ count: true \}\);/);
 });
+
+// --- Persistent write-through (milestone 17) ---
+
+const THEME = { name: 'theme', storageKey: 'theme' };
+
+test('inserts a persist write after the queue notification for persistent vars', () => {
+  assert.equal(
+    interceptAssignments('theme = nextTheme;', ['theme'], [THEME]),
+    'theme = nextTheme; queueUpdate({ theme: true }); __wizzPersistWrite("theme", theme);'
+  );
+});
+
+test('inserts persist writes on statements without semicolons too', () => {
+  assert.equal(
+    interceptAssignments('function toggle() { theme = theme === "light" ? "dark" : "light" }', ['theme'], [THEME]),
+    'function toggle() { theme = theme === "light" ? "dark" : "light"; queueUpdate({ theme: true }); __wizzPersistWrite("theme", theme); }'
+  );
+});
+
+test('persistent vars still emit persist writes for compound and update operators', () => {
+  const output = interceptAssignments('volume += 2;\nstep++;\n++step;', ['volume', 'step'], [
+    { name: 'volume', storageKey: 'vol' },
+    { name: 'step', storageKey: 'step' }
+  ]);
+
+  assert.equal(
+    output,
+    [
+      'volume += 2; queueUpdate({ volume: true }); __wizzPersistWrite("vol", volume);',
+      '\nstep++; queueUpdate({ step: true }); __wizzPersistWrite("step", step);',
+      '\n++step; queueUpdate({ step: true }); __wizzPersistWrite("step", step);'
+    ].join('')
+  );
+});
+
+test('writes persist keys through chains rooted at a persistent var', () => {
+  assert.equal(
+    interceptAssignments('settings.items[0] = "x";', ['settings'], [{ name: 'settings', storageKey: 'settings' }]),
+    'settings.items[0] = "x"; queueUpdate({ settings: true }); __wizzPersistWrite("settings", settings);'
+  );
+});
+
+test('non-persistent reactive vars are intercepted without persist writes', () => {
+  const output = interceptAssignments('clicks = 1;\ntheme = "dark";', ['clicks', 'theme'], [THEME]);
+
+  assert.equal(
+    output,
+    'clicks = 1; queueUpdate({ clicks: true });\ntheme = "dark"; queueUpdate({ theme: true }); __wizzPersistWrite("theme", theme);'
+  );
+  assert.equal(output.includes('__wizzPersistWrite("theme", clicks)'), false);
+});
+
+test('persistent declarations themselves do not emit persist writes', () => {
+  const input = 'let theme = "light";\ntheme = "dark";';
+  const output = interceptAssignments(input, ['theme'], [THEME]);
+
+  assert.equal(output, 'let theme = "light";\ntheme = "dark"; queueUpdate({ theme: true }); __wizzPersistWrite("theme", theme);');
+  assert.equal(output.split('__wizzPersistWrite').length - 1, 1);
+});
+
+test('persistent interception keeps hazardous scripts valid JavaScript', () => {
+  const inputs = [
+    'function f() { theme = `a${b}c; }`; }',
+    'function f() { theme = /a;[/]b/g; }',
+    'function f() { if (ready) { theme = 1 } }',
+    'switch (mode) { case 1: theme = 1; break; default: theme = 0 }'
+  ];
+
+  for (const input of inputs) {
+    const output = interceptAssignments(input, ['theme'], [THEME]);
+    assert.doesNotThrow(
+      () => new Function('queueUpdate', '__wizzPersistWrite', output),
+      `Interception broke valid JS:\n  in:  ${input}\n  out: ${output}`
+    );
+  }
+});
+
+test('executed persistent scripts call the write-through with the new value', () => {
+  const script = interceptAssignments(
+    'let theme = "light";\nfunction toggle() { theme = "dark"; }\ntoggle();',
+    ['theme'],
+    [THEME]
+  );
+
+  const notifications = [];
+  const writes = [];
+  new Function('queueUpdate', '__wizzPersistWrite', script)((changes) => notifications.push(changes), (key, value) => writes.push([key, value]));
+
+  assert.deepEqual(notifications, [{ theme: true }]);
+  assert.deepEqual(writes, [['theme', 'dark']]);
+});
