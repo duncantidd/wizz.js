@@ -46,7 +46,7 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 	  ├── extractor.js              Extracts and removes <script> from template AST
 	  ├── componentImportExtractor.js Extracts default .wizz imports from component scripts
 	  ├── propExtractor.js          Extracts export let prop declarations from component scripts
-	  ├── stateScanner.js           Recognizes script declarations
+	  ├── stateScanner.js           Recognizes script declarations and persist(key, default) persistent-state markers
 	  └── *.test.js                 Focused Node tests for each parser module
 	├── analyzer/                    2. Parser handoff -> reactive metadata
 	│   ├── README.md                 Analyzer contracts and module reference
@@ -60,6 +60,7 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 	  ├── domGenerator.js           Emits create() DOM construction function
 	  ├── updateGenerator.js        Emits update() reactive text and prop-update functions
 	  ├── assignmentInterceptor.js  Syntax-aware rewriter for reactive script mutations
+	  ├── persistInitializer.js     Splices persist(key, default) markers into target-specific initializers
 	  ├── serverGenerator.js        Emits the server-side HTML string renderer and the static-renderability gate (blocks, components, escaping)
 	  ├── hydrationGenerator.js     Emits the hydrateComponent()/hydrateRoot() DOM adoption walk
 	  ├── componentGenerator.js     Emits the mountable default-export module
@@ -82,6 +83,8 @@ Milestone 15's `<wizz:head>` blocks give components ownership of the document he
 `scripts/install-cli.sh` provides the managed local installation path without npm. It copies the runtime to `${XDG_DATA_HOME:-~/.local/share}/wizz` and installs a `wizz` launcher in `${XDG_BIN_HOME:-~/.local/bin}`. The launcher delegates to `scripts/cli.js`: `wizz build` compiles the conventional `src` directory into `dist`, `wizz build <input-directory> <output-directory>` passes both explicit directories to the project compiler, and `wizz dev` starts the existing development workflow in the directory where the command is invoked. The public CLI validates commands and directory-argument combinations, propagates build failures through a non-zero exit code, and requires the project's `index.html` before opening a development server. `node scripts/dev.js` runs a project build for `src` into `dist`, copies the document shell and stylesheet into `dist`, serves that directory at `http://localhost:3000`, and watches `.wizz` files with native events plus a 250 ms polling fallback for mounted filesystems. It returns `index.html` for unknown extensionless paths so client-side routes can load directly, while missing asset paths return HTTP 404. For document requests matching a manifest route whose `serverModulePath` is non-null, it instead imports the server module (cache-busted by file mtime), renders the page with `renderComponent()`, and streams the shell with the rendered HTML inside the `#app` mount point plus the serialized state script as its sibling — when the page declares `<wizz:head>` (or renders head-declaring children), the returned `head` markup is injected between `<!--wizz:head-start-->`/`<!--wizz:head-end-->` markers before `</head>` for the client to adopt or strip — eligibility comes from the fresh manifest per request, so watch rebuilds take effect immediately and any render failure falls back to the plain shell.
 
 The generated component module contains its own small `create()` and `update()` functions, alongside the component author's script and a `{ setProps?, destroy() }` API. Imported components are mounted with an explicit props object (`mountComponent(target, props = {})`); reactive prop changes are delivered to mounted child instances through `setProps()`.
+
+A `let name = persist(key, default)` declaration keeps every reactive behavior and adds persistence: the parser records the marker with its storage key and default (`stateScanner`, with `propExtractor` rejecting `persist()` on props), and the generators rewrite the initializer per target — client modules read storage through `__wizzPersistRead`, write statement mutations back through `__wizzPersistWrite`, and subscribe the mount through `__wizzPersistSubscribe` on a per-page `globalThis.__wizzStateBus` bus (BroadcastChannel delivery with a storage-event fallback, storage reads/writes guarded as untrusted input); server modules render the declared default and snapshot the value for hydration, whose initial update pass syncs the adopted markup to the stored value. Subscriptions unregister on destroy, and components without persistent declarations emit no persistence machinery at all.
 
 ## Compilation Pipeline
 
