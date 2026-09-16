@@ -487,6 +487,16 @@ function generateComponent(astPayload, options = {}) {
       builder.dedent().add('}));');
     }
     builder.add('destroyHooks.push(() => { for (const unsubscribe of __wizzPersistUnsubscribe) unsubscribe(); });');
+    if (hydratable) {
+      // The adoption walk verifies the delivered markup by re-evaluating the
+      // template's expressions, and the server rendered that markup from the
+      // serialized state — so the seeding block below temporarily installs
+      // the server's values. This captures the storage-read ones; the
+      // initialization block restores them as soon as the walk returns,
+      // handing authority back to client storage before the initial update
+      // pass syncs the adopted markup to the persisted values.
+      builder.add(`const __wizzPersistHydration = { ${persistentVars.map(declaration => `${declaration.name}: ${declaration.name}`).join(', ')} };`);
+    }
   }
 
   // Hydration: server-rendered initial state overrides the script-computed
@@ -495,11 +505,15 @@ function generateComponent(astPayload, options = {}) {
   // means a hostile `__proto__` key in the serialized state cannot pollute
   // Object.prototype.
   if (hydratable) {
-    // Persistent variables are excluded: the storage read at declaration
-    // time already chose their value, and client storage is authoritative
-    // over the server's default — seeding would overwrite the persisted
-    // value with the server-rendered one.
-    const seedableVars = reactiveVars.filter(decl => !decl.isProp && !decl.isPersistent);
+    // Persistent variables are seeded too: the delivered markup was rendered
+    // from this state, so the adoption walk's expression checks must
+    // re-evaluate against the server's values to verify it — evaluating them
+    // against the storage-read value makes every stored value that differs
+    // from the default fail the walk and fall back. Client storage stays
+    // authoritative for the mounted instance: the captured storage-read
+    // values are restored right after the walk returns, and the initial
+    // update pass below syncs the adopted markup to them.
+    const seedableVars = reactiveVars.filter(decl => !decl.isProp);
     if (seedableVars.length > 0) {
       builder.add('\n// --- Initial State ---');
       builder.add("if (hydrate && state && typeof state === 'object' && !Array.isArray(state)) {")
@@ -669,8 +683,18 @@ function generateComponent(astPayload, options = {}) {
     }
     builder.add('rootNode.__wizzMountChildren();');
   } else {
-    builder.add(hydrateCreateCall)
-          .add('if (hydrate && !adoptedHydration) return mountComponent(target, props);')
+    builder.add(hydrateCreateCall);
+    if (hydratable && persistentVars.length > 0) {
+      // Back to client storage as the source of truth. On the adopt path the
+      // initial update pass below writes these over the verified markup; the
+      // mismatch fallback re-enters mountComponent, whose script re-reads
+      // storage. Restoring here is a no-op for plain mounts (hydrate false),
+      // which never seeded in the first place.
+      for (const declaration of persistentVars) {
+        builder.add(`${declaration.name} = __wizzPersistHydration.${declaration.name};`);
+      }
+    }
+    builder.add('if (hydrate && !adoptedHydration) return mountComponent(target, props);')
           .add('const rootNode = hydrate ? adoptedHydration.node : create(ctx);')
           .add('const childComponents = hydrate ? adoptedHydration.childComponents : rootNode.__wizzChildComponents;')
           .add('const listUpdates = hydrate ? adoptedHydration.listUpdates : rootNode.__wizzListUpdates;')

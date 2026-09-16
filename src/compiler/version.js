@@ -34,7 +34,10 @@
 //     `__wizzPersistSubscribe`, whose shared per-page bus keeps instances
 //     converged across tabs via BroadcastChannel with a storage-event
 //     fallback (server modules render the declared default instead and ship
-//     the value for hydration). Within one major version, generated
+//     the value for hydration; the client hydration walk verifies the
+//     delivered markup against that delivered state and restores the
+//     storage-read values once it returns, so client storage stays the
+//     mounted truth). Within one major version, generated
 //     modules keep this surface and their runtime behavior.
 //
 // Bump rules: a breaking change to a contract bumps its major version and the
@@ -44,7 +47,7 @@
 const VERSIONS = Object.freeze({
   compiler: '1.8.0',
   syntax: '1.4.0',
-  output: '1.8.0'
+  output: '1.8.1'
 });
 
 module.exports = { VERSIONS };

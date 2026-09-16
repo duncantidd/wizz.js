@@ -16,6 +16,10 @@ const THEME_WIZZ = `<script>
   function toggle() { theme = theme === 'light' ? 'dark' : 'light'; }
 </script><main><p>{theme}</p><button on:click={toggle}>Toggle</button></main>`;
 
+const THEME_BRANCH_WIZZ = `<script>
+  let theme = persist('theme', 'light');
+</script><main>{#if theme === 'dark'}<p>dark mode</p>{:else}<p>light mode</p>{/if}</main>`;
+
 // A backing store shared by every tab in one scenario, mirroring the browser
 // model: all tabs read and write one origin store, and a write fires storage
 // events on every *other* window (never on the writer's own window).
@@ -301,6 +305,11 @@ async function compileThemeModule(options = {}) {
   return source;
 }
 
+async function compileThemeBranchModule(options = {}) {
+  const { source } = compile(THEME_BRANCH_WIZZ, options);
+  return source;
+}
+
 test('a remounted component adopts the value the previous session wrote', async () => {
   const store = createSharedStore();
   const ether = createEther();
@@ -435,10 +444,67 @@ test('hydration adopts the server default and the initial pass writes the stored
 
   const clientModule = tab.load(clientSource)(tab.document);
   const target = deliverMarkup(html, tab.document);
+  const deliveredRoot = target.childNodes[0];
+  const deliveredParagraph = deliveredRoot.childNodes[0];
   const stateValue = JSON.parse(/^<script type="application\/wizz-state">(.*)<\/script>$/.exec(stateScript)[1]);
+
+  // Identity tags prove adoption rather than the mismatch fallback: both
+  // paths end up showing the stored text, so a surviving delivered node is
+  // the only honest signal (the walk used to fall back silently for exactly
+  // this reason — it evaluated persistent expressions against the
+  // storage-read value while the server had rendered the default).
+  deliveredRoot.__wizzDelivered = true;
+  deliveredParagraph.__wizzDelivered = true;
+  const warnings = [];
+  tab.global.console = { warn: (message) => warnings.push(message), log() {}, error() {} };
   clientModule.hydrateComponent(target, {}, stateValue);
 
-  const paragraph = target.childNodes[0].childNodes[0];
   await flushUpdates();
-  assert.equal(paragraph.childNodes[0].nodeValue, 'dark', 'the stored value replaced the server default after adoption');
+  assert.equal(warnings.length, 0, 'no hydration mismatch was reported');
+  assert.equal(target.childNodes[0], deliveredRoot, 'the delivered root was adopted, not remounted');
+  assert.equal(deliveredRoot.childNodes[0], deliveredParagraph, 'the delivered paragraph survived adoption');
+  assert.equal(deliveredParagraph.childNodes[0].nodeValue, 'dark', 'the stored value replaced the server default after adoption');
+});
+
+test('hydration verifies if-branches that read persistent vars against the delivered state', async () => {
+  const store = createSharedStore();
+  store.entries.set('theme', '"dark"');
+  const ether = createEther();
+  const clientSource = await compileThemeBranchModule({ hydratable: true });
+  const { source: serverSource } = compileServer(THEME_BRANCH_WIZZ, {});
+
+  const tab = createTab({ store, ether });
+  const serverModule = tab.loadServer(serverSource);
+  const { html, state } = serverModule.renderComponent();
+  assert.ok(html.includes('light mode'), 'the server rendered the branch the default selects');
+  const stateValue = JSON.parse(/^<script type="application\/wizz-state">(.*)<\/script>$/.exec(serverModule.serializeInitialState(state))[1]);
+
+  const clientModule = tab.load(clientSource)(tab.document);
+  const target = deliverMarkup(html, tab.document);
+  const deliveredRoot = target.childNodes[0];
+  deliveredRoot.__wizzDelivered = true;
+  const warnings = [];
+  tab.global.console = { warn: (message) => warnings.push(message), log() {}, error() {} };
+  clientModule.hydrateComponent(target, {}, stateValue);
+
+  await flushUpdates();
+
+  const texts = [];
+  (function collect(node) {
+    if (node.nodeType === 3) texts.push(node.nodeValue);
+    for (const child of node.childNodes || []) collect(child);
+  })(deliveredRoot);
+
+  // Branch selection is a mount-time choice in Wizz: create()/hydrateCreate()
+  // pick it once and update() carries no branch machinery, so the adopted
+  // root keeps the delivered (light) branch even though the persisted value
+  // selects the other one — exactly what a fresh client mount would have
+  // shown instead. The persistence contract here is only that the walk
+  // verifies against the DELIVERED state: before the seeding fix, this walk
+  // evaluated the if-test against the storage-read value, expected the dark
+  // branch, and fell back with a mismatch warning.
+  assert.equal(warnings.length, 0, 'no hydration mismatch was reported');
+  assert.equal(target.childNodes[0], deliveredRoot, 'the delivered root was adopted, not remounted');
+  assert.ok(texts.some(value => value.includes('light mode')), 'the delivered branch survived adoption');
+  assert.ok(!texts.some(value => value.includes('dark mode')), 'update() carries no branch machinery, so no swap happens');
 });
