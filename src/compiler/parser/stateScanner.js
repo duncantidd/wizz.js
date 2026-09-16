@@ -17,10 +17,25 @@ function scanState(scriptContent) {
   // Regex to match: function -> space -> identifier -> '('
   const functionRegex = /\bfunction\s+([a-zA-Z_$][0-9a-zA-Z_$]*)\s*\(/g;
 
+  // Both scans complete before any initializer is interpreted: whether the
+  // author bound the name `persist` themselves decides how every initializer
+  // is read, and that is only known once both scans have run.
+  const variableMatches = [];
+  const functionMatches = [];
   let match;
+  while ((match = variableRegex.exec(scriptContent)) !== null) variableMatches.push(match);
+  while ((match = functionRegex.exec(scriptContent)) !== null) functionMatches.push(match);
+
+  // The author's own `persist` binding outranks the compile-time marker: when
+  // the script declares a function or a let/const of that name, every
+  // persist( call is theirs, and neither marker recognition nor marker
+  // diagnostics apply — their script copies through verbatim and compiles
+  // exactly as it did before the marker syntax existed.
+  const authorDefinesPersist = variableMatches.some(candidate => candidate[2] === 'persist')
+    || functionMatches.some(candidate => candidate[1] === 'persist');
 
   // 1. Scan for Variables (State and Constants)
-  while ((match = variableRegex.exec(scriptContent)) !== null) {
+  for (match of variableMatches) {
     // The raw initializer text ends immediately before the terminating ';'
     // and starts right after the '=' (the regex consumed the whitespace), so
     // its exact span in scriptContent is computable without re-searching —
@@ -38,13 +53,25 @@ function scanState(scriptContent) {
       isReactive: match[1] === 'let' // Only 'let' variables trigger DOM updates
     };
 
-    const persist = parsePersistInitializer(declaration.initialValue, scriptContent, initializerStart);
+    const persist = authorDefinesPersist ? null : parsePersistInitializer(declaration.initialValue, scriptContent, initializerStart);
     if (persist !== null) {
       if (declaration.kind === 'const') {
         // A persistent value the author cannot reassign has nothing to write
         // back; the marker only makes sense on reactive state.
         throw new SyntaxError(
           `persist() requires a reactive 'let' declaration; '${declaration.name}' is const${sourceLocation(scriptContent, initializerStart)}.`
+        );
+      }
+      // The generators hoist every state declaration's references to the
+      // component's mount scope, so a marker inside a function body would
+      // emit machinery that reads and writes a variable that only exists in
+      // the callback's own scope — and the first template evaluation dies
+      // with a ReferenceError of the declaration's name. Any component this
+      // rejects never worked, so the located error is strictly better than
+      // the runtime failure it replaces.
+      if (lexicalModesBefore(scriptContent, match.index).length !== 0) {
+        throw new SyntaxError(
+          `persist() must initialize a top-level let declaration; '${declaration.name}' is declared inside a block or function body${sourceLocation(scriptContent, match.index)}.`
         );
       }
       declaration.isPersistent = true;
@@ -58,7 +85,7 @@ function scanState(scriptContent) {
   }
 
   // 2. Scan for Functions (Methods/Event Handlers)
-  while ((match = functionRegex.exec(scriptContent)) !== null) {
+  for (match of functionMatches) {
     declarations.push({
       type: 'FunctionDeclaration',
       name: match[1] // e.g., 'handleClick'
@@ -114,6 +141,18 @@ function parsePersistInitializer(initialValue, scriptContent, offset) {
   if (key === null) {
     throw new SyntaxError(
       `persist() requires a string-literal storage key${at(walk.parts[0].start)}.`
+    );
+  }
+
+  // A persist() call inside the default expression would survive the splice
+  // verbatim — the marker has no runtime function — and die with a
+  // ReferenceError on first read; reject it while the location is precise.
+  // Offsets run over the untrimmed part span so they map onto the script
+  // through the initializer's start without trim-shift arithmetic.
+  const nestedCall = findPersistCallInCode(initialValue.slice(walk.parts[1].start, walk.parts[1].end));
+  if (nestedCall !== -1) {
+    throw new SyntaxError(
+      `persist() cannot be nested inside another persist() default${at(walk.parts[1].start + nestedCall)}.`
     );
   }
 
@@ -234,6 +273,161 @@ function walkPersistArguments(source) {
   }
 
   return failure('persist() initializer is missing its closing parenthesis', source.length - 1);
+}
+
+/**
+ * Returns the offset of the first `persist(` call in code context — not
+ * inside a string, template literal, or comment — or -1. Bracket modes are
+ * irrelevant (a call inside a block is still a call); look-alike text inside
+ * quotes or comments never matches. Walks the whole source, so callers pass
+ * the exact span they care about.
+ *
+ * @param {string} source - The text to scan (a script, or one persist argument).
+ * @returns {number} Offset of the call's first character, or -1.
+ */
+function findPersistCallInCode(source) {
+  const callRegex = /\bpersist\s*\(/g;
+  let match;
+  while ((match = callRegex.exec(source)) !== null) {
+    const modes = lexicalModesBefore(source, match.index);
+    const textual = modes.some(mode => mode === '\'' || mode === '"' || mode === '`' || mode === 'line' || mode === 'block');
+    if (!textual) return match.index;
+  }
+  return -1;
+}
+
+/**
+ * Walks source[0..index) with the same lexical rules walkPersistArguments
+ * uses — strings, template literals (interpolation braces included), line
+ * and block comments, bracket nesting — plus regex-literal handling, and
+ * returns the stack of open modes at that position. An empty stack means the
+ * position sits at the script's top level; a stack of only bracket modes is
+ * code inside a block or call; any string/comment/template mode means the
+ * position is inside quoted text, not code at all.
+ *
+ * Regex literals are the one construct this walk needs lookahead for: a `/`
+ * opens a literal unless the previous significant character continues an
+ * expression (identifier character, closing bracket, quote, dot, or another
+ * operator's tail). Without this, a regex literal containing quotes or
+ * comment starters would corrupt the mode stack for everything after it.
+ * Division after prefix operators (`x++ /2/`) is the accepted residual
+ * ambiguity — real lexers face the same choice, and a script that writes it
+ * while also declaring a persist() marker is not a realistic component.
+ *
+ * @param {string} source - The text to walk.
+ * @param {number} index - Exclusive end of the walked range.
+ * @returns {string[]} The open-mode stack at the position.
+ */
+function lexicalModesBefore(source, index) {
+  const modes = [];
+  let previous = ''; // Last significant code-context character seen.
+  let i = 0;
+  while (i < index) {
+    const character = source[i];
+    const mode = modes[modes.length - 1];
+    if (mode === 'line') {
+      if (character === '\n') modes.pop();
+      i += 1;
+      continue;
+    }
+    if (mode === 'block') {
+      if (character === '*' && source[i + 1] === '/') {
+        modes.pop();
+        i += 2;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (mode === '\'' || mode === '"') {
+      if (character === '\\') {
+        i += 2;
+        continue;
+      }
+      if (character === mode) {
+        modes.pop();
+        previous = mode;
+      }
+      i += 1;
+      continue;
+    }
+    if (mode === '`') {
+      if (character === '\\') {
+        i += 2;
+        continue;
+      }
+      if (character === '`') {
+        modes.pop();
+        previous = '`';
+        i += 1;
+        continue;
+      }
+      if (character === '$' && source[i + 1] === '{') {
+        modes.push('brace');
+        i += 2;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    // Code context.
+    if (character === '/' && source[i + 1] === '/') {
+      modes.push('line');
+      i += 2;
+      continue;
+    }
+    if (character === '/' && source[i + 1] === '*') {
+      modes.push('block');
+      i += 2;
+      continue;
+    }
+    if (character === '/') {
+      const continuesExpression = /[A-Za-z0-9_$)\]}'"`./]/.test(previous);
+      if (!continuesExpression) {
+        // A regex literal: skip to the closing slash, honouring backslash
+        // escapes and character classes (where `/` needs no escape).
+        i += 1;
+        let inClass = false;
+        while (i < index) {
+          const literalCharacter = source[i];
+          if (literalCharacter === '\\') {
+            i += 2;
+            continue;
+          }
+          if (literalCharacter === '[') inClass = true;
+          else if (literalCharacter === ']') inClass = false;
+          else if (literalCharacter === '/' && !inClass) break;
+          i += 1;
+        }
+        i += 1; // Past the closing slash (or past index).
+        previous = 'x'; // A regex literal reads like an expression operand.
+        continue;
+      }
+      previous = '/';
+      i += 1;
+      continue;
+    }
+    if (character === '\'' || character === '"' || character === '`') {
+      modes.push(character);
+      i += 1;
+      continue;
+    }
+    if (character === '(' || character === '[' || character === '{') {
+      modes.push(character === '(' ? 'round' : character === '[' ? 'square' : 'brace');
+      previous = character;
+      i += 1;
+      continue;
+    }
+    if (character === ')' || character === ']' || character === '}') {
+      modes.pop();
+      previous = character;
+      i += 1;
+      continue;
+    }
+    if (!/\s/.test(character)) previous = character;
+    i += 1;
+  }
+  return modes;
 }
 
 const ESCAPE_MAP = new Map([

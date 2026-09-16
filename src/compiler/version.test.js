@@ -18,9 +18,14 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // hydration for persistent vars: the adoption walk now verifies the
   // delivered markup against the delivered state (previously it evaluated
   // persistent expressions against the storage-read value, which forced a
-  // fallback whenever the stored value differed from the default).
+  // fallback whenever the stored value differed from the default). The
+  // compiler patch bump adds the placement diagnostics: persist() markers
+  // outside a top-level let initializer — inside a function body, a block,
+  // or another persist() default — are located compile errors instead of
+  // runtime ReferenceErrors, and an author-defined persist binding opts out
+  // of marker recognition entirely.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.8.0',
+    compiler: '1.8.1',
     syntax: '1.4.0',
     output: '1.8.1'
   });
