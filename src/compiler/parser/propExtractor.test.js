@@ -190,3 +190,10 @@ test('rejects duplicate prop declarations', () => {
     /Prop 'count' is declared more than once/
   );
 });
+
+test('rejects persist() prop initializers', () => {
+  assert.throws(
+    () => extractProps("export let theme = persist('theme', 'light');"),
+    /persist\(\) cannot initialize the prop 'theme'; props are parent-owned\. Declare it as component state with 'let' instead at \d+:\d+\./
+  );
+});

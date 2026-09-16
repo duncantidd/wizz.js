@@ -200,6 +200,12 @@ function extractProps(scriptContent) {
       if (!defaultValue) {
         throw new SyntaxError(`Prop '${nameToken.value}' is missing a value after '='${location}.`);
       }
+      if (/^persist\s*\(/.test(defaultValue)) {
+        // persist() is a compile-time marker for component-owned persistent
+        // state. A prop is parent-owned and re-applied through setProps, so
+        // a persisted prop has no owner for its storage writes.
+        throw new SyntaxError(`persist() cannot initialize the prop '${nameToken.value}'; props are parent-owned. Declare it as component state with 'let' instead${sourceLocation(scriptContent, tokens[firstValueIndex].start)}.`);
+      }
       statementEndIndex = end;
     } else if (valueToken && valueToken.type === 'punctuator' && valueToken.value === ',') {
       throw new SyntaxError(`Declare one prop per 'export let' statement${location}.`);
