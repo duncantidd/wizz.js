@@ -78,7 +78,7 @@
     border-radius: 50%;
     background-color: #ff5f57;
     box-shadow: 19px 0 0 #febc2e, 38px 0 0 #29c73f;
-    margin-right: 22px;
+    margin-right: 60px;
   }
   .title {
     display: flex;
