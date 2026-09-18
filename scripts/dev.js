@@ -189,13 +189,28 @@ function watchSourceFiles(inputDirectory, onChange, options = {}) {
   const watch = options.watch || fs.watch;
   const setIntervalFn = options.setInterval || setInterval;
   const clearIntervalFn = options.clearInterval || clearInterval;
+  const onWatchUnavailable = options.onWatchUnavailable || (() => {});
   let snapshot = createSourceSnapshot(inputDirectory);
-  const watcher = watch(inputDirectory, { recursive: true }, (eventType, fileName) => {
-    if (fileName && path.extname(fileName) === '.wizz') {
-      snapshot = createSourceSnapshot(inputDirectory);
-      onChange(eventType, fileName);
+  // Recursive fs.watch is unavailable on supported platforms (Linux before
+  // Node 20 throws ERR_FEATURE_UNAVAILABLE_ON_PLATFORM at call time), so a
+  // failure degrades to the snapshot poller below instead of refusing to
+  // start: the poller detects the same changes with a 250ms latency bound.
+  let watcher = null;
+  try {
+    watcher = watch(inputDirectory, { recursive: true }, (eventType, fileName) => {
+      if (fileName && path.extname(fileName) === '.wizz') {
+        snapshot = createSourceSnapshot(inputDirectory);
+        onChange(eventType, fileName);
+      }
+    });
+    // A native watcher that dies mid-session must not take the server down:
+    // route the failure through the same notice and let the poller carry on.
+    if (watcher && typeof watcher.on === 'function') {
+      watcher.on('error', (error) => onWatchUnavailable(error));
     }
-  });
+  } catch (error) {
+    onWatchUnavailable(error);
+  }
   const poller = setIntervalFn(() => {
     const nextSnapshot = createSourceSnapshot(inputDirectory);
     if (nextSnapshot === snapshot) return;
@@ -205,7 +220,7 @@ function watchSourceFiles(inputDirectory, onChange, options = {}) {
 
   return {
     close() {
-      watcher.close();
+      if (watcher) watcher.close();
       if (poller) clearIntervalFn(poller);
     }
   };
@@ -228,7 +243,10 @@ function startDevelopmentServer(options = {}) {
   }, {
     watch: options.watch,
     setInterval: options.setInterval,
-    clearInterval: options.clearInterval
+    clearInterval: options.clearInterval,
+    onWatchUnavailable: (error) => {
+      logger.log(`Recursive fs.watch unavailable (${error.code || error.message}); watching by polling every 250ms.`);
+    }
   });
 
   return {

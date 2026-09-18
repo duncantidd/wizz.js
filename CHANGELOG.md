@@ -28,6 +28,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Showcase scratch files pruned ahead of milestone 18 packaging: the root `test.js` manual compile-demo script, `src/components/TestProps.wizz`, and the retired `src/pages/About.wizz` / `src/pages/Contact.wizz` showcase routes nothing routes to. The shipped boilerplate is now exactly the live landing page surface — `src/App.wizz` with `Card.wizz` and `Counter.wizz`, plus `index.html` and `App.css` — while `src/pages/Home.wizz` (and the `Panel.wizz` it imports) remain as the SSR reference demo's input.
 
+- The development server degrades to its snapshot poller instead of refusing to start on platforms where recursive `fs.watch` is unavailable (Linux before Node 20 raises `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` at call time): a synchronous watch failure or a native watcher dying mid-session routes through a one-line notice and the existing 250 ms poller carries rebuild detection, so `wizz dev` keeps working all the way down to the supported Node floor (`scripts/dev.js`).
+
 ### Milestone 17 — Persistent Cross-Tab State
 
 #### Added
