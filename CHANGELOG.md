@@ -24,6 +24,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Showcase landing page restyled (purely styling, no markup or behavior changes): `App.css` gains dark graphite design tokens (solid colors, no gradients) with an amber accent, a balanced display headline, the subtitle re-ordered above the headline as a pill badge, and refined focus/selection states; the Counter's scoped style becomes a modern pill CTA with hover lift and tabular numerals; the Card terminal adopts the theme, adds macOS traffic-light dots via a CSS `::before`, and drops the dead `.copy_toggle` rules and `clipboard-check` keyframes that had no matching element in the markup. Responsive layout: `index.html` gains the missing viewport meta (the cause of everything rendering zoomed-out tiny on phones) plus a `theme-color`; below 960px the page is a single centered column with a horizontal white divider between the copy/counter block and the card, above 960px it becomes a two-column hero (terminal card left, badge/headline/counter right) with a vertical white divider in its own 1px grid track that stretches to exactly the copy column's height — both dividers are a `main::after` pseudo-element so no extra markup is needed.
 
+#### Removed
+
+- Showcase scratch files pruned ahead of milestone 18 packaging: the root `test.js` manual compile-demo script, `src/components/TestProps.wizz`, and the retired `src/pages/About.wizz` / `src/pages/Contact.wizz` showcase routes nothing routes to. The shipped boilerplate is now exactly the live landing page surface — `src/App.wizz` with `Card.wizz` and `Counter.wizz`, plus `index.html` and `App.css` — while `src/pages/Home.wizz` (and the `Panel.wizz` it imports) remain as the SSR reference demo's input.
+
 ### Milestone 17 — Persistent Cross-Tab State
 
 #### Added

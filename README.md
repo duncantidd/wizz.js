@@ -19,12 +19,6 @@ cd wizz
 node --test
 ```
 
-To see the compiler output for the included example component:
-
-```bash
-node test.js
-```
-
 ## CLI
 
 Wizz installs without npm or a package registry. From the cloned repository, run:

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Zero-dependency SSR demo for the Contact/Home showcase project.
+// Zero-dependency SSR demo for the Home showcase page.
 //
 //   node scripts/ssr-demo.js            (then open http://localhost:3001)
 //
@@ -18,9 +18,9 @@
 //      and call hydrateComponent(target, props, state) in the browser.
 //
 // v1 surface: static markup, text interpolations, dynamic attributes, and
-// top-level props. src/pages/Home.wizz fits; Contact.wizz (component tag) and
-// About.wizz ({#if}/{#each}) are rejected by the server target with located
-// diagnostics.
+// top-level props. src/pages/Home.wizz fits; a component tag and an {#if}/
+// {#each} block are rejected by the server target with located diagnostics
+// (the rejection gate is pinned in src/compiler/index.test.js).
 const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
