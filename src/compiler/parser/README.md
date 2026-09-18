@@ -219,6 +219,10 @@ This module owns structural validation because only it has the complete nesting 
 
 Text and expression tokens become `Text` and `Expression` AST nodes. An `Expression` node retains its raw `value` until `integrateExpressions()` processes it. Element locations come from their opening-tag tokens, which makes an unclosed-element diagnostic point at the element that needs attention.
 
+#### Pre-family newline normalization
+
+The HTML tree builder drops a single newline immediately after a `pre`, `textarea`, or `listing` start tag and immediately after its end tag (the authoring newline that keeps source indentation out of a preformatted box). The parser strips that one newline from the AST — a `\r\n` pair counts as the one newline; a lone `\r` is conservatively left alone — and pushes no text node at all when the newline was the whole token, so the AST models the DOM the delivered markup actually produces. The drop fires only when a Text token is the *immediately* next token: an expression or block in between could emit runtime text the compiler cannot see, so under-normalizing there is safe (worst case an adoption fallback, never wrong rendered content). Without this, the server emitted the newline, the browser dropped it from the delivered markup, and the hydration walk verified text the browser never stored.
+
 ### `expressionLexer.js` - Interpolation Lexer
 
 **Export:** `lexExpression(input)`

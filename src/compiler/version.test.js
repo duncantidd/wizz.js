@@ -30,10 +30,27 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // (the read cursor double-counted the first rewritten name's width, so
   // `animation: cursor 0.5s, blinking 0.5s` scoped to something like
   // `blinkinblinking-S...nfinite`). Syntax and output contracts unchanged.
+  //
+  // output 1.8.2: server output patch fix — empty non-void elements shipped
+  // without an end tag (`<path ...>` before `</svg>`, `<code ...>` before
+  // `</pre>`), and the browser's recovery keeps such an element open and
+  // swallows the following markup into it, so the delivered childNodes no
+  // longer aligned one-to-one with the template positions the hydration
+  // walk verifies. Every non-void element now closes in delivered markup.
+  //
+  // compiler 1.8.3 / syntax 1.4.1: parse-time normalization fix — a single
+  // newline immediately after a pre/textarea/listing start or end tag is
+  // now dropped from the AST, matching the HTML tree builder (the server
+  // emitted the newline, the browser dropped it from the delivered markup,
+  // and the hydration walk verified text the browser never stored, forcing
+  // a fallback for any component with a `<pre>` element). The accepted
+  // source is unchanged but a compiling pre element's rendered meaning
+  // loses the authoring newline on the client too, which is the syntax
+  // patch; the AST construction change is the compiler patch.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.8.2',
-    syntax: '1.4.0',
-    output: '1.8.1'
+    compiler: '1.8.3',
+    syntax: '1.4.1',
+    output: '1.8.2'
   });
 });
 
@@ -50,7 +67,7 @@ test('the version table is frozen so callers cannot mutate the contract', () => 
     'use strict';
     VERSIONS.syntax = '9.9.9';
   }, TypeError);
-  assert.equal(VERSIONS.syntax, '1.4.0');
+  assert.equal(VERSIONS.syntax, '1.4.1');
 });
 
 test('the compiler major version leads or matches every contract major version', () => {

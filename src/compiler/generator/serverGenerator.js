@@ -568,8 +568,15 @@ function generateServerComponent(astPayload, options = {}) {
     pending += '>';
     flush();
 
-    if (!isVoid && node.children && node.children.length > 0) {
-      emitChildren(builder, node.children);
+    // Every non-void element closes, children or not: an unterminated start
+    // tag makes the browser (which recovers by keeping the element open)
+    // swallow the following markup into it, so the delivered childNodes stop
+    // aligning one-to-one with the template positions the hydration walk
+    // verifies. Void elements still never take an end tag.
+    if (!isVoid) {
+      if (node.children && node.children.length > 0) {
+        emitChildren(builder, node.children);
+      }
       builder.add(`__wizzParts.push(${JSON.stringify(`</${node.name}>`)});`);
     }
   }

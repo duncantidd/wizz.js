@@ -559,7 +559,9 @@ test('an empty head block yields an empty head string', async () => {
   const { html, head } = await renderSource('<wizz:head /><main></main>');
 
   assert.equal(head, '');
-  assert.equal(html, '<main>');
+  // An empty root still closes: an unterminated main start tag would swallow
+  // the rest of the mount point's delivered markup in the browser.
+  assert.equal(html, '<main></main>');
 });
 
 test('escapes head title and attribute expression output', async () => {
@@ -792,4 +794,38 @@ test('server modules rewrite persist markers and omit all persistence machinery'
   // Server scripts stay un-intercepted: mutations do not notify anything.
   assert.match(moduleSource, /clicks \+= 1;/);
   assert.doesNotMatch(moduleSource, /queueUpdate/);
+});
+
+// --- Delivered element end tags (hydration alignment) ---
+
+test('empty non-void elements still receive their end tag in delivered markup', async () => {
+  // An unterminated start tag stays open in the browser: the delivered
+  // markup that follows it becomes the open element's children instead of
+  // the siblings the hydration walk verifies positionally. Card.wizz's
+  // `<path></path>` inside an svg and `<code></code>` inside a pre are the
+  // cases that forced a hydration fallback.
+  const { html } = await renderSource(
+    '<svg width="16px" viewBox="0 0 24 24"><path d="M7 15L10 12L7 9"></path></svg>'
+  );
+
+  // A fully static template stamps no data-wizz-id: the path is positioned
+  // by the walk alone.
+  assert.equal(html, '<svg width="16px" viewBox="0 0 24 24"><path d="M7 15L10 12L7 9"></path></svg>');
+});
+
+test('every flavor of childless element serializes with balanced tags', async () => {
+  const { html } = await renderSource(
+    '<div><span></span><em></em><input /></div>'
+  );
+
+  // Self-closed void elements deliver without the source's `/`.
+  assert.equal(html, '<div><span></span><em></em><input></div>');
+});
+
+test('void elements still ship without an end tag', async () => {
+  const { html } = await renderSource(
+    '<p>a<br />b<input /></p>'
+  );
+
+  assert.equal(html, '<p>a<br>b<input></p>');
 });
