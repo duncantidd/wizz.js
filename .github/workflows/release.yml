@@ -1,0 +1,36 @@
+# Milestone 18: pushing a v* tag runs the suite and publishes a GitHub
+# Release carrying the npm tarball, which scripts/install-cli.sh installs
+# from. Registry publication is explicitly out of scope — the tarball is
+# the distribution unit.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Refuse a tag that does not match package.json
+        run: |
+          expected="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match the packaged version $expected." >&2
+            exit 1
+          fi
+      - name: Run the suite
+        run: node --test
+      - name: Pack the release tarball
+        run: npm pack --pack-destination=release
+      - name: Create the GitHub release with the tarball
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" release/wizz-*.tgz --title "Wizz $GITHUB_REF_NAME" --generate-notes

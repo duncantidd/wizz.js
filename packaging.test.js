@@ -35,6 +35,32 @@ test('the bin entry points at an existing script with a node shebang', () => {
   assert.equal(firstLine, '#!/usr/bin/env node');
 });
 
+test('CI runs the suite on every supported Node across push and pull requests', () => {
+  // The zero-dependency mandate means no YAML parser: these pins cover the
+  // load-bearing lines of the workflow instead of its full parse tree.
+  const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
+  assert.match(workflow, /pull_request:/);
+  assert.match(workflow, /node-version: \[18, 20, 22\]/);
+  assert.match(workflow, /^ {6}- run: node --test$/m);
+});
+
+test('a v* tag release is guarded, tested, packed, and attached in order', () => {
+  const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
+  assert.match(workflow, /tags: \['v\*'\]/);
+  // The tag must match package.json before anything runs...
+  assert.match(workflow, /require\('\.\/package\.json'\)\.version/);
+  const guard = workflow.indexOf('Refuse a tag that does not match package.json');
+  const suite = workflow.indexOf('Run the suite');
+  const pack = workflow.indexOf('Pack the release tarball');
+  const publish = workflow.indexOf('Create the GitHub release with the tarball');
+  assert.equal(guard > -1 && suite > guard && pack > suite && publish > pack, true,
+    'workflow steps must run guard, suite, pack, publish in that order');
+  assert.match(workflow, /gh release create "\$GITHUB_REF_NAME" release\/wizz-\*\.tgz/);
+  // Registry publication is out of scope; the tarball must not be pushed to
+  // npm by the workflow.
+  assert.doesNotMatch(workflow, /npm publish/);
+});
+
 test('the files whitelist ships the user-facing boilerplate intact', () => {
   // The installed framework's first-run surface is exactly the live landing
   // page: this pin is the packaging-side guarantee that the boilerplate
