@@ -30,6 +30,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - The development server degrades to its snapshot poller instead of refusing to start on platforms where recursive `fs.watch` is unavailable (Linux before Node 20 raises `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` at call time): a synchronous watch failure or a native watcher dying mid-session routes through a one-line notice and the existing 250 ms poller carries rebuild detection, so `wizz dev` keeps working all the way down to the supported Node floor (`scripts/dev.js`).
 
+- `wizz build` writes `{"type":"module"}` into the output directory (when the output carries no package.json of its own): dist holds only ES modules, and Node 18 — which has no module-syntax detection — could not import the emitted server modules from a CommonJS application, breaking the dev server's SSR imports and the SSR recipe for application-owned servers. A package.json already present in the output directory is respected as the embedding project's deliberate choice (`build.js`).
+
 ### Milestone 17 — Persistent Cross-Tab State
 
 #### Added

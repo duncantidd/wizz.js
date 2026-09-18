@@ -208,7 +208,7 @@ src/App.wizz         -> dist/App.js
 src/pages/Home.wizz  -> dist/pages/Home.js
 ```
 
-The output directory is created when needed. It must be different from the input directory. Wizz continues compiling independent components after an error, reports each failed file and its source location, and exits with a non-zero status if any component fails.
+The output directory is created when needed. It must be different from the input directory. Wizz continues compiling independent components after an error, reports each failed file and its source location, and exits with a non-zero status if any component fails. The build also writes `package.json` (`{"type":"module"}`) into the output directory unless one is already present, so Node-side imports of the emitted modules — the dev server's SSR imports, and application servers following the SSR recipe — work on every supported runtime.
 
 ## Application Entry
 

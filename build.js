@@ -429,6 +429,17 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
   writeExtractedStyles(resolvedOutputDirectory, extractedStyles);
   copyDocumentShell(resolvedInputDirectory, resolvedOutputDirectory, extractedStyles.length > 0, logger);
 
+  // The output directory holds ES modules and their assets, so pin the module
+  // type beside the emitted artifacts: Node-side imports — the dev server's
+  // SSR imports, and application servers following the SSR recipe — must work
+  // on every supported runtime, and Node 18 has no module-syntax detection to
+  // fall back on. A package.json the output already carries is respected: it
+  // may be the embedding project's deliberate choice.
+  const moduleTypeMarkerPath = path.join(resolvedOutputDirectory, 'package.json');
+  if (!fs.existsSync(moduleTypeMarkerPath)) {
+    fs.writeFileSync(moduleTypeMarkerPath, '{"type":"module"}\n', 'utf8');
+  }
+
   return {
     compiledCount: inputFiles.length - failedCount,
     failedCount
