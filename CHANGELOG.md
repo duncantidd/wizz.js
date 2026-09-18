@@ -36,6 +36,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - The repository is now an npm-installable package: `package.json` (name `wizz`, zero dependencies, `engines.node >=18`, `type: commonjs`, `bin` wiring `wizz` to `scripts/cli.js`) with a strict `files` whitelist shipping the compiler (tests stripped), the browser runtime, the build and dev-server scripts, the SSR reference, the installer, the docs, and the landing-page boilerplate (`src/App.wizz`, `Card.wizz`, `Counter.wizz`, `index.html`, `App.css`) — plus an MIT `LICENSE`. The package version is pinned in lockstep to the compiler contract version by `packaging.test.js`, which also pins the zero-dependency mandate, the exact tarball surface (nothing from `test/`, `dist/`, `vscode-extension/`, or any `*.test.js` leaks), and runs a packed install end to end: `npm pack` → extract → `wizz build` a fresh two-file project with the shipped CLI.
 
+#### Changed
+
+- The installer installs from release tarballs by default: `scripts/install-cli.sh` with no arguments resolves the latest GitHub release asset (`wizz-<version>.tgz`), and a specific tarball path or URL is accepted; `--local` keeps the working-tree install for development. Both paths land the same managed layout and print the installed version, and a truncated or foreign tarball is rejected loudly instead of installed (`scripts/install-cli.sh`, covered by `scripts/install-cli.test.js`).
+
 ### Milestone 17 — Persistent Cross-Tab State
 
 #### Added

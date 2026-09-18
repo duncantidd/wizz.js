@@ -19,7 +19,9 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 │   ├── cli.js                            Public wizz build/dev command dispatcher
 │   ├── dev.js                            Builds, serves dist (server-rendering eligible routes), and watches .wizz source files
 │   ├── ssr-demo.js                       Manual zero-dependency SSR delivery reference (milestone 12; wizz dev now delivers natively)
-│   └── install-cli.sh                    Managed local installation script for wizz
+│   ├── install-cli.sh                    Installs wizz from a release tarball (default) or --local from the working tree
+│   ├── cli.test.js                       Focused Node tests for the CLI dispatcher
+│   └── install-cli.test.js               Focused Node tests for the installer (tarball, --local, and refusal paths)
 ├── test/
 │   ├── componentImports.test.js          Builds component-importing pages and delivers/hydrates them through the real generated modules
 │   ├── hydration.test.js                 Renders server HTML, hydrates it, and pins mismatch fallbacks

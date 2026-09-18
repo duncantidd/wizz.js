@@ -21,13 +21,19 @@ node --test
 
 ## CLI
 
-Wizz installs without npm or a package registry. From the cloned repository, run:
+Wizz installs without npm or a package registry. To install the latest release, run the repository's installer:
 
 ```bash
 ./scripts/install-cli.sh
 ```
 
-The installer requires Node.js 18 or newer. It copies the compiler and CLI runtime to `${XDG_DATA_HOME:-~/.local/share}/wizz` and places the `wizz` launcher in `${XDG_BIN_HOME:-~/.local/bin}`. It does not require administrator privileges or modify shell configuration files.
+This downloads the latest GitHub release tarball (curl and tar are required) and installs it. A specific tarball can be passed as a path or URL. To install from a cloned working tree instead — the usual path when developing Wizz itself — pass `--local`:
+
+```bash
+./scripts/install-cli.sh --local
+```
+
+The installer requires Node.js 18 or newer. It installs the compiler and CLI runtime to `${XDG_DATA_HOME:-~/.local/share}/wizz` and places the `wizz` launcher in `${XDG_BIN_HOME:-~/.local/bin}`. It does not require administrator privileges or modify shell configuration files.
 
 Ensure the launcher directory is on your `PATH`. For Bash or Zsh using the default location, add this to your shell profile, then open a new shell:
 
@@ -35,7 +41,7 @@ Ensure the launcher directory is on your `PATH`. For Bash or Zsh using the defau
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-The installed `wizz` command is a copy of this checkout, not a live link to it. Run `./scripts/install-cli.sh` again after pulling updates that change the compiler, runtime, build script, or CLI scripts; otherwise `wizz build` and `wizz dev` continue using the previously installed copy. Source-only `.wizz` component changes do not require reinstalling. To remove the managed installation, delete the launcher and installed runtime:
+The installed `wizz` command is a copy, not a live link to the source. Run the installer again to upgrade to a newer release, or with `--local` after pulling updates that change the compiler, runtime, build script, or CLI scripts; otherwise `wizz build` and `wizz dev` continue using the previously installed copy. Source-only `.wizz` component changes do not require reinstalling. To remove the managed installation, delete the launcher and installed runtime:
 
 ```bash
 rm -f "${XDG_BIN_HOME:-$HOME/.local/bin}/wizz"
