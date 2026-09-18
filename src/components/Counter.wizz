@@ -17,18 +17,64 @@
 
 <div>
   <button on:click={increment}>Increment Counter</button>
-  <p>Clicks: {rawClicks}. Persisted clicks: {count}</p>
-  {#if showReset}<button on:click={reset}>Reset</button>{/if}
+  <p>Clicks: {rawClicks}. Persisted clicks: {count} {#if showReset}<span class="reset" on:click={reset}>Reset</span>{/if}</p>
 </div>
 
 <wizz:style>
+  div {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+  }
   button {
-    font-size: 18px;
-    padding: 8px 16px;
-    background: yellow;
-    color: #542342;
+    appearance: none;
+    margin: 0;
+    border: 0;
+    border-radius: 999px;
+    background-color: var(--wizz-accent);
+    color: var(--wizz-accent-ink);
+    cursor: pointer;
+    font: inherit;
+    font-size: 1rem;
+    font-weight: 700;
+    letter-spacing: 0;
+    padding: 0.8rem 1.6rem;
+    transition: background-color 150ms ease, transform 150ms ease,
+      box-shadow 150ms ease;
+  }
+  button:hover {
+    background-color: var(--wizz-accent-strong);
+    transform: translateY(-1px);
+    box-shadow: 0 10px 28px -12px rgba(250, 204, 21, 0.55);
+  }
+  button:active {
+    transform: translateY(0) scale(0.98);
+    box-shadow: none;
+  }
+  button:focus-visible {
+    outline: 2px solid var(--wizz-accent);
+    outline-offset: 3px;
   }
   p {
-    color: yellow;
+    margin: 0;
+    color: var(--wizz-muted);
+    font-size: 0.95rem;
+    letter-spacing: 0.01em;
+    text-transform: none;
+    font-variant-numeric: tabular-nums;
+  }
+  .reset {
+    cursor: pointer;
+    margin-left: 0.25rem;
+    color: var(--wizz-accent);
+    font-weight: 600;
+    text-decoration: underline;
+    text-decoration-color: rgba(250, 204, 21, 0.4);
+    text-underline-offset: 3px;
+    transition: color 150ms ease, text-decoration-color 150ms ease;
+  }
+  .reset:hover {
+    text-decoration-color: var(--wizz-accent);
   }
 </wizz:style>

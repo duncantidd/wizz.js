@@ -11,6 +11,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Post-M17 Maintenance
+
+#### Fixed
+
+- Scoped-style keyframe rewriting corrupted every animation name after the first in a comma-separated `animation` value (compiler patch 1.8.2): `scopeAnimationValue` computed each ident's absolute position as `cursor + match.index`, but `match.index` stays relative to the value start while `cursor` had already advanced past the first rewritten name — so `animation: cursor 0.5s step-end infinite alternate, blinking 0.5s infinite` scoped to `…, blinkinblinking-s1nfinite` (an unmatched name, silently dropping the second animation). The read cursor and the match base are now tracked separately, so every occurrence — including the same name repeated in one value — rewrites at its true position. Idents that merely contain a keyframe name (`spinning` with `@keyframes spin`) were already and remain untouched (`src/compiler/analyzer/cssScanner.js`).
+
+#### Changed
+
+- Showcase landing page restyled (purely styling, no markup or behavior changes): `App.css` gains dark graphite design tokens (solid colors, no gradients) with an amber accent, a balanced display headline, the subtitle re-ordered above the headline as a pill badge, and refined focus/selection states; the Counter's scoped style becomes a modern pill CTA with hover lift and tabular numerals; the Card terminal adopts the theme, adds macOS traffic-light dots via a CSS `::before`, and drops the dead `.copy_toggle` rules and `clipboard-check` keyframes that had no matching element in the markup. Responsive layout: `index.html` gains the missing viewport meta (the cause of everything rendering zoomed-out tiny on phones) plus a `theme-color`; below 960px the page is a single centered column with a horizontal white divider between the copy/counter block and the card, above 960px it becomes a two-column hero (terminal card left, badge/headline/counter right) with a vertical white divider in its own 1px grid track that stretches to exactly the copy column's height — both dividers are a `main::after` pseudo-element so no extra markup is needed.
+
 ### Milestone 17 — Persistent Cross-Tab State
 
 #### Added
