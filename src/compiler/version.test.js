@@ -30,10 +30,17 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // (the read cursor double-counted the first rewritten name's width, so
   // `animation: cursor 0.5s, blinking 0.5s` scoped to something like
   // `blinkinblinking-S...nfinite`). Syntax and output contracts unchanged.
+  //
+  // output 1.8.2: server output patch fix — empty non-void elements shipped
+  // without an end tag (`<path ...>` before `</svg>`, `<code ...>` before
+  // `</pre>`), and the browser's recovery keeps such an element open and
+  // swallows the following markup into it, so the delivered childNodes no
+  // longer aligned one-to-one with the template positions the hydration
+  // walk verifies. Every non-void element now closes in delivered markup.
   assert.deepEqual({ ...VERSIONS }, {
     compiler: '1.8.2',
     syntax: '1.4.0',
-    output: '1.8.1'
+    output: '1.8.2'
   });
 });
 
