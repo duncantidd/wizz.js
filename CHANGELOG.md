@@ -32,6 +32,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - `wizz build` writes `{"type":"module"}` into the output directory (when the output carries no package.json of its own): dist holds only ES modules, and Node 18 — which has no module-syntax detection — could not import the emitted server modules from a CommonJS application, breaking the dev server's SSR imports and the SSR recipe for application-owned servers. A package.json already present in the output directory is respected as the embedding project's deliberate choice (`build.js`).
 
+#### Added
+
+- The repository is now an npm-installable package: `package.json` (name `wizz`, zero dependencies, `engines.node >=18`, `type: commonjs`, `bin` wiring `wizz` to `scripts/cli.js`) with a strict `files` whitelist shipping the compiler (tests stripped), the browser runtime, the build and dev-server scripts, the SSR reference, the installer, the docs, and the landing-page boilerplate (`src/App.wizz`, `Card.wizz`, `Counter.wizz`, `index.html`, `App.css`) — plus an MIT `LICENSE`. The package version is pinned in lockstep to the compiler contract version by `packaging.test.js`, which also pins the zero-dependency mandate, the exact tarball surface (nothing from `test/`, `dist/`, `vscode-extension/`, or any `*.test.js` leaks), and runs a packed install end to end: `npm pack` → extract → `wizz build` a fresh two-file project with the shipped CLI.
+
 ### Milestone 17 — Persistent Cross-Tab State
 
 #### Added

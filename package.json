@@ -1,0 +1,49 @@
+{
+  "name": "wizz",
+  "version": "1.8.3",
+  "description": "Zero-dependency compiled component framework: a build-time compiler that turns .wizz components into DOM-native ES modules, with a dev server that server-renders and hydrates.",
+  "license": "MIT",
+  "author": "Duncan Tidd",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/duncantidd/wizzjs.git"
+  },
+  "keywords": [
+    "components",
+    "compiler",
+    "framework",
+    "ssr",
+    "hydration",
+    "zero-dependency"
+  ],
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "wizz": "scripts/cli.js"
+  },
+  "files": [
+    "build.js",
+    "index.html",
+    "App.css",
+    "src/App.wizz",
+    "src/components/Card.wizz",
+    "src/components/Counter.wizz",
+    "src/components/Panel.wizz",
+    "src/pages/Home.wizz",
+    "src/compiler/",
+    "src/runtime/",
+    "!src/compiler/**/*.test.js",
+    "scripts/cli.js",
+    "scripts/dev.js",
+    "scripts/ssr-demo.js",
+    "scripts/install-cli.sh",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "test": "node --test"
+  }
+}
