@@ -283,16 +283,18 @@ function serializeElement(element) {
   return `<${element.name}${attributes}>${children}</${element.name}>`;
 }
 
-// Compiles both targets for the fixture into a temporary ESM project and
-// imports them (cache-busted) with the shim document installed.
-async function loadGeneratedModules(t) {
+// Compiles both targets for the fixture (or an inline source override) into
+// a temporary ESM project and imports them (cache-busted) with the shim
+// document installed.
+async function loadGeneratedModules(t, sourceOverride = null) {
+  const source = sourceOverride ?? loadFixture();
   const projectDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-hydration-test-'));
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
   fs.writeFileSync(path.join(projectDirectory, 'package.json'), '{"type":"module"}');
 
-  const { source: serverSource } = compileServer(loadFixture(), { filePath: fixturePath });
+  const { source: serverSource } = compileServer(source, { filePath: fixturePath });
   fs.writeFileSync(path.join(projectDirectory, 'server.js'), serverSource);
-  const { source: clientSource } = compile(loadFixture(), { filePath: fixturePath, hydratable: true });
+  const { source: clientSource } = compile(source, { filePath: fixturePath, hydratable: true });
   fs.writeFileSync(path.join(projectDirectory, 'client.js'), clientSource);
 
   const bust = `?test=${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -807,4 +809,74 @@ test('a hydration fallback adopts the delivered style instead of duplicating it'
 
   component.destroy();
   assert.equal(document.head.childNodes.filter((node) => node.nodeName === 'STYLE').length, 0);
+});
+
+test('Card-shaped markup with pre-family and empty elements adopts without fallback', async (t) => {
+  // The showcase regression: an empty `<path></path>` inside an svg and an
+  // empty `<code></code>` inside a pre once delivered without end tags, so
+  // the browser kept them open and swallowed the following markup (svg's
+  // trailing text became the path's child; pre's became the code's child) —
+  // the walk fell back behind a mismatch warning. The pre's authoring
+  // newline is the second half: the browser drops it from the delivered
+  // markup, so the AST must not carry it either. The test shim parses
+  // delivered markup literally, which only agrees with a real browser when
+  // the delivery is balanced and pre-normalized — exactly the contract the
+  // two compiler fixes establish.
+  const source = [
+    '<div class="terminal">',
+    '  <svg width="16px" viewBox="0 0 24 24"><path d="M7 15L10 12L7 9"></path></svg>',
+    '  <pre>',
+    '    <code>- </code>',
+    '    <code>wizz </code>',
+    '    <code class="cmd"></code>',
+    '  </pre>',
+    '  <span></span>',
+    '</div>'
+  ].join('\n');
+  const { document, clientModule, metricsBefore, warnings, render } = await loadGeneratedModules(t, source);
+
+  const { html } = render();
+  // Balanced delivery: every non-void element closes, and the pre's
+  // authoring newline is absent while interior newlines survive.
+  assert.equal(
+    html,
+    '<div class="terminal">\n'
+    + '  <svg width="16px" viewBox="0 0 24 24"><path d="M7 15L10 12L7 9"></path></svg>\n'
+    + '  <pre>    <code>- </code>\n    <code>wizz </code>\n    <code class="cmd"></code>\n  </pre>  <span></span>\n'
+    + '</div>'
+  );
+
+  const target = deliverMarkup(document, html);
+  const deliveredRoot = findSection(target);
+  const component = clientModule.hydrateComponent(target, {}, {});
+
+  assert.equal(warnings.length, 0);
+  assert.ok(component);
+  // Full adoption: nothing was recreated.
+  assert.equal(document.metrics.elements, metricsBefore.elements);
+  assert.equal(document.metrics.textNodes, metricsBefore.textNodes);
+
+  // The svg's trailing structure stayed outside the path: the closed path
+  // holds no children and the svg's shape is exactly the template's.
+  const svg = deliveredRoot.childNodes[1];
+  const deliveredPath = svg.childNodes[0];
+  assert.equal(deliveredPath.name, 'path');
+  assert.deepEqual(deliveredPath.childNodes, []);
+
+  // The empty code stayed empty and pre's trailing text remained its
+  // sibling, not its child: seven child positions, text last.
+  const pre = deliveredRoot.childNodes[3];
+  assert.equal(pre.name, 'pre');
+  assert.equal(pre.childNodes.length, 7);
+  assert.equal(pre.childNodes[5].name, 'code');
+  assert.deepEqual(pre.childNodes[5].childNodes, []);
+  assert.equal(pre.childNodes[6].nodeType, 3);
+  assert.equal(pre.childNodes[6].nodeValue, '\n  ');
+
+  // The empty span between pre and the root's close kept its position.
+  assert.equal(deliveredRoot.childNodes[5].name, 'span');
+  assert.deepEqual(deliveredRoot.childNodes[5].childNodes, []);
+
+  component.destroy();
+  assert.deepEqual(target.childNodes, []);
 });
