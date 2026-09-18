@@ -24,8 +24,14 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // or another persist() default — are located compile errors instead of
   // runtime ReferenceErrors, and an author-defined persist binding opts out
   // of marker recognition entirely.
+  //
+  // 1.8.2: compiler patch fix — the scoped-style scanner corrupted every
+  // keyframe name after the first in a comma-separated animation value
+  // (the read cursor double-counted the first rewritten name's width, so
+  // `animation: cursor 0.5s, blinking 0.5s` scoped to something like
+  // `blinkinblinking-S...nfinite`). Syntax and output contracts unchanged.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.8.1',
+    compiler: '1.8.2',
     syntax: '1.4.0',
     output: '1.8.1'
   });

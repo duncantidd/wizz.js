@@ -52,7 +52,7 @@
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.8.1',
+  compiler: '1.8.2',
   syntax: '1.4.0',
   output: '1.8.1'
 });

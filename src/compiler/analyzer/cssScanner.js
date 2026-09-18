@@ -252,20 +252,25 @@ function scopeAnimationValue(prelude, scope, keyframeNames) {
   if (colon === -1) return prelude;
 
   let out = prelude.slice(0, colon + 1);
-  let cursor = colon + 1;
-  const value = masked.slice(cursor);
+  const valueStart = colon + 1;
+  // Ident indexes are relative to the start of the value, so the read cursor
+  // and the match base must be tracked separately: advancing the cursor past
+  // a rewritten name must not shift where the next match is spliced, or every
+  // keyframe name after the first in a comma-separated value lands corrupted.
+  let read = valueStart;
+  const value = masked.slice(valueStart);
   const identPattern = /[-\w$]+/g;
   let match = identPattern.exec(value);
   while (match) {
     if (keyframeNames.has(match[0])) {
-      const start = cursor + match.index;
+      const start = valueStart + match.index;
       const end = start + match[0].length;
-      out += `${prelude.slice(cursor, start)}${match[0]}-${scope}`;
-      cursor = end;
+      out += `${prelude.slice(read, start)}${match[0]}-${scope}`;
+      read = end;
     }
     match = identPattern.exec(value);
   }
-  return out + prelude.slice(cursor);
+  return out + prelude.slice(read);
 }
 
 // Recursively processes one block's content, returning CSS with every

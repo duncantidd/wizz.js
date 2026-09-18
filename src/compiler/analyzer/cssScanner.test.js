@@ -104,6 +104,40 @@ test('rewrites animation declarations that reference declared keyframe names', (
   );
 });
 
+test('rewrites every name in a comma-separated animation value', () => {
+  // Regression: the second name used to be spliced at an offset that
+  // double-counted the first rewritten name's width, corrupting the value.
+  const css = '@keyframes cursor { 50% { border-right-color: transparent } }\n'
+    + '@keyframes blinking { 50% { transform: scaleY(0) } }\n'
+    + '.cmd::after { animation: cursor 0.5s step-end infinite alternate, blinking 0.5s infinite; }';
+  assert.equal(
+    scopeCss(css, 's1'),
+    '@keyframes cursor-s1 { 50% { border-right-color: transparent } }\n'
+    + '@keyframes blinking-s1 { 50% { transform: scaleY(0) } }\n'
+    + '[data-wizz-s="s1"].cmd::after { animation: cursor-s1 0.5s step-end infinite alternate, blinking-s1 0.5s infinite; }'
+  );
+});
+
+test('rewrites repeated occurrences of the same name in one animation value', () => {
+  const css = '@keyframes spin { to { transform: rotate(1turn) } }\n'
+    + '.spinner { animation: spin 1s linear, spin 2s linear reverse; }';
+  assert.equal(
+    scopeCss(css, 's1'),
+    '@keyframes spin-s1 { to { transform: rotate(1turn) } }\n'
+    + '[data-wizz-s="s1"].spinner { animation: spin-s1 1s linear, spin-s1 2s linear reverse; }'
+  );
+});
+
+test('idents merely containing a keyframe name are left alone', () => {
+  const css = '@keyframes spin { to { opacity: 1 } }\n'
+    + '.spinner { animation: spinning 2s linear infinite; }';
+  assert.equal(
+    scopeCss(css, 's1'),
+    '@keyframes spin-s1 { to { opacity: 1 } }\n'
+    + '[data-wizz-s="s1"].spinner { animation: spinning 2s linear infinite; }'
+  );
+});
+
 test('rewrites references to keyframes declared after the usage', () => {
   const css = '.spinner { animation: spin 2s linear infinite; }\n@keyframes spin { to { opacity: 1 } }';
   assert.equal(
