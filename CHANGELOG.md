@@ -40,6 +40,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - The installer installs from release tarballs by default: `scripts/install-cli.sh` with no arguments resolves the latest GitHub release asset (`wizz-<version>.tgz`), and a specific tarball path or URL is accepted; `--local` keeps the working-tree install for development. Both paths land the same managed layout and print the installed version, and a truncated or foreign tarball is rejected loudly instead of installed (`scripts/install-cli.sh`, covered by `scripts/install-cli.test.js`).
 
+#### Docs
+
+- ROADMAP §18 is marked complete with implementation notes; STRUCTURE.md gains the packaging artifacts (`package.json`, `packaging.test.js`, `LICENSE`, `.github/workflows/`, `scripts/install-cli.test.js`); the README's install section documents the release-tarball default with `--local` for development installs, and its build section documents the output directory's module-type marker.
+
 ### Milestone 17 — Persistent Cross-Tab State
 
 #### Added

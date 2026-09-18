@@ -7,6 +7,10 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 ├── STRUCTURE.md                         Project map and compiler pipeline
 ├── ROADMAP.md                           Ordered development milestones
 ├── CHANGELOG.md                         Notable changes, grouped by milestone
+├── package.json                         npm package definition (zero dependencies, files whitelist, bin wizz)
+├── packaging.test.js                    Package lockstep, tarball surface, and workflow pins plus a packed-install end-to-end test
+├── LICENSE                              MIT license
+├── .github/workflows/                   CI (Node 18/20/22 matrix) and v* tag release pipelines
 ├── .vscode/launch.json                  Repository-root Extension Development Host debug profile
 ├── vscode-extension/                    First-party VS Code language and project tooling
 │   ├── extension.js                      Extension-host activation, diagnostics, navigation, and commands
