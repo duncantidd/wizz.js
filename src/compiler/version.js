@@ -41,7 +41,11 @@
 //     element, children or not: the adoption walk verifies delivered
 //     childNodes one-to-one against template positions, and an unterminated
 //     start tag would let the browser swallow the following markup into the
-//     still-open element. Within one major version, generated
+//     still-open element. A single newline immediately after a pre,
+//     textarea, or listing start or end tag is dropped at parse time — the
+//     HTML tree builder drops it from the delivered markup, so the AST must
+//     not carry it (an authoring newline is not rendered content). Within
+//     one major version, generated
 //     modules keep this surface and their runtime behavior.
 //
 //     The marker is accepted only as a top-level `let` initializer: a
@@ -56,8 +60,8 @@
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.8.2',
-  syntax: '1.4.0',
+  compiler: '1.8.3',
+  syntax: '1.4.1',
   output: '1.8.2'
 });
 

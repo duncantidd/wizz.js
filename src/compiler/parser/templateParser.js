@@ -14,12 +14,28 @@ const STYLE_BLOCK_NAME = 'wizz:style';
 // so it is never silently accepted as the scoped form.
 const PLAIN_STYLE_ELEMENT_NAME = 'style';
 
+// Elements whose rendered content the HTML tree builder strips a single
+// leading newline from — one immediately after the start tag and one
+// immediately after the end tag (the authoring newline that keeps source
+// indentation out of a preformatted box). The AST must model the DOM the
+// delivered markup actually produces: the server emits the newline, the
+// browser drops it, and the hydration walk would verify text the browser
+// never stored. `listing` is obsolete but follows the same rule.
+const NEWLINE_TRIM_ELEMENTS = new Set(['pre', 'textarea', 'listing']);
+
 function parseTemplate(tokens) {
   // The root of our AST
   const root = {
     type: 'Root',
     children: []
   };
+
+  // Token index whose leading newline the next Text node drops, or -1. The
+  // drop fires only when a Text token is the IMMEDIATELY next token (the
+  // HTML rule is next-token, and an expression or block in between could
+  // produce runtime output the compiler cannot see), so the index check
+  // makes a stale value harmless — nothing ever needs clearing.
+  let dropNewlineAtIndex = -1;
 
   const stack = [root];
   // Nesting depth of open <wizz:head> blocks. Head content validation needs to
@@ -102,6 +118,7 @@ function parseTemplate(tokens) {
         };
         currentParent.children.push(element);
         stack.push(element); // This element is now the current parent
+        if (NEWLINE_TRIM_ELEMENTS.has(token.name)) dropNewlineAtIndex = i + 1;
         break;
       }
 
@@ -119,6 +136,9 @@ function parseTemplate(tokens) {
 
         if (currentParent.type === 'HeadBlock') headDepth -= 1;
         stack.pop(); // Close the element by removing it from the stack
+        // A self-closing <pre /> is the framework's spelling of an
+        // immediately closed element, so its trailing-text rule applies too.
+        if (NEWLINE_TRIM_ELEMENTS.has(currentParent.name)) dropNewlineAtIndex = i + 1;
         break;
       }
 
@@ -180,6 +200,7 @@ function parseTemplate(tokens) {
         };
         currentParent.children.push(element);
         // Do NOT push to stack because it immediately closes
+        if (NEWLINE_TRIM_ELEMENTS.has(token.name)) dropNewlineAtIndex = i + 1;
         break;
       }
 
@@ -196,9 +217,23 @@ function parseTemplate(tokens) {
           if (token.value.trim() === '') break;
           throw new SyntaxError(`Only <title>, <meta>, and <link> elements are allowed inside <wizz:head> at ${at}.`);
         }
+        // A leading newline is dropped when this text immediately follows a
+        // <pre>-family start or end tag, mirroring the HTML tree builder —
+        // a \r\n pair counts as that one newline (a lone \r is left alone:
+        // under-stripping costs an adoption fallback at worst, never wrong
+        // rendered content).
+        let textValue = token.value;
+        if (dropNewlineAtIndex === i) {
+          textValue = textValue.startsWith('\r\n') ? textValue.slice(2)
+            : textValue.startsWith('\n') ? textValue.slice(1)
+            : textValue;
+          // The newline was the whole token: the browser would create no
+          // text node at all, so none is pushed.
+          if (textValue === '') break;
+        }
         currentParent.children.push({
           type: 'Text',
-          value: token.value,
+          value: textValue,
           loc: token.loc
         });
         break;

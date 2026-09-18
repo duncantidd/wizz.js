@@ -391,3 +391,96 @@ test('rejects expressions and elements inside style blocks', () => {
     /<div> is not allowed inside <wizz:style> — style content is raw CSS at 1:13\./
   );
 });
+
+// --- pre-family leading-newline normalization (hydration alignment) ---
+
+// The HTML tree builder drops a single newline immediately after a
+// pre/textarea/listing start tag and immediately after its end tag. The
+// parser models that so the server markup, the client's created nodes, and
+// the hydration walk's expectations all describe the DOM the browser
+// actually builds from the delivered markup.
+
+// Compact child summary: elements as <name>, text as the verbatim value,
+// expressions as {source}.
+const childValues = (element) => element.children.map((child) => {
+  if (child.type === 'Element') return `<${child.name}>`;
+  if (child.type === 'Expression') return `{${child.value}}`;
+  return child.value;
+});
+
+test('drops the authoring newline immediately after a pre start tag', () => {
+  const ast = parseTemplate(tokenize('<pre>\n  <code>x</code></pre>'));
+
+  assert.deepEqual(childValues(ast.children[0]), ['  ', '<code>']);
+});
+
+test('drops exactly one newline after a pre start tag', () => {
+  const ast = parseTemplate(tokenize('<pre>\n\nkeep me</pre>'));
+
+  assert.deepEqual(childValues(ast.children[0]), ['\nkeep me']);
+});
+
+test('drops a carriage-return newline pair after a pre start tag', () => {
+  const ast = parseTemplate(tokenize('<pre>\r\nx</pre>'));
+
+  assert.deepEqual(childValues(ast.children[0]), ['x']);
+});
+
+test('keeps pre text that does not start with a newline', () => {
+  const ast = parseTemplate(tokenize('<pre>unchanged</pre>'));
+
+  assert.deepEqual(childValues(ast.children[0]), ['unchanged']);
+});
+
+test('a newline-only first text inside pre produces no text node', () => {
+  const ast = parseTemplate(tokenize('<pre>\n</pre>'));
+
+  assert.deepEqual(childValues(ast.children[0]), []);
+});
+
+test('drops the newline in the text immediately after a pre end tag', () => {
+  const ast = parseTemplate(tokenize('<div><pre>x</pre>\n  </div>'));
+
+  assert.deepEqual(childValues(ast.children[0]), ['<pre>', '  ']);
+});
+
+test('a newline-only text after a pre end tag produces no text node', () => {
+  const ast = parseTemplate(tokenize('<div><pre>x</pre>\n</div>'));
+
+  assert.deepEqual(childValues(ast.children[0]), ['<pre>']);
+});
+
+test('an expression between the pre start tag and the newline blocks the drop', () => {
+  // The next token is not the newline, and runtime output could end in one;
+  // only statically known text is normalized.
+  const ast = parseTemplate(tokenize('<pre>{x}\ny</pre>'));
+
+  assert.deepEqual(childValues(ast.children[0]), ['{x}', '\ny']);
+});
+
+test('applies both newline rules to textarea', () => {
+  const ast = parseTemplate(tokenize('<div><textarea>\ncontent</textarea>\n</div>'));
+  const div = ast.children[0];
+
+  assert.deepEqual(childValues(div), ['<textarea>']);
+  assert.deepEqual(childValues(div.children[0]), ['content']);
+});
+
+test('applies the open-tag rule to listing', () => {
+  const ast = parseTemplate(tokenize('<listing>\nx</listing>'));
+
+  assert.deepEqual(childValues(ast.children[0]), ['x']);
+});
+
+test('elements outside the pre family keep their leading newlines', () => {
+  const ast = parseTemplate(tokenize('<div>\n<span>\nx</span></div>'));
+
+  assert.deepEqual(childValues(ast.children[0]), ['\n', '<span>']);
+  assert.deepEqual(childValues(ast.children[0].children[1]), ['\nx']);
+});
+
+test('a self-closing pre applies the trailing-text rule', () => {
+  const ast = parseTemplate(tokenize('<div><pre />\n  </div>'));
+
+  assert.deepEqual(childValues(ast.children[0]), ['<pre>', '  ']);
+});
