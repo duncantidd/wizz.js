@@ -5,6 +5,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { spawnSync } = require('node:child_process');
 const {
+  BUILD_DIAGNOSTICS_FORMAT,
   buildProject,
   copyRuntimeModules,
   discoverWizzFiles,
@@ -42,7 +43,8 @@ test('accepts input and output directory arguments in order', () => {
 
   assert.deepEqual(argumentsResult, {
     inputDirectory: 'src',
-    outputDirectory: 'dist'
+    outputDirectory: 'dist',
+    json: false
   });
 });
 
@@ -54,8 +56,17 @@ test('preserves absolute and nested directory arguments', () => {
 
   assert.deepEqual(argumentsResult, {
     inputDirectory: '/projects/example/src',
-    outputDirectory: 'build/generated/components'
+    outputDirectory: 'build/generated/components',
+    json: false
   });
+});
+
+test('recognizes --json in any argument position', () => {
+  assert.equal(parseBuildArguments(['--json', 'src', 'dist']).json, true);
+  assert.equal(parseBuildArguments(['src', 'dist', '--json']).json, true);
+  assert.equal(parseBuildArguments(['src', '--json', 'dist']).json, true);
+  assert.throws(() => parseBuildArguments(['src', 'dist', '--json', 'extra']), /Usage/);
+  assert.throws(() => parseBuildArguments(['--json']), /Usage/);
 });
 
 test('rejects missing directory arguments with usage guidance', () => {
@@ -805,4 +816,166 @@ test('a package.json already present in the output directory is respected', (t) 
     type: 'commonjs',
     name: 'embedder-dist'
   });
+});
+
+test('the build --json envelope format string is versioned', () => {
+  assert.equal(BUILD_DIAGNOSTICS_FORMAT, 'wizz-build-diagnostics@1');
+});
+
+test('the JSON build mode returns an envelope with per-file diagnostics', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'App.wizz'), '<main><p>Ready</p></main>');
+  writeFile(path.join(inputDirectory, 'Broken.wizz'), '<main><p>Broken</main>');
+
+  const result = buildProject(inputDirectory, outputDirectory, createLogger(), { json: true });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.diagnostics.length, 1);
+  assert.deepEqual(result.diagnostics[0], {
+    code: 'WIZZ-P018',
+    severity: 'error',
+    message: 'Mismatched closing tag. Expected </p>, found </main> at Broken.wizz:1:16.',
+    file: 'Broken.wizz',
+    line: 1,
+    column: 16
+  });
+  assert.deepEqual(result.files, [
+    { file: 'App.wizz', serverRenderable: true },
+    { file: 'Broken.wizz', serverRenderable: false }
+  ]);
+  // The envelope is a build result: artifacts are still written for the
+  // files that compiled.
+  assert.equal(fs.existsSync(path.join(outputDirectory, 'App.js')), true);
+  assert.equal(fs.existsSync(path.join(outputDirectory, 'Broken.js')), false);
+});
+
+test('the JSON build mode returns an empty envelope for a clean build', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'App.wizz'), '<main><p>Ready</p></main>');
+
+  const result = buildProject(inputDirectory, outputDirectory, createLogger(), { json: true });
+
+  assert.deepEqual(result, {
+    compiledCount: 1,
+    failedCount: 0,
+    ok: true,
+    diagnostics: [],
+    files: [{ file: 'App.wizz', serverRenderable: true }]
+  });
+});
+
+test('the JSON build mode turns build-level failures into envelope records', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  // A route inside the reserved /runtime namespace makes the manifest
+  // validation throw after the client builds have succeeded.
+  writeFile(path.join(inputDirectory, 'pages', 'runtime', 'Status.wizz'), '<main><p>Up</p></main>');
+
+  const result = buildProject(inputDirectory, outputDirectory, createLogger(), { json: true });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.failedCount, 0);
+  assert.deepEqual(result.diagnostics, [{
+    code: null,
+    severity: 'error',
+    message: "Route '/runtime/status' is reserved for Wizz runtime files: pages/runtime/Status.wizz",
+    file: 'pages/runtime/Status.wizz',
+    line: null,
+    column: null
+  }]);
+});
+
+test('the JSON build mode reports build-level errors for unusable directories', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const result = buildProject(
+    path.join(projectDirectory, 'missing'),
+    path.join(projectDirectory, 'dist'),
+    createLogger(),
+    { json: true }
+  );
+
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.diagnostics, [{
+    code: null,
+    severity: 'error',
+    message: `Input directory does not exist or is not a directory: ${path.join(projectDirectory, 'missing')}`,
+    file: null,
+    line: null,
+    column: null
+  }]);
+  assert.deepEqual(result.files, []);
+});
+
+test('the JSON build mode never throws for compile failures', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const inputDirectory = path.join(projectDirectory, 'src');
+  writeFile(path.join(inputDirectory, 'App.wizz'), '{/each}');
+
+  const result = buildProject(inputDirectory, path.join(projectDirectory, 'dist'), createLogger(), { json: true });
+  assert.equal(result.ok, false);
+  assert.equal(result.diagnostics[0].code, 'WIZZ-P003');
+});
+
+test('main prints only the diagnostics envelope in JSON mode and exits non-zero on failure', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main><p>Ready</p></main>');
+  writeFile(path.join(projectDirectory, 'src', 'Broken.wizz'), '<main><p>Broken</main>');
+
+  const printed = [];
+  const originalLog = console.log;
+  console.log = (message) => printed.push(message);
+  let exitCode;
+  try {
+    exitCode = main([path.join(projectDirectory, 'src'), path.join(projectDirectory, 'dist'), '--json']);
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.equal(exitCode, 1);
+  assert.equal(printed.length, 1);
+  const envelope = JSON.parse(printed[0]);
+  assert.deepEqual(Object.keys(envelope), ['format', 'ok', 'diagnostics', 'files']);
+  assert.equal(envelope.format, 'wizz-build-diagnostics@1');
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.diagnostics[0].code, 'WIZZ-P018');
+  assert.equal(envelope.diagnostics[0].file, 'Broken.wizz');
+  assert.deepEqual(envelope.files.map((entry) => entry.file), ['App.wizz', 'Broken.wizz']);
+});
+
+test('main prints only the diagnostics envelope in JSON mode and exits zero when clean', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main><p>Ready</p></main>');
+
+  const printed = [];
+  const originalLog = console.log;
+  console.log = (message) => printed.push(message);
+  let exitCode;
+  try {
+    exitCode = main(['--json', path.join(projectDirectory, 'src'), path.join(projectDirectory, 'dist')]);
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.equal(exitCode, 0);
+  const envelope = JSON.parse(printed[0]);
+  assert.equal(envelope.ok, true);
+  assert.deepEqual(envelope.diagnostics, []);
+  assert.deepEqual(envelope.files, [{ file: 'App.wizz', serverRenderable: true }]);
 });

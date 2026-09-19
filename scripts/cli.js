@@ -3,7 +3,7 @@ const { main: buildProject } = require('../build');
 const { startDevelopmentServer } = require('./dev');
 
 const USAGE = `Usage:
-  wizz build [input-directory] [output-directory]
+  wizz build [input-directory] [output-directory] [--json]
   wizz dev`;
 
 function parseCommand(argv) {
@@ -16,7 +16,13 @@ function parseCommand(argv) {
     throw new Error(USAGE);
   }
 
-  if (command === 'build' && argumentsList.length !== 0 && argumentsList.length !== 2) {
+  // `--json` is a flag, not a directory: it may appear in any position and is
+  // stripped before the positional count check. The build layer re-parses it
+  // from argv, so it is re-appended here rather than threaded as an option.
+  const json = argumentsList.includes('--json');
+  const positional = argumentsList.filter((argument) => argument !== '--json');
+
+  if (command === 'build' && positional.length !== 0 && positional.length !== 2) {
     throw new Error('Build accepts either no directories or both <input-directory> and <output-directory>.\n\n' + USAGE);
   }
 
@@ -24,17 +30,18 @@ function parseCommand(argv) {
     throw new Error('Dev does not accept arguments.\n\n' + USAGE);
   }
 
-  return { command, argumentsList };
+  return { command, argumentsList: positional, json };
 }
 
 function runCli(argv, dependencies = {}) {
-  const { command, argumentsList } = parseCommand(argv);
+  const { command, argumentsList, json } = parseCommand(argv);
   const build = dependencies.build || buildProject;
   const startDev = dependencies.startDev || startDevelopmentServer;
   const logger = dependencies.logger || console;
 
   if (command === 'build') {
-    return build(argumentsList.length === 0 ? ['src', 'dist'] : argumentsList, logger);
+    const directories = argumentsList.length === 0 ? ['src', 'dist'] : argumentsList;
+    return build(json ? [...directories, '--json'] : directories, logger);
   }
 
   const developmentServer = startDev({ projectDirectory: process.cwd(), logger });

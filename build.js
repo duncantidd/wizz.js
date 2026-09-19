@@ -9,17 +9,29 @@ const { scopeCss } = require('./src/compiler/analyzer/cssScanner');
 const STYLESHEET_FILENAME = 'app.css';
 const STYLESHEET_HREF_PATTERN = /href\s*=\s*(["'])\/app\.css\1/;
 
+// The envelope `wizz build --json` prints. Versioned so tooling can pin the
+// shape it parses: new fields may be added within format version 1, but
+// existing fields keep their meaning until the version string changes.
+const BUILD_DIAGNOSTICS_FORMAT = 'wizz-build-diagnostics@1';
+
 function parseBuildArguments(argv) {
   if (!Array.isArray(argv)) {
     throw new TypeError('Build arguments must be an array.');
   }
 
-  if (argv.length !== 2) {
-    throw new Error('Usage: node build.js <input-directory> <output-directory>');
+  const json = argv.includes('--json');
+  const directories = argv.filter((argument) => argument !== '--json');
+
+  if (directories.length !== 2) {
+    throw new Error('Usage: node build.js <input-directory> <output-directory> [--json]');
   }
 
-  const [inputDirectory, outputDirectory] = argv;
-  return { inputDirectory, outputDirectory };
+  const [inputDirectory, outputDirectory] = directories;
+  return { inputDirectory, outputDirectory, json };
+}
+
+function toPosixPath(relativePath) {
+  return relativePath.split(path.sep).join('/');
 }
 
 function discoverWizzFiles(inputDirectory) {
@@ -84,15 +96,30 @@ function firstErrorLine(error) {
  * Server and hydratable builds are written separately by writeServerBuilds
  * once import-graph eligibility is known, because whether a file may
  * server-render depends on the files it imports, not on its own template.
+ *
+ * With `options.diagnostics === 'collect'`, a compile failure is returned as
+ * `{ diagnostics: [record] }` instead of thrown — the JSON build mode uses
+ * this to aggregate per-file diagnostics — and a success carries
+ * `diagnostics: []` alongside the artifacts. `options.filePath` overrides
+ * the label compiler errors carry (the JSON mode passes the input-relative
+ * path so records stay position-independent).
  */
-function compileWizzFile(inputPath, outputPath) {
+function compileWizzFile(inputPath, outputPath, options = {}) {
   const rawWizzCode = fs.readFileSync(inputPath, 'utf-8');
-  const { source: generatedModule, sourceMap, payload } = compile(rawWizzCode, { filePath: inputPath });
+  const collect = options.diagnostics === 'collect';
+  const result = compile(rawWizzCode, {
+    filePath: options.filePath || inputPath,
+    ...(collect ? { diagnostics: 'collect' } : {})
+  });
+
+  if (collect && result.diagnostics.length > 0) {
+    return { diagnostics: result.diagnostics };
+  }
 
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  writeGeneratedModule(outputPath, generatedModule, sourceMap);
+  writeGeneratedModule(outputPath, result.source, result.sourceMap);
 
-  return { rawWizzCode, payload };
+  return { rawWizzCode, payload: result.payload, diagnostics: collect ? [] : undefined };
 }
 
 /**
@@ -354,103 +381,202 @@ function emitRouteManifest(inputDirectory, outputDirectory, inputFiles, serverRe
 }
 
 function buildProject(inputDirectory, outputDirectory, logger = console, options = {}) {
-  const resolvedInputDirectory = path.resolve(inputDirectory);
-  const resolvedOutputDirectory = path.resolve(outputDirectory);
-
-  if (!fs.existsSync(resolvedInputDirectory) || !fs.statSync(resolvedInputDirectory).isDirectory()) {
-    throw new Error(`Input directory does not exist or is not a directory: ${resolvedInputDirectory}`);
-  }
-
-  if (resolvedInputDirectory === resolvedOutputDirectory) {
-    throw new Error('Input and output directories must be different.');
-  }
-
-  const inputFiles = discoverWizzFiles(resolvedInputDirectory);
+  // JSON mode aggregates per-file diagnostics and a files manifest instead of
+  // prose logging; a build-level failure (bad directories, route collision)
+  // is returned as an envelope record rather than thrown. Everything else —
+  // artifact writing, eligibility, exit-code semantics — is identical.
+  const jsonMode = options.json === true;
+  const jsonDiagnostics = [];
+  const jsonFiles = [];
+  let resolvedInputDirectory = null;
   let failedCount = 0;
+  let compiledFileCount = 0;
 
-  // Pass 1 — client builds. Every .wizz file gets its browser module; a
-  // client-side failure is reported and recorded so importing files can chain
-  // it as their own ineligibility reason.
-  const compiledByInputPath = new Map();
-  const failureReasonsByInputPath = new Map();
-  for (const inputPath of inputFiles) {
-    const outputPath = getOutputPath(resolvedInputDirectory, resolvedOutputDirectory, inputPath);
+  try {
+    const resolvedOutputDirectory = path.resolve(outputDirectory);
+    resolvedInputDirectory = path.resolve(inputDirectory);
 
-    try {
-      compiledByInputPath.set(inputPath, compileWizzFile(inputPath, outputPath));
-      logger.log(`Compiled ${inputPath} -> ${outputPath}`);
-    } catch (error) {
-      failedCount++;
-      failureReasonsByInputPath.set(inputPath, firstErrorLine(error));
-      logger.error(`Compilation failed for ${inputPath}: ${error.message}`);
+    if (!fs.existsSync(resolvedInputDirectory) || !fs.statSync(resolvedInputDirectory).isDirectory()) {
+      throw new Error(`Input directory does not exist or is not a directory: ${resolvedInputDirectory}`);
     }
-  }
 
-  // Pass 2 — eligibility over the import graph, computed bottom-up with the
-  // client payloads. Both server targets are compiled here (once per file)
-  // and cached for writing, so an eligible page never ships a server module
-  // without its hydratable client build.
-  const { eligibilityByInputPath, serverBuildsByInputPath } = computeServerEligibility(
-    inputFiles,
-    compiledByInputPath,
-    failureReasonsByInputPath,
-    // Threaded through so the development server can decorate child import
-    // specifiers per rebuild; production builds leave it empty.
-    { moduleQuery: options.moduleQuery }
-  );
-
-  // Pass 3 — server artifacts for eligible files (pages AND components: a
-  // page's server module imports its components' server modules), and
-  // ineligibility notes for everything else.
-  const serverRenderableByInputPath = new Map();
-  for (const inputPath of inputFiles) {
-    if (!compiledByInputPath.has(inputPath)) continue;
-
-    const outputPath = getOutputPath(resolvedInputDirectory, resolvedOutputDirectory, inputPath);
-    const eligibility = eligibilityByInputPath.get(inputPath);
-
-    if (eligibility.eligible) {
-      writeEligibleServerBuilds(inputPath, outputPath, serverBuildsByInputPath.get(inputPath));
-      serverRenderableByInputPath.set(inputPath, true);
-    } else {
-      serverRenderableByInputPath.set(inputPath, false);
-      logger.log(`Note: server rendering skipped for ${inputPath} — ${eligibility.reason} Serving the client build only.`);
+    if (resolvedInputDirectory === resolvedOutputDirectory) {
+      throw new Error('Input and output directories must be different.');
     }
+
+    const inputFiles = discoverWizzFiles(resolvedInputDirectory);
+
+    // Pass 1 — client builds. Every .wizz file gets its browser module; a
+    // client-side failure is reported and recorded so importing files can chain
+    // it as their own ineligibility reason.
+    const compiledByInputPath = new Map();
+    const failureReasonsByInputPath = new Map();
+    for (const inputPath of inputFiles) {
+      const outputPath = getOutputPath(resolvedInputDirectory, resolvedOutputDirectory, inputPath);
+
+      try {
+        if (jsonMode) {
+          // Records carry input-relative paths so JSON consumers get
+          // position-independent locations.
+          const outcome = compileWizzFile(inputPath, outputPath, {
+            diagnostics: 'collect',
+            filePath: toPosixPath(path.relative(resolvedInputDirectory, inputPath))
+          });
+          if (outcome.diagnostics.length > 0) {
+            failedCount++;
+            failureReasonsByInputPath.set(inputPath, outcome.diagnostics[0].message);
+            jsonDiagnostics.push(...outcome.diagnostics);
+            continue;
+          }
+          compiledByInputPath.set(inputPath, outcome);
+          compiledFileCount++;
+        } else {
+          compiledByInputPath.set(inputPath, compileWizzFile(inputPath, outputPath));
+          compiledFileCount++;
+          logger.log(`Compiled ${inputPath} -> ${outputPath}`);
+        }
+      } catch (error) {
+        failedCount++;
+        failureReasonsByInputPath.set(inputPath, firstErrorLine(error));
+        if (jsonMode) {
+          // Not a compiler diagnostic (a filesystem failure, an unexpected
+          // throw): an uncoded record keeps the envelope total — every
+          // failed file shows up in diagnostics.
+          jsonDiagnostics.push({
+            code: null,
+            severity: 'error',
+            message: firstErrorLine(error),
+            file: toPosixPath(path.relative(resolvedInputDirectory, inputPath)),
+            line: null,
+            column: null
+          });
+        } else {
+          logger.error(`Compilation failed for ${inputPath}: ${error.message}`);
+        }
+      }
+    }
+
+    // Pass 2 — eligibility over the import graph, computed bottom-up with the
+    // client payloads. Both server targets are compiled here (once per file)
+    // and cached for writing, so an eligible page never ships a server module
+    // without its hydratable client build.
+    const { eligibilityByInputPath, serverBuildsByInputPath } = computeServerEligibility(
+      inputFiles,
+      compiledByInputPath,
+      failureReasonsByInputPath,
+      // Threaded through so the development server can decorate child import
+      // specifiers per rebuild; production builds leave it empty.
+      { moduleQuery: options.moduleQuery }
+    );
+
+    // Pass 3 — server artifacts for eligible files (pages AND components: a
+    // page's server module imports its components' server modules), and
+    // ineligibility notes for everything else.
+    const serverRenderableByInputPath = new Map();
+    for (const inputPath of inputFiles) {
+      if (!compiledByInputPath.has(inputPath)) continue;
+
+      const outputPath = getOutputPath(resolvedInputDirectory, resolvedOutputDirectory, inputPath);
+      const eligibility = eligibilityByInputPath.get(inputPath);
+
+      if (eligibility.eligible) {
+        writeEligibleServerBuilds(inputPath, outputPath, serverBuildsByInputPath.get(inputPath));
+        serverRenderableByInputPath.set(inputPath, true);
+      } else {
+        serverRenderableByInputPath.set(inputPath, false);
+        logger.log(`Note: server rendering skipped for ${inputPath} — ${eligibility.reason} Serving the client build only.`);
+      }
+    }
+
+    copyRuntimeModules(resolvedOutputDirectory);
+    emitRouteManifest(resolvedInputDirectory, resolvedOutputDirectory, inputFiles, serverRenderableByInputPath);
+
+    // Pass 4 — style extraction and shell copy: production builds get one
+    // app.css carrying every component's scoped rules, linked from the copied
+    // shell so first paint is styled with zero runtime work. The dev server's
+    // per-document <style> injection keeps working unchanged on top of this.
+    const extractedStyles = extractComponentStyles(resolvedInputDirectory, compiledByInputPath);
+    writeExtractedStyles(resolvedOutputDirectory, extractedStyles);
+    copyDocumentShell(resolvedInputDirectory, resolvedOutputDirectory, extractedStyles.length > 0, logger);
+
+    // The output directory holds ES modules and their assets, so pin the module
+    // type beside the emitted artifacts: Node-side imports — the dev server's
+    // SSR imports, and application servers following the SSR recipe — must work
+    // on every supported runtime, and Node 18 has no module-syntax detection to
+    // fall back on. A package.json the output already carries is respected: it
+    // may be the embedding project's deliberate choice.
+    const moduleTypeMarkerPath = path.join(resolvedOutputDirectory, 'package.json');
+    if (!fs.existsSync(moduleTypeMarkerPath)) {
+      fs.writeFileSync(moduleTypeMarkerPath, '{"type":"module"}\n', 'utf8');
+    }
+
+    if (jsonMode) {
+      // The files manifest mirrors the route discovery order, so it is
+      // byte-stable across identical builds. Files whose client build failed
+      // never server-render.
+      for (const inputPath of inputFiles) {
+        jsonFiles.push({
+          file: toPosixPath(path.relative(resolvedInputDirectory, inputPath)),
+          serverRenderable: serverRenderableByInputPath.get(inputPath) === true
+        });
+      }
+    }
+
+    return {
+      compiledCount: inputFiles.length - failedCount,
+      failedCount,
+      ...(jsonMode ? { ok: failedCount === 0, diagnostics: jsonDiagnostics, files: jsonFiles } : {})
+    };
+  } catch (error) {
+    if (!jsonMode) throw error;
+
+    // A build-level failure (bad directories, a route collision, an
+    // unexpected filesystem error) is returned as an envelope record with a
+    // null code instead of thrown, so `--json` output stays machine-parsable
+    // on every failure path.
+    let file = null;
+    if (error && error.filePath && resolvedInputDirectory) {
+      file = toPosixPath(path.relative(resolvedInputDirectory, error.filePath)) || null;
+    }
+
+    return {
+      compiledCount: compiledFileCount,
+      failedCount,
+      ok: false,
+      diagnostics: [{
+        code: null,
+        severity: 'error',
+        message: firstErrorLine(error),
+        file,
+        line: null,
+        column: null
+      }],
+      files: jsonFiles
+    };
   }
-
-  copyRuntimeModules(resolvedOutputDirectory);
-  emitRouteManifest(resolvedInputDirectory, resolvedOutputDirectory, inputFiles, serverRenderableByInputPath);
-
-  // Pass 4 — style extraction and shell copy: production builds get one
-  // app.css carrying every component's scoped rules, linked from the copied
-  // shell so first paint is styled with zero runtime work. The dev server's
-  // per-document <style> injection keeps working unchanged on top of this.
-  const extractedStyles = extractComponentStyles(resolvedInputDirectory, compiledByInputPath);
-  writeExtractedStyles(resolvedOutputDirectory, extractedStyles);
-  copyDocumentShell(resolvedInputDirectory, resolvedOutputDirectory, extractedStyles.length > 0, logger);
-
-  // The output directory holds ES modules and their assets, so pin the module
-  // type beside the emitted artifacts: Node-side imports — the dev server's
-  // SSR imports, and application servers following the SSR recipe — must work
-  // on every supported runtime, and Node 18 has no module-syntax detection to
-  // fall back on. A package.json the output already carries is respected: it
-  // may be the embedding project's deliberate choice.
-  const moduleTypeMarkerPath = path.join(resolvedOutputDirectory, 'package.json');
-  if (!fs.existsSync(moduleTypeMarkerPath)) {
-    fs.writeFileSync(moduleTypeMarkerPath, '{"type":"module"}\n', 'utf8');
-  }
-
-  return {
-    compiledCount: inputFiles.length - failedCount,
-    failedCount
-  };
 }
 
 function main(argv, logger = console) {
-  const { inputDirectory, outputDirectory } = parseBuildArguments(argv);
-  const result = buildProject(inputDirectory, outputDirectory, logger);
+  const { inputDirectory, outputDirectory, json } = parseBuildArguments(argv);
+  // In JSON mode stdout carries only the envelope, so the per-file prose the
+  // build logs is suppressed at this CLI boundary.
+  const result = buildProject(
+    inputDirectory,
+    outputDirectory,
+    json ? { log() {}, error() {} } : logger,
+    json ? { json: true } : {}
+  );
 
-  return result.failedCount === 0 ? 0 : 1;
+  if (json) {
+    console.log(JSON.stringify({
+      format: BUILD_DIAGNOSTICS_FORMAT,
+      ok: result.ok,
+      diagnostics: result.diagnostics,
+      files: result.files
+    }, null, 2));
+  }
+
+  return result.failedCount === 0 && result.ok !== false ? 0 : 1;
 }
 
 if (require.main === module) {
@@ -463,6 +589,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  BUILD_DIAGNOSTICS_FORMAT,
   buildProject,
   compileWizzFile,
   computeServerEligibility,
