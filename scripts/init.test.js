@@ -8,9 +8,11 @@ const { initProject } = require('./init.js');
 
 const EXPECTED_PATHS = [
   'index.html',
+  'App.css',
   'src/App.wizz',
   'src/pages/Home.wizz',
-  'src/components/Counter.wizz'
+  'src/components/Counter.wizz',
+  'src/components/Card.wizz'
 ];
 
 function createTemporaryDirectory() {
@@ -117,18 +119,32 @@ test('the scaffolded project serves / and /home with SSR state and builds cleanl
     const rootResponse = await fetch(`${url}/`);
     assert.match(rootResponse.headers.get('content-type') || '', /text\/html/);
     const rootHtml = await rootResponse.text();
-    assert.match(rootHtml, /Hello, Wizz!/);
-    // The Counter server-renders its persisted default — the interpolation
-    // is delimited by comment nodes so hydration can map the text node. The
-    // delivered state script is what hydration adopts instead of falling
-    // back.
-    assert.match(rootHtml, /Clicked <!-- -->0<!-- --> times/);
+    // The landing page server-renders the reactive head block and both
+    // showcase components. Interpolation is delimited by comment nodes so
+    // hydration can map the text nodes; the head title interpolates as plain
+    // text.
+    assert.match(rootHtml, /<title data-wizz-head-id="r"[^>]*>Hello friend - wizz\.js<\/title>/);
+    assert.match(rootHtml, /Hello <!-- -->friend<!-- --> Welcome to <!-- -->wizz\.js<!-- -->!/);
+    // The Counter server-renders its persisted default, and showReset={true}
+    // selects the reset branch.
+    assert.match(rootHtml, /Clicks: <!-- -->0<!-- -->\. Persisted clicks: <!-- -->0<!-- -->/);
+    assert.match(rootHtml, /<span class="reset"[^>]*>Reset<\/span>/);
+    // The terminal card ships its markup verbatim.
+    assert.match(rootHtml, /data-cmd="build src dist"/);
     assert.match(rootHtml, /application\/wizz-state/);
+    // The delivered shell keeps the global stylesheet link; the dev server
+    // serves App.css from the project root.
+    assert.match(rootHtml, /<link rel="stylesheet" href="\.\/App\.css">/);
+    const cssResponse = await fetch(`${url}/App.css`);
+    assert.equal(cssResponse.status, 200);
+    assert.match(cssResponse.headers.get('content-type') || '', /text\/css/);
+    assert.match(await cssResponse.text(), /--wizz-accent: #facc15;/);
 
     const homeResponse = await fetch(`${url}/home`);
     assert.match(homeResponse.headers.get('content-type') || '', /text\/html/);
     const homeHtml = await homeResponse.text();
     assert.match(homeHtml, /The Home page/);
+    assert.match(homeHtml, /Back to the start page/);
     assert.match(homeHtml, /application\/wizz-state/);
   } finally {
     await developmentServer.close();
@@ -140,7 +156,7 @@ test('the scaffolded project serves / and /home with SSR state and builds cleanl
     path.join(projectDirectory, 'dist'),
     logger
   );
-  assert.deepEqual(buildResult, { compiledCount: 3, failedCount: 0 });
+  assert.deepEqual(buildResult, { compiledCount: 4, failedCount: 0 });
 
   const manifest = fs.readFileSync(path.join(projectDirectory, 'dist', 'runtime', 'routes.js'), 'utf8');
   assert.match(manifest, /"routePath": "\/"/);
@@ -148,11 +164,19 @@ test('the scaffolded project serves / and /home with SSR state and builds cleanl
   assert.match(manifest, /"serverModulePath": "\.\.\/App\.server\.js"/);
   assert.match(manifest, /"serverModulePath": "\.\.\/pages\/Home\.server\.js"/);
 
-  // Component styles were extracted and linked from the copied shell.
+  // Component styles were extracted and linked from the copied shell. The
+  // showcase App.wizz itself has no scoped style block — it leans on the
+  // global App.css — so only the three styled components contribute.
   const stylesheet = fs.readFileSync(path.join(projectDirectory, 'dist', 'app.css'), 'utf8');
-  assert.match(stylesheet, /\/\* App\.wizz \*\//);
   assert.match(stylesheet, /\/\* pages\/Home\.wizz \*\//);
   assert.match(stylesheet, /\/\* components\/Counter\.wizz \*\//);
+  assert.match(stylesheet, /\/\* components\/Card\.wizz \*\//);
   const shell = fs.readFileSync(path.join(projectDirectory, 'dist', 'index.html'), 'utf8');
   assert.match(shell, /href="\/app\.css"/);
+
+  // The global stylesheet beside the shell is part of the document set: the
+  // build copies it exactly as the dev server does, or the shell's ./App.css
+  // link would 404 in production.
+  const builtAppCss = fs.readFileSync(path.join(projectDirectory, 'dist', 'App.css'), 'utf8');
+  assert.equal(builtAppCss, TEMPLATES['App.css']);
 });
