@@ -1,3 +1,5 @@
+const { CODES, compilerDiagnostic } = require('../diagnostics.js');
+
 // Extracts `export let` prop declarations from component script.
 //
 // Props are the child-side declaration syntax for component inputs:
@@ -126,7 +128,7 @@ function extractProps(scriptContent) {
 
     if (depthBefore[index] > 0) {
       if (letToken && letToken.type === 'identifier' && letToken.value === 'let') {
-        throw new SyntaxError(`'export' is only supported at the top level of a component script${location}.`);
+        throw compilerDiagnostic(CODES.parser.exportNotTopLevel, `'export' is only supported at the top level of a component script${location}.`);
       }
       index += 1;
       continue;
@@ -134,19 +136,19 @@ function extractProps(scriptContent) {
 
     if (!letToken || letToken.type !== 'identifier' || letToken.value !== 'let') {
       const found = letToken ? `'${letToken.value}'` : 'end of script';
-      throw new SyntaxError(`Unsupported export syntax${location}. Only 'export let <name> = <default>;' prop declarations are supported; found 'export ${found}'.`);
+      throw compilerDiagnostic(CODES.parser.unsupportedExportSyntax, `Unsupported export syntax${location}. Only 'export let <name> = <default>;' prop declarations are supported; found 'export ${found}'.`);
     }
 
     const nameIndex = nextSignificantIndex(tokens, letIndex + 1);
     const nameToken = tokens[nameIndex];
     if (!nameToken || nameToken.type !== 'identifier') {
-      throw new SyntaxError(`'export let' requires a prop name${location}.`);
+      throw compilerDiagnostic(CODES.parser.exportLetMissingName, `'export let' requires a prop name${location}.`);
     }
     if (RESERVED_PROP_NAMES.has(nameToken.value)) {
-      throw new SyntaxError(`'${nameToken.value}' cannot be used as a prop name${location}.`);
+      throw compilerDiagnostic(CODES.parser.invalidPropName, `'${nameToken.value}' cannot be used as a prop name${location}.`);
     }
     if (nameToken.value.startsWith('__wizz')) {
-      throw new SyntaxError(`'${nameToken.value}' uses the reserved '__wizz' framework prefix${location}.`);
+      throw compilerDiagnostic(CODES.parser.reservedPropPrefix, `'${nameToken.value}' uses the reserved '__wizz' framework prefix${location}.`);
     }
 
     const valueIndex = nextSignificantIndex(tokens, nameIndex + 1);
@@ -160,7 +162,7 @@ function extractProps(scriptContent) {
       statementEndIndex = valueIndex;
     } else if (valueToken && valueToken.type === 'punctuator' && valueToken.value === '=') {
       if (firstValueIndex >= tokens.length) {
-        throw new SyntaxError(`Prop '${nameToken.value}' is missing a value after '='${location}.`);
+        throw compilerDiagnostic(CODES.parser.propMissingValue, `Prop '${nameToken.value}' is missing a value after '='${location}.`);
       }
       // The default expression runs to the first `;` back at the export's own
       // nesting depth; strings, templates, and nested brackets cannot hide it.
@@ -179,10 +181,10 @@ function extractProps(scriptContent) {
         // of silently absorbing the following code into the default.
         if (atStatementDepth && previous && completesOperand(previous)) {
           if (candidate.type === 'identifier' && candidate.value !== 'in' && candidate.value !== 'instanceof') {
-            throw new SyntaxError(`Prop declaration for '${nameToken.value}' must end with a semicolon${sourceLocation(scriptContent, candidate.start)}.`);
+            throw compilerDiagnostic(CODES.parser.propMissingSemicolon, `Prop declaration for '${nameToken.value}' must end with a semicolon${sourceLocation(scriptContent, candidate.start)}.`);
           }
           if (candidate.type === 'punctuator' && candidate.value === ',') {
-            throw new SyntaxError(`Declare one prop per 'export let' statement${sourceLocation(scriptContent, candidate.start)}.`);
+            throw compilerDiagnostic(CODES.parser.onePropPerExportLet, `Declare one prop per 'export let' statement${sourceLocation(scriptContent, candidate.start)}.`);
           }
         }
 
@@ -194,27 +196,27 @@ function extractProps(scriptContent) {
         previous = candidate;
       }
       if (end === -1) {
-        throw new SyntaxError(`Prop declaration for '${nameToken.value}' must end with a semicolon${location}.`);
+        throw compilerDiagnostic(CODES.parser.propMissingSemicolon, `Prop declaration for '${nameToken.value}' must end with a semicolon${location}.`);
       }
       defaultValue = scriptContent.slice(tokens[firstValueIndex].start, tokens[end].start).trim();
       if (!defaultValue) {
-        throw new SyntaxError(`Prop '${nameToken.value}' is missing a value after '='${location}.`);
+        throw compilerDiagnostic(CODES.parser.propMissingValue, `Prop '${nameToken.value}' is missing a value after '='${location}.`);
       }
       if (/^persist\s*\(/.test(defaultValue)) {
         // persist() is a compile-time marker for component-owned persistent
         // state. A prop is parent-owned and re-applied through setProps, so
         // a persisted prop has no owner for its storage writes.
-        throw new SyntaxError(`persist() cannot initialize the prop '${nameToken.value}'; props are parent-owned. Declare it as component state with 'let' instead${sourceLocation(scriptContent, tokens[firstValueIndex].start)}.`);
+        throw compilerDiagnostic(CODES.parser.persistOnProp, `persist() cannot initialize the prop '${nameToken.value}'; props are parent-owned. Declare it as component state with 'let' instead${sourceLocation(scriptContent, tokens[firstValueIndex].start)}.`);
       }
       statementEndIndex = end;
     } else if (valueToken && valueToken.type === 'punctuator' && valueToken.value === ',') {
-      throw new SyntaxError(`Declare one prop per 'export let' statement${location}.`);
+      throw compilerDiagnostic(CODES.parser.onePropPerExportLet, `Declare one prop per 'export let' statement${location}.`);
     } else {
-      throw new SyntaxError(`Invalid prop declaration for '${nameToken.value}'${location}. Expected '=' or ';'.`);
+      throw compilerDiagnostic(CODES.parser.invalidPropDeclaration, `Invalid prop declaration for '${nameToken.value}'${location}. Expected '=' or ';'.`);
     }
 
     if (seenPropNames.has(nameToken.value)) {
-      throw new SyntaxError(`Prop '${nameToken.value}' is declared more than once${location}.`);
+      throw compilerDiagnostic(CODES.parser.duplicateProp, `Prop '${nameToken.value}' is declared more than once${location}.`);
     }
     seenPropNames.add(nameToken.value);
 

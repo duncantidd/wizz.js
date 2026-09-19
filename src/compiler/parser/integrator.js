@@ -1,5 +1,6 @@
 const { lexExpression } = require('./expressionLexer.js');
 const { parseExpression } = require('./prattParser.js');
+const { CODES, compilerDiagnostic } = require('../diagnostics.js');
 
 /**
  * Recursively walks the Template AST and parses the raw strings inside 'Expression' nodes.
@@ -34,7 +35,7 @@ function integrateExpressions(node) {
         ? error.message.replace(/ at \d+:\d+\.?$/, '')
         : error.message;
 
-      throw new SyntaxError(`Template Expression Error at ${line}:${column} - ${message}`);
+      throw compilerDiagnostic(CODES.parser.templateExpressionError, `Template Expression Error at ${line}:${column} - ${message}`);
     }
   }
 
@@ -44,7 +45,7 @@ function integrateExpressions(node) {
       try {
         attribute.expressionAST = parseExpression(lexExpression(attribute.value));
       } catch (error) {
-        throw new SyntaxError(`Dynamic attribute '${attribute.name}' must contain a supported expression.`);
+        throw compilerDiagnostic(CODES.parser.dynamicAttributeMissingExpression, `Dynamic attribute '${attribute.name}' must contain a supported expression.`);
       }
     }
   }
@@ -53,7 +54,7 @@ function integrateExpressions(node) {
     try {
       node.testAST = parseExpression(lexExpression(node.test));
     } catch {
-      throw new SyntaxError('Conditional expression must contain a supported expression.');
+      throw compilerDiagnostic(CODES.parser.conditionalExpressionMissing, 'Conditional expression must contain a supported expression.');
     }
     node.consequent.forEach(integrateExpressions);
     node.alternate?.forEach(integrateExpressions);

@@ -1,4 +1,5 @@
 const { CodeBuilder } = require('./codeBuilder');
+const { CODES, compilerDiagnostic } = require('../diagnostics.js');
 const { generateCreateFunction, collectComponentRefNames } = require('./domGenerator');
 const { generateUpdateFunction } = require('./updateGenerator');
 const { interceptAssignments, findReactiveMutations } = require('./assignmentInterceptor');
@@ -297,7 +298,7 @@ function generateComponent(astPayload, options = {}) {
     const propMutations = findReactiveMutations(astPayload.rawScript, props.map((prop) => prop.name));
     if (propMutations.length > 0) {
       const first = propMutations[0];
-      throw new SyntaxError(`Props are read-only: '${first.name}' cannot be assigned inside the component at ${first.line}:${first.column}.`);
+      throw compilerDiagnostic(CODES.generator.propAssignment, `Props are read-only: '${first.name}' cannot be assigned inside the component at ${first.line}:${first.column}.`);
     }
   }
 
@@ -594,7 +595,7 @@ function generateComponent(astPayload, options = {}) {
           segments.push(`String(${child.value})`);
           continue;
         }
-        throw new SyntaxError(`<${child.name}> is not allowed inside <title> at ${child.loc?.start?.line ?? '?'}:${child.loc?.start?.column ?? '?'}.`);
+        throw compilerDiagnostic(CODES.generator.titleDisallowedChild, `<${child.name}> is not allowed inside <title> at ${child.loc?.start?.line ?? '?'}:${child.loc?.start?.column ?? '?'}.`);
       }
       if (pendingText !== '') segments.push(JSON.stringify(pendingText));
       builder.add(`${nodeRef}.textContent = ${segments.length === 0 ? "''" : segments.join(' + ')};`);

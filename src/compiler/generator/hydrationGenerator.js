@@ -1,5 +1,6 @@
 // src/compiler/generator/hydrationGenerator.js
 const { CodeBuilder } = require('./codeBuilder');
+const { CODES, compilerDiagnostic } = require('../diagnostics.js');
 const { buildComponentPropsSource } = require('./domGenerator');
 
 // Attributes the browser target assigns as properties rather than attributes.
@@ -62,7 +63,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
 
   const rootNode = templateAST.children.find(node => node.type === 'Element');
   if (!rootNode) {
-    throw new SyntaxError('Component template must contain a root element.');
+    throw compilerDiagnostic(CODES.generator.missingRootElement, 'Component template must contain a root element.');
   }
 
   const importedNames = new Set(componentImports.map((component) => component.name));
@@ -189,7 +190,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
               segments.push(`String(${grandChild.value})`);
               continue;
             }
-            throw new SyntaxError(`<${grandChild.name}> is not allowed inside <title> at ${grandChild.loc?.start?.line ?? '?'}:${grandChild.loc?.start?.column ?? '?'}.`);
+            throw compilerDiagnostic(CODES.generator.titleDisallowedChild, `<${grandChild.name}> is not allowed inside <title> at ${grandChild.loc?.start?.line ?? '?'}:${grandChild.loc?.start?.column ?? '?'}.`);
           }
           if (pendingText !== '') segments.push(JSON.stringify(pendingText));
           parts.push(`text: ${segments.length === 0 ? "''" : segments.join(' + ')}`);
@@ -335,7 +336,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
   // failing this parent. Adoption itself runs after the whole walk passes.
   function emitComponentChild(componentNode, parentRef, cursorRef) {
     if (componentNode.componentId == null) {
-      throw new SyntaxError(`Component <${componentNode.name}> is missing its componentId; run the analyzer before generation.`);
+      throw compilerDiagnostic(CODES.generator.missingComponentId, `Component <${componentNode.name}> is missing its componentId; run the analyzer before generation.`);
     }
     // The ref was pre-allocated at function scope (see componentRefs above);
     // here it is only assigned at the tag's child position.
@@ -439,7 +440,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
         }
         // The renderable gate rejects every other node type inside each
         // bodies before a hydratable module is generated.
-        throw new SyntaxError(`Hydration does not support ${child.type} nodes inside each blocks.`);
+        throw compilerDiagnostic(CODES.generator.hydrationEachUnsupportedNode, `Hydration does not support ${child.type} nodes inside each blocks.`);
       });
     };
     walkItemNode(itemRoot, rootVar);
@@ -601,7 +602,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
         emitEachBlock(child, parentRef, cursorRef);
         return;
       }
-      throw new SyntaxError(`Hydration does not support ${child.type} nodes.`);
+      throw compilerDiagnostic(CODES.generator.hydrationUnsupportedNode, `Hydration does not support ${child.type} nodes.`);
     };
 
     children.forEach(emitFlattenedChild);

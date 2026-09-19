@@ -1,3 +1,5 @@
+const { CODES, compilerDiagnostic } = require('../diagnostics.js');
+
 function lexExpression(input) {
   if (typeof input !== 'string') {
     throw new TypeError('Expression input must be a string.');
@@ -61,7 +63,7 @@ function lexExpression(input) {
         value += input[current];
         advance();
       }
-      if (input[current] !== quote) throw new SyntaxError(`Unclosed string at ${line}:${column}.`);
+      if (input[current] !== quote) throw compilerDiagnostic(CODES.parser.unclosedExpressionString, `Unclosed string at ${line}:${column}.`);
       advance();
       emit('String', value, start);
       continue;
@@ -81,7 +83,7 @@ function lexExpression(input) {
       continue;
     }
 
-    throw new SyntaxError(`Unexpected character '${char}' at ${line}:${column}.`);
+    throw compilerDiagnostic(CODES.parser.unexpectedExpressionCharacter, `Unexpected character '${char}' at ${line}:${column}.`);
   }
 
   emit('EOF', undefined, position());
