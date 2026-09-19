@@ -7,7 +7,10 @@ set -euo pipefail
 
 # Overridable for testing the latest-release failure paths (WIZZ_INSTALL_REPOSITORY).
 repository="${WIZZ_INSTALL_REPOSITORY:-duncantidd/wizz.js}"
-source_directory=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+# The $0 fallback keeps piped invocations (curl ... | bash) working: stdin
+# scripts have no BASH_SOURCE, and under `set -u` referencing it would abort.
+# source_directory only matters for --local installs from a working tree.
+source_directory=$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." 2>/dev/null && pwd) || source_directory=$(pwd)
 data_directory="${XDG_DATA_HOME:-$HOME/.local/share}/wizz"
 bin_directory="${XDG_BIN_HOME:-$HOME/.local/bin}"
 data_parent=$(dirname "$data_directory")
