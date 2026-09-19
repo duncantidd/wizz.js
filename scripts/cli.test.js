@@ -43,6 +43,31 @@ test('rejects unknown commands and incomplete command arguments', () => {
   assert.throws(() => parseCommand(['preview']), /wizz dev/);
   assert.throws(() => parseCommand(['build', 'src']), /both <input-directory> and <output-directory>/);
   assert.throws(() => parseCommand(['dev', '--port', '3001']), /Dev does not accept arguments/);
+  assert.throws(() => parseCommand(['init', 'a', 'b']), /Init accepts at most one \[directory\]/);
+  assert.throws(() => parseCommand(['--version', 'extra']), /Version does not accept arguments/);
+});
+
+test('parses the init command with its directory and --force flag', () => {
+  assert.deepEqual(parseCommand(['init']), { command: 'init', argumentsList: [], json: false, force: false });
+  assert.deepEqual(parseCommand(['init', 'my-app']), { command: 'init', argumentsList: ['my-app'], json: false, force: false });
+  assert.deepEqual(parseCommand(['init', 'my-app', '--force']), { command: 'init', argumentsList: ['my-app'], json: false, force: true });
+  assert.deepEqual(parseCommand(['init', '--force', 'my-app']), { command: 'init', argumentsList: ['my-app'], json: false, force: true });
+});
+
+test('the version command prints the compiler and contract version triple', () => {
+  const lines = [];
+  const logger = { log: (message) => lines.push(message), error() {} };
+
+  assert.equal(runCli(['--version'], { logger }), 0);
+  assert.equal(lines.length, 1);
+  assert.match(
+    lines[0],
+    /^wizz \d+\.\d+\.\d+ \(compiler \d+\.\d+\.\d+, syntax \d+\.\d+\.\d+, output \d+\.\d+\.\d+\)$/
+  );
+
+  lines.length = 0;
+  assert.equal(runCli(['version'], { logger }), 0);
+  assert.equal(lines.length, 1);
 });
 
 test('uses src and dist defaults for build', () => {
@@ -201,4 +226,32 @@ test('prints a clean envelope and exits zero for a successful json build', (t) =
   assert.deepEqual(envelope.diagnostics, []);
   assert.deepEqual(envelope.files, [{ file: 'App.wizz', serverRenderable: true }]);
   assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'App.js')), true);
+});
+
+test('e2e: init scaffolds, serves the version triple, refuses re-init, and builds cleanly', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  const cli = path.join(projectRoot, 'scripts', 'cli.js');
+
+  const initResult = spawnSync(process.execPath, [cli, 'init', '.'], { cwd: projectDirectory, encoding: 'utf8' });
+  assert.equal(initResult.status, 0, initResult.stderr);
+  assert.match(initResult.stdout, /Created index\.html/);
+  assert.match(initResult.stdout, /Created src\/App\.wizz/);
+  assert.match(initResult.stdout, /Created src\/pages\/Home\.wizz/);
+  assert.match(initResult.stdout, /Created src\/components\/Counter\.wizz/);
+  assert.match(initResult.stdout, /Next: run `wizz dev` to start editing\./);
+
+  // Scaffolded projects are never overwritten, even in-place.
+  const reinit = spawnSync(process.execPath, [cli, 'init', '--force'], { cwd: projectDirectory, encoding: 'utf8' });
+  assert.equal(reinit.status, 1);
+  assert.match(reinit.stderr, /Refusing to overwrite existing file\(s\): index\.html/);
+
+  const versionResult = spawnSync(process.execPath, [cli, '--version'], { cwd: projectDirectory, encoding: 'utf8' });
+  assert.equal(versionResult.status, 0, versionResult.stderr);
+  assert.match(versionResult.stdout, /^wizz \d+\.\d+\.\d+ \(compiler \d+\.\d+\.\d+, syntax \d+\.\d+\.\d+, output \d+\.\d+\.\d+\)$/m);
+
+  const buildResult = spawnSync(process.execPath, [cli, 'build'], { cwd: projectDirectory, encoding: 'utf8' });
+  assert.equal(buildResult.status, 0, buildResult.stderr);
+  assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'App.js')), true);
+  assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'pages', 'Home.js')), true);
 });

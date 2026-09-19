@@ -63,7 +63,9 @@ if [ "$install_mode" = "local" ]; then
   cp "$source_directory/build.js" "$staging_directory/"
   cp -R "$source_directory/src" "$staging_directory/src"
   mkdir -p "$staging_directory/scripts"
-  cp "$source_directory/scripts/cli.js" "$source_directory/scripts/dev.js" "$staging_directory/scripts/"
+  cp "$source_directory/scripts/cli.js" "$source_directory/scripts/dev.js" \
+     "$source_directory/scripts/init.js" "$source_directory/scripts/initTemplates.js" \
+     "$staging_directory/scripts/"
 else
   if ! command -v curl >/dev/null 2>&1; then
     printf 'Downloading a release tarball requires curl. Install curl, or pass a local tarball path.\n' >&2

@@ -35,6 +35,8 @@
     "src/compiler/",
     "src/runtime/",
     "!src/compiler/**/*.test.js",
+    "scripts/init.js",
+    "scripts/initTemplates.js",
     "scripts/cli.js",
     "scripts/dev.js",
     "scripts/ssr-demo.js",
