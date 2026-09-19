@@ -5,7 +5,8 @@
 # tree. The installed tree is self-contained: nothing registers with npm.
 set -euo pipefail
 
-repository="duncantidd/wizz.js"
+# Overridable for testing the latest-release failure paths (WIZZ_INSTALL_REPOSITORY).
+repository="${WIZZ_INSTALL_REPOSITORY:-duncantidd/wizz.js}"
 source_directory=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 data_directory="${XDG_DATA_HOME:-$HOME/.local/share}/wizz"
 bin_directory="${XDG_BIN_HOME:-$HOME/.local/bin}"
@@ -78,11 +79,24 @@ else
 
   if [ "$install_mode" = "latest" ]; then
     printf 'Resolving the latest Wizz release from GitHub...\n'
-    asset_url=$(curl -fsSL "https://api.github.com/repos/$repository/releases/latest" | node -e '
+    # curl -f delivers no body on a 4xx, so the lookup failure must be caught
+    # here rather than left to crash the JSON parser below.
+    if ! api_response=$(curl -fsSL "https://api.github.com/repos/$repository/releases/latest"); then
+      printf 'Could not resolve the latest Wizz release from https://api.github.com/repos/%s.\n' "$repository" >&2
+      printf 'The repository may be private or have no published releases yet; pass a release tarball path or URL, or run with --local.\n' >&2
+      exit 1
+    fi
+    asset_url=$(printf '%s' "$api_response" | node -e '
       let payload = "";
       process.stdin.on("data", (chunk) => { payload += chunk; });
       process.stdin.on("end", () => {
-        const release = JSON.parse(payload);
+        let release;
+        try {
+          release = JSON.parse(payload);
+        } catch {
+          console.error("The GitHub API returned a response that is not valid JSON.");
+          process.exit(1);
+        }
         if (release.message) {
           console.error("GitHub API error: " + release.message);
           process.exit(1);
@@ -106,7 +120,10 @@ else
   fi
 
   if [ -n "${asset_url:-}" ]; then
-    curl -fsSL "$asset_url" -o "$staging_directory/wizz.tgz"
+    if ! curl -fsSL "$asset_url" -o "$staging_directory/wizz.tgz"; then
+      printf 'Could not download the release tarball from %s.\n' "$asset_url" >&2
+      exit 1
+    fi
   fi
 
   tar -xzf "$staging_directory/wizz.tgz" -C "$staging_directory"

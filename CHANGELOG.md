@@ -27,6 +27,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Compiler version 1.8.3 → 1.9.0: the stable codes, structured locations, collect option, and JSON envelope are an additive diagnostics contract — accepted component syntax and generated output are unchanged, so syntax holds at 1.4.1 and output holds at 1.8.2. `package.json` stays in lockstep and the generator-banner fixture test is synced to the new banner string (`src/compiler/version.js`, `src/compiler/generator/componentGenerator.test.js`).
 - The managed installer's copy list and the release tarball whitelist now ship `scripts/init.js` and `scripts/initTemplates.js`, so an installed `wizz` launcher supports init (`scripts/install-cli.sh`, `package.json`, `packaging.test.js`).
 
+#### Fixed
+
+- The installer's default `--latest` mode crashed with a raw `JSON.parse` stack trace when the GitHub API returned an error (e.g. the repository is private or has no published releases): `curl -f` delivers no body on a 4xx, and the script piped it into `JSON.parse` without checking curl's exit status. The lookup failure and the tarball download now fail with explicit guidance — the repository may be private or have no releases yet, and `--local` or an explicit tarball path are the alternatives. The release repository can be overridden via `WIZZ_INSTALL_REPOSITORY` for testing the failure paths (`scripts/install-cli.sh`).
+
 #### Docs
 
 - ROADMAP §19 is marked complete with implementation notes and the version-impact assessment; `STRUCTURE.md` gains `diagnostics.js`, `init.js`, and `initTemplates.js` plus the new CLI surfaces; the README documents `wizz init`, `wizz --version`, and the `wizz build --json` envelope; `src/compiler/README.md` documents the codes catalog, structured locations, and collect mode (its stale 1.7.0 version examples synced to 1.9.0); this changelog gains the milestone section.

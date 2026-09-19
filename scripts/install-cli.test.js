@@ -158,3 +158,42 @@ test('a foreign tarball without a Wizz package fails loudly', (t) => {
   assert.match(rejected.stderr, /does not contain a Wizz package/);
   assert.equal(fs.existsSync(installedDataDirectory(home)), false);
 });
+
+test('a 404 from the latest-release lookup fails with guidance, not a parser crash', (t) => {
+  if (skipInstallerTests) { t.skip('bash-based installer test'); return; }
+  // The failure path needs the GitHub API to answer a request at all; without
+  // connectivity the friendly-message guarantee is untestable.
+  const reachable = spawnSync('curl', ['-fsSL', '-m', '5', 'https://api.github.com'], { encoding: 'utf8' });
+  if (reachable.status !== 0) { t.skip('the GitHub API is unreachable'); return; }
+  const home = createHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+
+  // A repository name that cannot exist reproduces the private-repo/404
+  // failure the installer must survive: guidance on stderr, no JSON.parse
+  // stack trace, and nothing installed.
+  const refused = spawnSync('bash', [installer, '--latest'], {
+    encoding: 'utf8',
+    env: { ...installEnvironment(home), WIZZ_INSTALL_REPOSITORY: 'duncantidd/wizz-installer-test-absent-repo' }
+  });
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /Could not resolve the latest Wizz release/);
+  assert.match(refused.stderr, /private or have no published releases yet/);
+  assert.doesNotMatch(refused.stderr, /SyntaxError|Unexpected end of JSON/);
+  assert.equal(fs.existsSync(installedDataDirectory(home)), false);
+});
+
+test('a failing release-tarball download fails with guidance', (t) => {
+  if (skipInstallerTests) { t.skip('bash-based installer test'); return; }
+  const home = createHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+
+  // The reserved .invalid TLD never resolves, so this fails deterministically
+  // whether or not the machine is online.
+  const refused = spawnSync('bash', [installer, 'https://wizz-installer-test.invalid/wizz.tgz'], {
+    encoding: 'utf8',
+    env: installEnvironment(home)
+  });
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /Could not download the release tarball/);
+  assert.equal(fs.existsSync(installedDataDirectory(home)), false);
+});
