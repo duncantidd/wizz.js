@@ -1,5 +1,0 @@
-<script>
-    export let name = 'Test';
-</script>
-
-<p>{name}</p>

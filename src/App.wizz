@@ -1,17 +1,34 @@
 <script>
   import Counter from "./components/Counter.wizz";
+  import Card from "./components/Card.wizz";
   const frameworkName = "wizz.js";
-  
-  let params = new URLSearchParams(document.location.search);
-  let name = params.get("name");
 
-  if (!name) {
-    name = "friend";
-  }
+  let name = "friend";
+  let description = "The zero-dependency compiled component framework";
+
+  // The query string is only readable in the browser: keep the read behind a
+  // lifecycle hook so the server render produces the "friend" default and the
+  // reactivity engine applies the real value after hydration.
+  onMount(() => {
+    const params = new URLSearchParams(document.location.search);
+    const visitor = params.get("name");
+    if (visitor) {
+      name = visitor;
+      // Reactive head updates are out of scope for milestone 15: the meta
+      // keeps its server-rendered description after hydration.
+      description = "A greeting, customized";
+    }
+  });
 </script>
+
+<wizz:head>
+  <title>Hello {name} - {frameworkName}</title>
+  <meta name="description" content={description}>
+</wizz:head>
 
 <main>
   <h1>Hello {name} Welcome to {frameworkName}!</h1>
   <p>Zero dependencies. 100% compiled.</p>
-  <Counter />
+  <Counter showReset={true} />
+  <Card />
 </main>

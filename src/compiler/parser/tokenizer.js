@@ -13,7 +13,8 @@ const STATES = {
   EXPRESSION: 'EXPRESSION',
   EXPRESSION_STRING: 'EXPRESSION_STRING',
   EXPRESSION_ESCAPE: 'EXPRESSION_ESCAPE',
-  SCRIPT: 'SCRIPT'
+  SCRIPT: 'SCRIPT',
+  STYLE: 'STYLE'
 };
 
 const isWhitespace = (char) => /\s/.test(char);
@@ -39,6 +40,11 @@ function tokenize(input) {
   let quote = null;
   let expressionDepth = 0;
   let tagLocation = null;
+  // Raw-text elements (`script`, `wizz:style`, and a plain `style`, whose
+  // content the template parser rejects) scan their entire body as one Text
+  // token — CSS braces, colons, and quotes must never reach the template
+  // expression lexer. The variable remembers which end tag exits the mode.
+  let rawTextCloseTag = null;
   const tokens = [];
 
   const position = () => ({ offset: current, line, column });
@@ -92,6 +98,23 @@ function tokenize(input) {
     attributeValue = null;
     attributeIsDynamic = false;
   };
+  // Raw-text entry, shared by every open-tag emission site so `<script
+  // defer>`-style boolean-attribute tags enter raw text too. `wizz:style` is
+  // the scoped-styles block; a plain `style` is raw-texted as well so its
+  // content survives intact for the template parser's rejection diagnostic
+  // instead of exploding on CSS braces in the expression lexer.
+  const enterRawText = (name) => {
+    if (name === 'script') {
+      rawTextCloseTag = '</script>';
+      return STATES.SCRIPT;
+    }
+    if (name === 'wizz:style' || name === 'style') {
+      rawTextCloseTag = `</${name}>`;
+      return STATES.STYLE;
+    }
+    rawTextCloseTag = null;
+    return STATES.TEXT;
+  };
 
   while (current < input.length) {
     const char = input[current];
@@ -136,7 +159,7 @@ function tokenize(input) {
           advance(char);
           emitTag('OpenTag');
           textStart = current;
-          state = tagName === 'script' ? STATES.SCRIPT : STATES.TEXT;
+          state = enterRawText(tagName);
           continue;
         } else if (char === '/') state = STATES.SELF_CLOSING_START_TAG;
         else fail(`Unexpected '${char}' in tag name`);
@@ -148,7 +171,7 @@ function tokenize(input) {
           advance(char);
           emitTag('OpenTag');
           textStart = current;
-          state = tagName === 'script' ? STATES.SCRIPT : STATES.TEXT;
+          state = enterRawText(tagName);
           continue;
         }
         if (char === '/') state = STATES.SELF_CLOSING_START_TAG;
@@ -169,7 +192,7 @@ function tokenize(input) {
           advance(char);
           emitTag('OpenTag');
           textStart = current;
-          state = STATES.TEXT;
+          state = enterRawText(tagName);
           continue;
         } else if (char === '/') {
           commitAttribute();
@@ -221,7 +244,7 @@ function tokenize(input) {
           advance(char);
           emitTag('OpenTag');
           textStart = current;
-          state = tagName === 'script' ? STATES.SCRIPT : STATES.TEXT;
+          state = enterRawText(tagName);
           continue;
         } else if (char === '/') state = STATES.SELF_CLOSING_START_TAG;
         else fail(`Expected whitespace or '>' after attribute value, found '${char}'`);
@@ -281,7 +304,8 @@ function tokenize(input) {
         break;
 
       case STATES.SCRIPT:
-        if (input.startsWith('</script>', current)) {
+      case STATES.STYLE:
+        if (input.startsWith(rawTextCloseTag, current)) {
           emitText();
           tokenStart = current;
           tagLocation = position();

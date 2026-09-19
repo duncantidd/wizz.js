@@ -604,26 +604,42 @@ function lineAndColumn(source, offset) {
 /**
  * Rewrites reactive mutations in component script source so they notify the
  * component update dispatcher, inserting `queueUpdate({ name: true })` after
- * each detected statement. See scanReactiveMutations() for the detection
- * contract; valid source is never corrupted because unconfident extents pass
- * through untransformed.
+ * each detected statement. Persistent state additionally writes its new
+ * value through the runtime persistence helper at the same moment, so the
+ * storage write and cross-tab broadcast ride exactly the mutations that
+ * already rerender. See scanReactiveMutations() for the detection contract;
+ * valid source is never corrupted because unconfident extents pass through
+ * untransformed.
  * @param {string} rawScript - The raw JavaScript string from the <script> block.
  * @param {Array<string>} reactiveVars - Reactive variable names.
+ * @param {Array<{ name: string, storageKey: string }>} [persistentVars] -
+ *   Persistent declarations, mapping the variable name to its storage key.
  * @returns {string} The rewritten JavaScript string.
  */
-function interceptAssignments(rawScript, reactiveVars) {
+function interceptAssignments(rawScript, reactiveVars, persistentVars) {
   if (!rawScript || !Array.isArray(reactiveVars) || reactiveVars.length === 0) return rawScript;
+
+  const persistentKeys = new Map();
+  for (const persistent of persistentVars || []) {
+    persistentKeys.set(persistent.name, persistent.storageKey);
+  }
 
   const mutations = scanReactiveMutations(rawScript, new Set(reactiveVars));
   if (mutations.length === 0) return rawScript;
 
   let output = rawScript;
-  const insertions = mutations.map((mutation) => ({
-    at: mutation.insertAt,
-    text: mutation.semicolonTerminated
-      ? ` queueUpdate({ ${mutation.name}: true });`
-      : `; queueUpdate({ ${mutation.name}: true });`
-  }));
+  const insertions = mutations.map((mutation) => {
+    const storageKey = persistentKeys.get(mutation.name);
+    const persistWrite = storageKey === undefined
+      ? ''
+      : ` __wizzPersistWrite(${JSON.stringify(storageKey)}, ${mutation.name});`;
+    return {
+      at: mutation.insertAt,
+      text: mutation.semicolonTerminated
+        ? ` queueUpdate({ ${mutation.name}: true });${persistWrite}`
+        : `; queueUpdate({ ${mutation.name}: true });${persistWrite}`
+    };
+  });
   insertions.sort((left, right) => right.at - left.at);
   for (const insertion of insertions) {
     output = output.slice(0, insertion.at) + insertion.text + output.slice(insertion.at);

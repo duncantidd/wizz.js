@@ -11,5 +11,14 @@ const routes = Object.fromEntries(
   pageModules.map(({ routePath, modulePath }) => [routePath, () => import(modulePath)])
 );
 
-const router = createRouter({ routes, target, window, document });
+// Server-renderable pages ship a hydratable client build; the router uses it
+// on the first render to adopt the markup the dev server delivered instead
+// of mounting a second root beside it.
+const hydratableRoutes = Object.fromEntries(
+  pageModules
+    .filter(({ hydratableModulePath }) => hydratableModulePath)
+    .map(({ routePath, hydratableModulePath }) => [routePath, () => import(hydratableModulePath)])
+);
+
+const router = createRouter({ routes, hydratableRoutes, target, window, document });
 void router.render();

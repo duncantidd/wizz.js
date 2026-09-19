@@ -2,17 +2,19 @@
 
 ## TL;DR
 
-This directory is the public composition layer for the Wizz compiler. Most callers should use `compile()` rather than invoking parser, analyzer, and generator modules individually.
+This directory is the public composition layer for the Wizz compiler. Most callers should use `compile()` or `compileServer()` rather than invoking parser, analyzer, and generator modules individually.
 
 ```js
-const { compile } = require('./src/compiler');
+const { compile, compileServer } = require('./src/compiler');
 
 const { source, payload, sourceMap, version } = compile(componentSource, {
   filePath: 'src/pages/Home.wizz'
 });
+
+const serverResult = compileServer(componentSource, { filePath: 'src/pages/Home.wizz' });
 ```
 
-`source` is a mountable ES module string. `payload` is the final parser and analyzer handoff used to generate it. `sourceMap` is an optional v3 source map for copied author script lines. `version` is the frozen compatibility contract the component was compiled with (see [Compatibility and Versioning](#compatibility-and-versioning)).
+`source` is a mountable ES module string. `payload` is the final parser and analyzer handoff used to generate it. `sourceMap` is an optional v3 source map for copied author script lines. `version` is the frozen compatibility contract the component was compiled with (see [Compatibility and Versioning](#compatibility-and-versioning)). `compileServer()` returns the same shape with `sourceMap: null` and a server-rendering module instead (see [Server Rendering](#server-rendering)).
 
 The compiler runs each stage in its required order:
 
@@ -49,11 +51,45 @@ The returned payload has the shape established by the parser and enriched by the
 {
   template: { /* parsed template AST with dependency and ID metadata */ },
   script: [ /* recognized declaration metadata */ ],
-  rawScript: 'let count = 0;'
+  rawScript: 'let count = 0;',
+  style: null | { css: '<raw wizz:style CSS>', scope: 's1ab2c3', loc: { /* block location */ } }
 }
 ```
 
 The analyzer and ID assigner mutate this payload in place before it is returned. Consumers that only need compiled output should rely on `result.source`; `payload` is exposed for testing and compiler tooling.
+
+`compile()` accepts one additional option: `hydratable: true` restricts the component to the statically renderable surface (see [Server Rendering](#server-rendering)) and makes the generated module additionally export `hydrateComponent(target, props, state)` and `hydrateRoot(rootNode, props, state)`, which adopt markup delivered by the server target instead of recreating it. Without the flag, generation is unchanged.
+
+## Server Rendering
+
+`compileServer(source, options)` shares the parse → analyze → assign pipeline but emits a DOM-free server module:
+
+```js
+const { source } = compileServer(
+  '<script>let count = 0;</script><p>Count: {count}</p>',
+  { filePath: 'src/components/Counter.wizz' }
+);
+
+// The module exports:
+//   renderComponent(props = {}, options = {}) -> { html, head, state }
+//   serializeInitialState(state) -> '<script type="application/wizz-state">…</script>'
+// `head` exists only when the component (or a rendered child) declares
+// <wizz:head>; head-free pages return exactly { html, state }.
+```
+
+The server-renderable surface covers everything with a deterministic initial rendering: the root element, static markup, text interpolations, dynamic attributes, top-level props, the initially-taken `{#if}` branch, `{#each}` lists (each bodies keep the browser target's restrictions: exactly one root element, no components, no `on:` directives), and imported component tags. Because a component tag's renderability depends on the child's own template, the compile consults two gate options: `componentServerRenderable` maps import names to `true` when that child's own server pipeline compiles (a missing entry conservatively rejects the tag), and `componentIneligibilityReasons` maps import names to the child's own failure so the thrown diagnostic chains the deepest blocking construct (`Underlying reason: …`). Remaining rejections — void elements with children, reactive names matching `__proto__` or the reserved `__wizz` prefix, malformed `on:` directives — carry located diagnostics. The author's top-level script runs verbatim and trusted on both targets; event handlers and lifecycle hooks are client-only, and author scripts that read browser globals fail `renderComponent()` at runtime (the caller's fallback applies).
+
+Component tags render recursively: the server module namespace-imports each rendered child's `.server.js` build and calls its `renderComponent()` with the evaluated props at the tag position; the child's state snapshot rides under the framework-reserved `__wizz` key (`state.__wizz.components["<componentId>"]`, emitted only when the template contains component tags — a static presence check, so a tag in an untaken branch still emits it).
+
+## Document Head
+
+A component can declare one top-level `<wizz:head>` block containing only `<title>`, `<meta>`, and `<link>` (anything else fails compilation with a located, file-aware diagnostic; the block is pruned from the template AST so it never renders into body markup). Expressions inside head reuse the body machinery: `<title>{title}</title>` text and dynamic attribute values evaluate at render time server-side and at mount time client-side; `on:` directives are skipped.
+
+On the server, `renderComponent()` gains the additive `head` field — the component's head markup followed by each rendered child's head in tree order, every node tagged `data-wizz-head-id="<ownerPath>"` (page `'r'`, child `'r/<componentId>'`) and `data-wizz-loc="<file>:<line>:<col>"` when the compile carries `filePath`. On the client, `mountComponent` builds and prepends head nodes to `document.head` (tagged `data-wizz-head`), `destroy` releases them, and hydration verifies the delivered head against compile-time expectations before adopting it in place — mismatch falls back to a fresh mount exactly like the body tree. Multiple `<title>` declarations resolve last-in-tree-wins with one development warning naming both locations; `<meta>`/`<link>` concatenate. Reactive head updates are deliberately out of scope — head follows navigation, not state changes.
+
+Escaping and delivery boundaries: text output escapes `&`, `<`, `>`; attribute values additionally escape `"`. Adjacent text-like children carry `<!-- -->` markers so browser parsing preserves the positional node layout client updates target. State serializes through `serializeInitialState()` with every `<` escaped; the delivery script is a sibling of the mount point, never a child.
+
+**No source map for server output.** Server modules render HTML strings at request time; there is no generated DOM artifact whose positions could map back to the template. `compileServer()` therefore always returns `sourceMap: null`, including for file-backed compiles. Error augmentation with `filePath` works exactly as for `compile()`.
 
 ## Source Maps
 
@@ -99,15 +135,15 @@ The optional `options` value is normalized defensively. Omitting it, passing `nu
 
 ```js
 {
-  compiler: '1.2.1', // The compiler itself
-  syntax: '1.1.0',   // The component language contract
-  output: '1.2.1'    // The generated module contract
+  compiler: '1.7.0', // The compiler itself
+  syntax: '1.3.0',   // The component language contract
+  output: '1.7.0'    // The generated module contract
 }
 ```
 
-**What `syntax` covers.** The component language surface a `.wizz` file may use: template directives (`on:`, `{#if}`, `{:else}`, `{#each}` with keyed and keyless forms, imports, interpolation expressions, attributes on imported component tags, which pass as props) and the script boundary (reactive `let` declarations, `export let` prop declarations, named functions, lifecycle hooks). Within one `syntax` major version, any component that compiled before keeps compiling with the same meaning. New syntax may be added in a minor version; existing syntax never changes meaning without a major bump.
+**What `syntax` covers.** The component language surface a `.wizz` file may use: template directives (`on:`, `{#if}`, `{:else}`, `{#each}` with keyed and keyless forms, imports, interpolation expressions, attributes on imported component tags, which pass as props, and the root-level `<wizz:head>` block) and the script boundary (reactive `let` declarations, `export let` prop declarations, named functions, lifecycle hooks). Within one `syntax` major version, any component that compiled before keeps compiling with the same meaning. New syntax may be added in a minor version; existing syntax never changes meaning without a major bump.
 
-**What `output` covers.** The surface of every generated module: a default-exported `mountComponent(target, props)` factory that appends the component's root element to `target` and returns `{ setProps?, destroy() }` (the optional `setProps(next)` handle exists on components that declare props); `destroy()` running destroy hooks, destroying child components, removing tracked `on:` listeners, and removing the root from the target; and the `__wizzChildComponents`, `__wizzMountChildren`, and `__wizzListUpdates` root-node properties the framework consumes. Within one `output` major version, generated modules keep this surface and their runtime behavior. A test in `componentGenerator.test.js` pins this surface, so a codegen change that breaks it fails the suite until the version is bumped deliberately.
+**What `output` covers.** The surface of every generated module: a default-exported `mountComponent(target, props)` factory that appends the component's root element to `target` and returns `{ setProps?, destroy() }` (the optional `setProps(next)` handle exists on components that declare props); `destroy()` running destroy hooks, destroying child components, releasing the component's head nodes, removing tracked `on:` listeners, and removing the root from the target; and the `__wizzChildComponents`, `__wizzMountChildren`, and `__wizzListUpdates` root-node properties the framework consumes. Optionally — for compiles requested with `hydratable: true` — the module additionally exports `hydrateComponent(target, props, state)` and `hydrateRoot(rootNode, props, state)`, which adopt server-rendered markup through the documented hydration traversal (the latter adopting the given node itself, which is how nested components are adopted in place). Server modules export `renderComponent(props = {})` returning `{ html, state }`, gaining the additive `head` field (and the `options.headOwner` parameter) when the component or a rendered child declares `<wizz:head>`. Within one `output` major version, generated modules keep this surface and their runtime behavior. A test in `componentGenerator.test.js` pins this surface (byte-for-byte for default output), so a codegen change that breaks it fails the suite until the version is bumped deliberately.
 
 **Bump rules.** A breaking change to a contract bumps its major version and the compiler's major version. Additive capabilities bump the affected minor version. Fixes bump patch versions. `version.test.js` pins the current values, so a bump can only happen by editing `version.js` and its test together.
 
@@ -117,8 +153,10 @@ The optional `options` value is normalized defensively. Omitting it, passing `nu
 - Every generated module self-identifies with a first-line comment stamped from the table:
 
   ```js
-  // Generated by Wizz 1.2.1 (component syntax 1.1.0, generated output 1.2.1). Edits will be overwritten.
+  // Generated by Wizz 1.7.0 (component syntax 1.3.0, generated output 1.7.0). Edits will be overwritten.
   ```
+
+  Server modules stamp the same table with a `server output` label.
 
   Compiled artifacts therefore stay traceable to the compiler and contracts that produced them, even when separated from their source.
 
@@ -126,18 +164,18 @@ The optional `options` value is normalized defensively. Omitting it, passing `nu
 
 ### `index.js` - Public Compiler Facade
 
-**Exports:** `compile(source, options)`, `augmentErrorWithFile(error, filePath, source)`, `VERSIONS`
+**Exports:** `compile(source, options)`, `compileServer(source, options)`, `augmentErrorWithFile(error, filePath, source)`, `VERSIONS`
 
-`compile()` is the single public compiler entry point. It imports and composes the parser, dependency analyzer, ID assigner, and component generator so callers cannot accidentally omit a required stage or run them in the wrong order.
+`compile()` is the primary public compiler entry point. It imports and composes the parser, dependency analyzer, ID assigner, and component generator so callers cannot accidentally omit a required stage or run them in the wrong order. `compileServer()` runs the same pipeline but composes the server generator (see [Server Rendering](#server-rendering)).
 
 Its responsibilities are:
 
-1. Parse raw component source into the standard `{ template, script, rawScript }` handoff.
+1. Parse raw component source into the standard `{ template, script, rawScript, style }` handoff (a `<wizz:style>` block becomes the `style` field: raw CSS plus its deterministic scope hash).
 2. Add reactive dependency metadata to parsed interpolation expressions.
 3. Assign `data-wizz-id` attributes to elements that require targeted updates.
-4. Generate the mountable ES module source, stamped with the compatibility versions.
+4. Generate the mountable ES module source, stamped with the compatibility versions (`compileServer()` generates the server-rendering module instead; `hydratable: true` adds the hydration traversal and its surface gate).
 5. Add file-path context, source excerpts, and code frames to location-aware errors when the caller supplied `options.filePath`.
-6. Return the generated source, any author-script source map, the analyzed payload, and the frozen version table.
+6. Return the generated source, any author-script source map (`null` for server output), the analyzed payload, and the frozen version table.
 
 `compile()` does not read or write files. File callers, such as `build.js`, read a `.wizz` file themselves and pass its path through `options.filePath` for diagnostics.
 
@@ -163,16 +201,16 @@ Every occurrence matching `at <line>:<column>` is qualified. The function is int
 
 ## Current Boundaries
 
-- `compile()` emits module source but does not execute it, write it to disk, or resolve imports.
-- The generated module and script transformation have the language and runtime boundaries documented in [generator/README.md](generator/README.md).
+- `compile()` and `compileServer()` emit module source but do not execute it, write it to disk, or resolve imports.
+- The generated module and script transformation have the language and runtime boundaries documented in [generator/README.md](generator/README.md). The server-renderable surface and hydration traversal boundaries are documented there as well.
 - Source locations come from the parser and expression integrator. The augmenter only formats existing `at line:column` locations; it does not create source locations. When source text is available, it displays the line at the first reported location with a caret code frame.
-- Source maps cover copied author script lines only. Wizz template expressions and generated framework code are currently unmapped, because the generator does not yet retain enough per-emission source metadata to map them accurately.
+- Source maps cover copied author script lines only, and only for `compile()`. Server output is an HTML string with no positional DOM artifact to map, so `compileServer()` returns `sourceMap: null`. Wizz template expressions and generated framework code are currently unmapped, because the generator does not yet retain enough per-emission source metadata to map them accurately.
 - File paths are caller-supplied labels. They are not normalized, checked for existence, or made relative by this layer.
-- The parser, analyzer, and generator modules remain separately exported for their focused tests and internal development. Application build code should use `compile()` as the stable compiler contract.
+- The parser, analyzer, and generator modules remain separately exported for their focused tests and internal development. Application build code should use `compile()` and `compileServer()` as the stable compiler contracts.
 
 ## Tests
 
-- `index.test.js` verifies pipeline composition, generated source, mounted behavior against a minimal DOM, static components, compiler error propagation, and the versioned compile result.
+- `index.test.js` verifies pipeline composition, generated source, mounted behavior against a minimal DOM, static components, compiler error propagation, and the versioned compile result — plus the `compileServer()` module contract, its executed render/serialize behavior, located server-target rejections, and the `hydratable` option's export surface and gate.
 - `version.test.js` verifies the version table's shape, semver format, immutability, pinned values, and the policy invariant that the compiler major version leads both contract majors.
 - `errorAugmenter.test.js` verifies location qualification, source excerpts, code frames, location-free errors, repeated locations, invalid file paths, and non-`Error` thrown values.
 - `sourceMapGenerator.test.js` verifies VLQ encoding, multiline mappings, unavailable map inputs, and script-location anchoring.

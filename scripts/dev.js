@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 const { buildProject, discoverWizzFiles } = require('../build');
 
 const MIME_TYPES = {
@@ -8,6 +9,9 @@ const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8'
 };
+
+// Monotonic per-process build counter backing each rebuild's module query.
+let moduleQuerySequence = 0;
 
 function copyDocumentShell(projectDirectory, outputDirectory) {
   for (const fileName of ['index.html', 'App.css']) {
@@ -26,7 +30,15 @@ function assertDocumentShell(outputDirectory) {
 }
 
 function buildApplication(inputDirectory, outputDirectory, projectDirectory, logger, build = buildProject) {
-  const result = build(inputDirectory, outputDirectory, logger);
+  // Each rebuild stamps child `.server.js` import specifiers with a fresh
+  // query so the dev server's in-process module cache re-evaluates the whole
+  // child graph: Node's cache keys on the full URL and queries never
+  // propagate through static imports, so without the stamp a component edit
+  // would keep serving the first build's stale markup and styles until the
+  // server restarted. Timestamp plus sequence survives rapid test rebuilds.
+  moduleQuerySequence += 1;
+  const moduleQuery = `?v=${Date.now()}-${moduleQuerySequence}`;
+  const result = build(inputDirectory, outputDirectory, logger, { moduleQuery });
   copyDocumentShell(projectDirectory, outputDirectory);
 
   if (result.failedCount > 0) {
@@ -36,9 +48,91 @@ function buildApplication(inputDirectory, outputDirectory, projectDirectory, log
   return result;
 }
 
-function createRequestHandler(outputDirectory) {
+// The route manifest is generated as `export const pageModules = <JSON>`, so
+// the array literal can be extracted and parsed directly. Reading it per
+// document request keeps route eligibility in lockstep with the build that
+// produced it: after a watch rebuild the new manifest is served immediately
+// and the previous build's server modules can never be rendered again.
+function readRouteTable(outputDirectory) {
+  const manifestPath = path.join(path.resolve(outputDirectory), 'runtime', 'routes.js');
+  if (!fs.existsSync(manifestPath)) return null;
+
+  try {
+    const manifestSource = fs.readFileSync(manifestPath, 'utf8');
+    const arrayStart = manifestSource.indexOf('[');
+    const arrayEnd = manifestSource.lastIndexOf(']');
+    if (arrayStart === -1 || arrayEnd <= arrayStart) return null;
+
+    const pageModules = JSON.parse(manifestSource.slice(arrayStart, arrayEnd + 1));
+    if (!Array.isArray(pageModules)) return null;
+
+    const runtimeDirectory = path.join(path.resolve(outputDirectory), 'runtime');
+    const routeTable = new Map();
+    for (const pageModule of pageModules) {
+      if (!pageModule || typeof pageModule.routePath !== 'string') continue;
+      // The manifest field is the single authority on eligibility; the server
+      // module file itself is resolved lazily at render time.
+      routeTable.set(pageModule.routePath, {
+        routePath: pageModule.routePath,
+        serverModulePath: typeof pageModule.serverModulePath === 'string'
+          ? path.resolve(runtimeDirectory, pageModule.serverModulePath)
+          : null,
+        hydratableModulePath: typeof pageModule.hydratableModulePath === 'string'
+          ? path.resolve(runtimeDirectory, pageModule.hydratableModulePath)
+          : null
+      });
+    }
+    return routeTable;
+  } catch {
+    return null;
+  }
+}
+
+function sendDocumentShell(indexPath, response) {
+  response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  fs.createReadStream(indexPath).pipe(response);
+}
+
+async function renderServerRoute(routeEntry, indexPath, response) {
+  // Cache-bust by file mtime: a rebuild rewrites the server module, so the
+  // new mtime forms a fresh module URL and the in-process ESM cache can
+  // never deliver a stale render after an edit.
+  const { mtimeMs } = fs.statSync(routeEntry.serverModulePath);
+  const serverModule = await import(`${pathToFileURL(routeEntry.serverModulePath).href}?v=${mtimeMs}`);
+  const { html, state, head } = serverModule.renderComponent();
+  const stateScript = serverModule.serializeInitialState(state);
+  const shell = fs.readFileSync(indexPath, 'utf8');
+  const mountPoint = '<div id="app"></div>';
+
+  if (!shell.includes(mountPoint)) {
+    throw new Error(`Document shell has no <div id="app"></div> mount point: ${indexPath}`);
+  }
+
+  // Marker-delimited so the client's hydrateCreate can locate the delivered
+  // run and consume it after a successful adoption. No title de-duplication
+  // is attempted here: per-owner slice verification on the client requires
+  // every component's own nodes to be delivered verbatim; precedence is
+  // resolved at mount time, where the deepest component's title is moved to
+  // the head front (the one document.title reads).
+  const headRun = head
+    ? `<!--wizz:head-start-->${head}<!--wizz:head-end-->`
+    : '';
+
+  // Function-form replacement: rendered HTML may contain `$` sequences
+  // (`$&`, `$'`, `$$`) that string-form replacement would expand.
+  const document = shell
+    .replace(mountPoint, () => `<div id="app">${html}</div>\n  ${stateScript}`)
+    .replace('</head>', () => `${headRun}</head>`);
+
+  response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+  response.end(document);
+}
+
+function createRequestHandler(outputDirectory, options = {}) {
   const resolvedOutputDirectory = path.resolve(outputDirectory);
   const indexPath = path.join(resolvedOutputDirectory, 'index.html');
+  const getRouteTable = options.getRouteTable || (() => readRouteTable(resolvedOutputDirectory));
+  const logger = options.logger || console;
 
   return (request, response) => {
     const requestPath = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
@@ -59,8 +153,26 @@ function createRequestHandler(outputDirectory) {
       return;
     }
 
-    response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-    fs.createReadStream(indexPath).pipe(response);
+    // Route documents: extensionless paths matching a manifest route with a
+    // server module render server-side. Route matching mirrors the client
+    // router exactly (exact pathname lookup), so the server never delivers
+    // markup the router would not claim. Every other extensionless path
+    // keeps the SPA fallback shell.
+    const routeTable = getRouteTable();
+    const routeEntry = routeTable instanceof Map ? routeTable.get(requestPath) : undefined;
+    if (routeEntry && routeEntry.serverModulePath) {
+      renderServerRoute(routeEntry, indexPath, response).catch((error) => {
+        logger.error(`Server rendering failed for ${routeEntry.routePath}: ${error.message}`);
+        try {
+          sendDocumentShell(indexPath, response);
+        } catch {
+          response.destroy();
+        }
+      });
+      return;
+    }
+
+    sendDocumentShell(indexPath, response);
   };
 }
 
@@ -77,13 +189,28 @@ function watchSourceFiles(inputDirectory, onChange, options = {}) {
   const watch = options.watch || fs.watch;
   const setIntervalFn = options.setInterval || setInterval;
   const clearIntervalFn = options.clearInterval || clearInterval;
+  const onWatchUnavailable = options.onWatchUnavailable || (() => {});
   let snapshot = createSourceSnapshot(inputDirectory);
-  const watcher = watch(inputDirectory, { recursive: true }, (eventType, fileName) => {
-    if (fileName && path.extname(fileName) === '.wizz') {
-      snapshot = createSourceSnapshot(inputDirectory);
-      onChange(eventType, fileName);
+  // Recursive fs.watch is unavailable on supported platforms (Linux before
+  // Node 20 throws ERR_FEATURE_UNAVAILABLE_ON_PLATFORM at call time), so a
+  // failure degrades to the snapshot poller below instead of refusing to
+  // start: the poller detects the same changes with a 250ms latency bound.
+  let watcher = null;
+  try {
+    watcher = watch(inputDirectory, { recursive: true }, (eventType, fileName) => {
+      if (fileName && path.extname(fileName) === '.wizz') {
+        snapshot = createSourceSnapshot(inputDirectory);
+        onChange(eventType, fileName);
+      }
+    });
+    // A native watcher that dies mid-session must not take the server down:
+    // route the failure through the same notice and let the poller carry on.
+    if (watcher && typeof watcher.on === 'function') {
+      watcher.on('error', (error) => onWatchUnavailable(error));
     }
-  });
+  } catch (error) {
+    onWatchUnavailable(error);
+  }
   const poller = setIntervalFn(() => {
     const nextSnapshot = createSourceSnapshot(inputDirectory);
     if (nextSnapshot === snapshot) return;
@@ -93,7 +220,7 @@ function watchSourceFiles(inputDirectory, onChange, options = {}) {
 
   return {
     close() {
-      watcher.close();
+      if (watcher) watcher.close();
       if (poller) clearIntervalFn(poller);
     }
   };
@@ -109,14 +236,17 @@ function startDevelopmentServer(options = {}) {
 
   buildApplication(inputDirectory, outputDirectory, projectDirectory, logger, build);
   assertDocumentShell(outputDirectory);
-  const server = http.createServer(createRequestHandler(outputDirectory));
+  const server = http.createServer(createRequestHandler(outputDirectory, { logger }));
   const watcher = watchSourceFiles(inputDirectory, (eventType, fileName) => {
     logger.log(`Rebuilding after ${eventType}: ${fileName}`);
     buildApplication(inputDirectory, outputDirectory, projectDirectory, logger, build);
   }, {
     watch: options.watch,
     setInterval: options.setInterval,
-    clearInterval: options.clearInterval
+    clearInterval: options.clearInterval,
+    onWatchUnavailable: (error) => {
+      logger.log(`Recursive fs.watch unavailable (${error.code || error.message}); watching by polling every 250ms.`);
+    }
   });
 
   return {
@@ -157,6 +287,7 @@ module.exports = {
   copyDocumentShell,
   createRequestHandler,
   createSourceSnapshot,
+  readRouteTable,
   startDevelopmentServer,
   watchSourceFiles
 };

@@ -313,6 +313,33 @@ test('collectComponentRefNames lists refs only for tags with reactive props', ()
   assert.deepEqual(collectComponentRefNames(template, [{ name: 'A' }, { name: 'B' }]), collectComponentRefNames(template, [{ name: 'A' }, { name: 'B' }]));
 });
 
+test('collectComponentRefNames walks both branches of an if block with an else', () => {
+  // The parser's `children` alias repoints to the alternate at {:else}, so a
+  // children-only walk missed consequent component tags — their reactive prop
+  // updates silently never generated a ref.
+  const { collectComponentRefNames } = require('./domGenerator');
+  const template = {
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'main',
+      attributes: [],
+      children: [{
+        type: 'IfBlock',
+        test: 'flag',
+        consequent: [
+          { type: 'Element', name: 'A', componentId: 3, attributes: [{ name: 'x', value: 'count', dynamic: true, dependencies: ['count'] }], children: [] }
+        ],
+        alternate: [
+          { type: 'Element', name: 'B', componentId: 4, attributes: [{ name: 'x', value: 'count', dynamic: true, dependencies: ['count'] }], children: [] }
+        ]
+      }]
+    }]
+  };
+
+  assert.deepEqual(collectComponentRefNames(template, [{ name: 'A' }, { name: 'B' }]), ['component_3', 'component_4']);
+});
+
 test('rejects children, event directives, and prototype keys on component tags', () => {
   const generate = (componentNode) => () => generateCreateFunction({
     type: 'Root',

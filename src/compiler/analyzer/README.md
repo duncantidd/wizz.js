@@ -6,15 +6,17 @@ This directory is the second stage of the Wizz compiler. It enriches the parsed 
 
 - `dependencyAnalyzer.js` records which reactive `let` declarations each template interpolation reads. Declared props (`export let`) are reactive declarations too, so template expressions and dynamic attributes depending on a prop are tracked identically to state.
 - `idAssigner.js` adds a stable-in-the-payload `data-wizz-id` attribute to elements that directly contain reactive interpolations, and a `componentId` to imported component tags so the generated create() and update() code can share one instance reference.
+- `idAssigner.js` also stamps `data-wizz-s="<scope>"` on every element a styled component renders (components with a `<wizz:style>` block), riding the same attribute-stamping path as `data-wizz-id`.
+- `cssScanner.js` holds the minimal zero-dependency CSS scoping pass (`scopeCss`) shared by the server generator, client generator, and `wizz build` extraction.
 
 The analyzer runs after `parseComponent()` and before code generation:
 
 ```text
 component source
-  -> parser: { template, script, rawScript, imports, props }
+  -> parser: { template, script, rawScript, style, imports, props }
   -> analyzeDependencies()
-  -> assignNodeIds()
-  -> generator
+  -> assignNodeIds() (also stamps data-wizz-s for styled components)
+  -> generator (scopes the style CSS through scopeCss)
 ```
 
 Both analyzer functions mutate the payload they receive and return that same object. This keeps the compiler pipeline simple and avoids copying a nested template AST at each stage.
@@ -96,6 +98,7 @@ The current analyzer is intentionally conservative and works with the parser's p
 | `{user.name + count}` | `['user', 'count']` | Dependencies follow expression traversal order. |
 | `{title}` where `title` is `const` | `[]` | `const` declarations are currently non-reactive. |
 | Static text or ordinary elements | No `dependencies` property | Only parsed interpolation nodes participate in dependency tracking. |
+| `<wizz:head>` contents | Not analyzed | The head block is pruned by the parser's `extractHeadBlock()` before analysis; its expressions ride the same dynamic-attribute/text evaluation paths as body markup at generation time, so they carry no separate dependency metadata (head follows navigation, not reactive state — reactive head updates are out of scope). |
 
 `assignNodeIds()` marks an element when one of its **immediate children** is a reactive expression or when it has a reactive dynamic attribute. It does not mark ancestors merely because a descendant is reactive. For example, in `<section><div><p>{count}</p></div></section>`, only the `p` is assigned an ID.
 
@@ -144,6 +147,8 @@ It then walks `children` when present. Text nodes, regular elements, and express
 
 Imported component tags (element names matching `astPayload.imports`) take a separate path: each tag receives `node.componentId`, a sequential integer, and is never given `data-wizz-id`. Component tags create no DOM element, so they cannot be located by attribute lookup — the generated code uses the componentId to build the factory-scope instance reference (`component_<id>`) that both mounting and prop updates read.
 
+Style scoping rides the same walk: when `astPayload.style` is present, every non-import `Element` also receives a `data-wizz-s` attribute carrying the component's deterministic scope hash — stamped **before** the reactive `data-wizz-id` check so the scope attribute precedes the ID in emission order, and skipped entirely for style-free payloads so their markup stays byte-identical. An author-written `data-wizz-s` attribute wins over the generated value; imported component tags are never stamped (their rendered elements carry the child component's own scope).
+
 #### `walk(node)`
 
 The nested walker is responsible for deciding whether each element needs a generated target ID and then traversing its children.
@@ -157,6 +162,22 @@ For an `Element`, `hasReactiveChildren` is true when at least one immediate chil
 When that condition is true, the function ensures `node.attributes` exists and looks for an existing `data-wizz-id`. It appends the next sequential value only when no such attribute is already present. This makes the operation idempotent for a payload that has already been assigned IDs: a second call does not append duplicate attributes.
 
 After handling the current element, the walker recursively visits its children. Because assignment occurs before recursion, IDs follow depth-first pre-order for nodes newly assigned during one invocation.
+
+### `cssScanner.js` - Minimal CSS Scoping for Style Blocks
+
+**Export:** `scopeCss(css, scope)`
+
+`scopeCss()` rewrites a styled component's raw CSS so every rule applies only to elements carrying the component's `data-wizz-s` scope attribute. It is deliberately **not** a full CSS parser: it is a small, zero-dependency scanner whose one job is inserting a scope attribute into selectors without disturbing the author's formatting.
+
+How it works:
+
+- **Literal masking.** Comments (`/* … */`) and quoted strings are recorded, then replaced with a same-length mask of spaces for all structure analysis, so a `}` inside a string never looks like a block boundary. Insertions are applied to the original text by index, so the author's formatting survives byte-for-byte.
+- **Item scanning.** `scanItems()` walks top-level and nested at-rule preludes/bodies, recording each item's prelude (selector or at-rule head), its raw body text, and whether its closing brace existed in the source (unclosed blocks are preserved faithfully rather than "fixed" with an added `}`).
+- **Terminal-compound insertion.** For each selector in a comma-separated prelude, the scanner finds the last compound selector (the terminal), skips combinators and functional pseudo arguments with depth tracking, and inserts `[data-wizz-s="<scope>"]` after it for type selectors, `*`, and `&`, or prepends it for class, id, attribute, and pseudo-* terminals — the position that keeps specificity ordering natural (`h2` → `h2[data-wizz-s="…"]`, `.card` → `.card[data-wizz-s="…"]`).
+- **At-rule descent.** Only `@media`, `@supports`, and `@container` bodies are descended into; every other at-rule (`@font-face`, `@import`, `@charset`, vendor-prefixed variants, unknown names) passes through verbatim.
+- **Keyframe scoping.** `@keyframes`/`@-webkit-keyframes` names get the scope as a suffix (`panel-in` → `panel-in-<scope>`) because keyframe names are document-global, and a second pass rewrites matching `animation` / `animation-name` idents in declarations to the suffixed names. Undeclared names (library animations) pass through untouched.
+
+The generators call `scopeCss` once per styled component: the server generator and `wizz build` extraction share its output (guaranteeing `app.css` always agrees with the injected `<style>` markup), and the client generator embeds it in `createStyleNodes()`.
 
 ## Ordering and Boundaries
 

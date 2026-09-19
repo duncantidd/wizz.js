@@ -1,56 +1,186 @@
+/*
+ * Global design tokens and landing-page layout.
+ * Solid colors only — no gradients. Amber accent on graphite.
+ */
+:root {
+  color-scheme: dark;
+  --wizz-bg: #0b0f14;
+  --wizz-surface: #10161e;
+  --wizz-border: #232d3a;
+  --wizz-text: #e8edf4;
+  --wizz-muted: #94a0b2;
+  --wizz-accent: #facc15;
+  --wizz-accent-strong: #fde047;
+  --wizz-accent-ink: #1a1405;
+}
+
 html, body {
     margin: 0;
     padding: 0;
-    font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
-    font-weight: 300;
-    color: white;
+    background-color: var(--wizz-bg);
+    color: var(--wizz-text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto,
+      "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
 }
+
 main {
-    background-color: #542342;
     margin: 0;
-    padding: 0;
-    min-height:100dvh;
-    display:flex;
-    flex-direction:column;
-    justify-content:center;
-    align-items:center;
+    padding: 4.5rem 1.5rem;
+    min-height: 100vh;
+    min-height: 100dvh;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 2.25rem;
+    background-color: var(--wizz-bg);
 }
+
+/* Divider between the copy/counter block and the card. Rendered as a
+   pseudo-element so the markup stays untouched: a horizontal rule in the
+   stacked (flex) layout, restyled to a vertical rule by the desktop grid.
+   This base rule must stay BEFORE the desktop media query so its height
+   override wins the cascade there. */
+main::after {
+    content: "";
+    height: 1px;
+    align-self: stretch;
+    background-color: #ffffff;
+}
+
+/* Keep the card below the divider in the stacked layout (::after is generated
+   last, so the card must sort after it). No effect on the desktop grid, where
+   explicit placement wins. */
+main > .card {
+    order: 1;
+}
+
+/* Small screens: tighten the vertical rhythm now that content renders at
+   CSS-pixel scale instead of a zoomed-out desktop viewport. */
+@media (max-width: 640px) {
+    main {
+        padding: 3rem 1.25rem;
+        gap: 1.75rem;
+    }
+}
+
+/* Desktop: two-column hero — terminal card on the left, the badge, headline,
+   and counter stacked on the right, with a vertical divider in its own 1px
+   track between them. The fr column absorbs leftover width so the layout
+   never overflows between the breakpoint and the max width. */
+@media (min-width: 960px) {
+    main {
+        display: grid;
+        grid-template-columns: minmax(0, 30rem) 1px minmax(0, 1fr);
+        justify-content: center;
+        align-content: center;
+        column-gap: clamp(1.75rem, 3.5vw, 3rem);
+        row-gap: 1.5rem;
+        max-width: 76rem;
+        margin: 0 auto;
+        padding: 4.5rem 2.5rem;
+    }
+
+    main > .card {
+        grid-column: 1;
+        grid-row: 1 / span 3;
+        align-self: center;
+    }
+
+    main > p {
+        grid-column: 3;
+        grid-row: 1;
+        justify-self: start;
+    }
+
+    main > h1 {
+        grid-column: 3;
+        grid-row: 2;
+        text-align: left;
+    }
+
+    /* The Counter's unclassed root div: pin it into the copy column and
+       left-align its content to match the headline (this outranks the
+       component's scoped div rule, which centers). */
+    main > div:not(.card) {
+        grid-column: 3;
+        grid-row: 3;
+        align-items: flex-start;
+    }
+
+    /* Vertical divider: the stretched pseudo-element spans all three copy
+       rows, so it is exactly as tall as the badge + headline + counter
+       block. height resets to auto so grid stretch (not the 1px mobile
+       height) applies. */
+    main::after {
+        grid-column: 2;
+        grid-row: 1 / span 3;
+        height: auto;
+    }
+}
+
+/* The subtitle is reordered above the headline and styled as a pill badge. */
+main > p {
+    order: -1;
+    margin: 0;
+    padding: 0.45rem 1.1rem;
+    border: 1px solid rgba(250, 204, 21, 0.35);
+    border-radius: 999px;
+    color: var(--wizz-accent);
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    text-align: center;
+}
+
 h1 {
-    font-weight: 100;
-    letter-spacing: 0.04em;
+    margin: 0;
+    max-width: 24ch;
+    text-align: center;
+    font-size: clamp(2.4rem, 6vw, 3.75rem);
+    font-weight: 700;
+    letter-spacing: -0.025em;
+    line-height: 1.08;
+    text-wrap: balance;
 }
 
-p {
-    letter-spacing: 0.04em;
-}
-
+/* Base button — the Counter's scoped style refines this further. */
 button {
     appearance: none;
-    border: 2px solid #ffffff;
+    border: 0;
     border-radius: 999px;
-    background-color: #d86c7a;
-    color: #fff8fa;
+    background-color: var(--wizz-accent);
+    color: var(--wizz-accent-ink);
     cursor: pointer;
     font: inherit;
     font-weight: 700;
     letter-spacing: 0;
-    margin-top: 0.75rem;
-    padding: 0.75rem 1.2rem;
-    transition: background-color 160ms ease, border-color 160ms ease, transform 160ms ease;
+    padding: 0.8rem 1.6rem;
+    transition: background-color 150ms ease, transform 150ms ease,
+      box-shadow 150ms ease;
 }
 
 button:hover {
-    background-color: #ed8290;
-    border-color: #fff8fa;
-    transform: translateY(-2px);
+    background-color: var(--wizz-accent-strong);
+    transform: translateY(-1px);
+    box-shadow: 0 10px 28px -12px rgba(250, 204, 21, 0.55);
 }
 
 button:active {
-    background-color: #c85b6d;
-    transform: translateY(0);
+    transform: translateY(0) scale(0.98);
+    box-shadow: none;
 }
 
 button:focus-visible {
-    outline: 3px solid #f7c9a9;
-    outline-offset: 4px;
+    outline: 2px solid var(--wizz-accent);
+    outline-offset: 3px;
+}
+
+::selection {
+    background-color: var(--wizz-accent);
+    color: var(--wizz-accent-ink);
 }

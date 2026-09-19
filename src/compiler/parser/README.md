@@ -17,10 +17,12 @@ component source
   -> parseTemplate
   -> integrateExpressions
   -> extractScriptBlock
+  -> extractHeadBlock
+  -> extractStyleBlock
   -> extractComponentImports
   -> extractProps
   -> scanState
-  -> { template, script, rawScript, imports, props }
+  -> { template, script, rawScript, head, style, imports, props }
 ```
 
 The parser is build-time Node.js code. It does not execute component JavaScript or create DOM nodes. Its job is to preserve enough source structure and location data for the analyzer and generator to make correct later decisions.
@@ -99,6 +101,40 @@ All template nodes originating from source have `loc.start` and `loc.end` positi
   },
   loc: {}
 }
+
+// Block nodes ({#if}, {#each}) also carry their directive's location, so
+// later stages (for example the server-renderability gate) can point
+// diagnostics at the construct rather than at a generic position.
+{ type: 'IfBlock', test: 'flag', consequent: [], alternate: [], children: [], loc: { start: { offset: 6, line: 1, column: 7 }, end: {} } }
+```
+
+```js
+// The <wizz:head> block: extracted from the AST by extractHeadBlock() before
+// generation, delivered through the payload's `head` field. Its children are
+// Elements restricted to title (with text/interpolation children) and the
+// void meta/link (static and dynamic attributes).
+{
+  type: 'HeadBlock',
+  name: 'wizz:head',
+  children: [
+    { type: 'Element', name: 'title', children: [{ type: 'Expression', value: 'title', /* ... */ }], loc: {} },
+    { type: 'Element', name: 'meta', attributes: [{ name: 'name', value: 'x' }, { name: 'content', value: 'd', dynamic: true }], children: [], loc: {} }
+  ],
+  loc: {}
+}
+```
+
+```js
+// The <wizz:style> block: extracted from the AST by extractStyleBlock() before
+// generation and delivered through the payload's `style` field. The raw CSS
+// text is opaque author input — no expressions are parsed inside it — and
+// index.js stamps the deterministic scope hash alongside the CSS.
+{
+  type: 'StyleBlock',
+  name: 'wizz:style',
+  value: 'h2 { font-size: 24px }',
+  loc: {}
+}
 ```
 
 ## Supported Language Surface
@@ -116,6 +152,8 @@ The current implementation is intentionally small. Documentation should distingu
 | Component imports | Default imports ending in `.wizz`, such as `import Counter from './Counter.wizz';` | Imported modules are rewritten to `.js` in generated output. Named, namespace, dynamic, and non-Wizz imports are outside this contract. |
 | Component props | `export let name = 'Guest';` and bare `export let count;` declarations | One prop per statement, terminated with a semicolon. `export` followed by anything other than `let` is an error. Prop names cannot be reserved words, `props`, `__proto__`, or use the reserved `__wizz` prefix. |
 | Script scanning | Semicolon-terminated `let`/`const` assignments and named `function` declarations | It is a targeted regex scanner, not a JavaScript parser. `var`, classes, arrow functions, and syntax without the recognized forms are not reported. |
+| Head blocks | Exactly one root-level `<wizz:head>` containing only `<title>`, `<meta>`, and `<link>` | No attributes on the block, no nesting, no second block. Bare text, expressions, or directives directly inside the block are rejected; elements inside `<title>` are rejected; void closes (`</meta>`) are rejected. |
+| Style blocks | Exactly one root-level `<wizz:style>` block of raw CSS text | No attributes, no nesting, no second block, no self-closing form with content. A plain `<style>` element is rejected with a diagnostic pointing at `<wizz:style>`. CSS braces, colons, and quotes are raw text — they never reach the expression lexer — and expressions are not interpolated into CSS. |
 
 ## Files
 
@@ -129,9 +167,11 @@ This is the module downstream compiler stages should use. It owns the ordering o
 2. `parseTemplate()` verifies nesting and builds the template tree.
 3. `integrateExpressions()` adds expression ASTs to interpolation nodes.
 4. `extractScriptBlock()` removes script content from the render tree while returning that content.
-5. `extractComponentImports()` lifts `.wizz` imports out of the script.
-6. `extractProps()` lifts `export let` prop declarations out of the script and records them.
-7. `scanState()` turns recognized declarations into lightweight metadata.
+5. `extractHeadBlock()` prunes the root-level `<wizz:head>` block and returns the `HeadBlock` node (or `null`).
+6. `extractStyleBlock()` prunes the root-level `<wizz:style>` block and returns the `StyleBlock` node (or `null`); the facade then computes the component's deterministic scope hash and attaches `style: { css, scope, loc }`.
+7. `extractComponentImports()` lifts `.wizz` imports out of the script.
+8. `extractProps()` lifts `export let` prop declarations out of the script and records them.
+9. `scanState()` turns recognized declarations into lightweight metadata.
 
 It throws `TypeError` unless `source` is a string. A component without `<script>` receives `script: []`, `rawScript: ''`, `imports: []`, and `props: []`, keeping the compiler handoff stable and avoiding special cases downstream.
 
@@ -151,7 +191,7 @@ It throws `TypeError` unless `source` is a string. A component without `<script>
 
 The positional fields are recorded here, at the point exact character information still exists. `start` and `end` are zero-based offsets; `loc` uses one-based line and column values.
 
-`STATES` names the scanner's modes: text, tag parsing, quoted and brace-delimited attribute parsing, interpolation parsing, quoted interpolation strings, escape handling, and script content. Exporting it makes the state vocabulary explicit for tests and future maintenance.
+`STATES` names the scanner's modes: text, tag parsing, quoted and brace-delimited attribute parsing, interpolation parsing, quoted interpolation strings, escape handling, and the raw-text content modes for `<script>` and `<wizz:style>`. Exporting it makes the state vocabulary explicit for tests and future maintenance.
 
 Important behavior:
 
@@ -159,7 +199,7 @@ Important behavior:
 - `emitTag()` centralizes open, close, and self-closing tag token construction.
 - `commitAttribute()` stores boolean attributes (`value: null`), quoted values, and the contents of brace-delimited directive values without their surrounding braces.
 - `EXPRESSION`, `EXPRESSION_STRING`, and `EXPRESSION_ESCAPE` track brace depth and quotes, so a nested object literal or a brace inside a string does not prematurely end `{...}`.
-- `SCRIPT` treats everything as text until the exact `</script>` sequence. This preserves JavaScript such as `"Hello, {name}"` rather than tokenizing its braces as template interpolations.
+- `SCRIPT` and `STYLE` treat everything as text until the exact `</script>` / `</wizz:style>` sequence. This preserves JavaScript such as `"Hello, {name}"` and CSS such as `p { color: red; }` rather than tokenizing their braces as template interpolations. All raw-text entries share one `enterRawText()` helper so open-tag variants (`<script defer>`) re-enter raw mode correctly.
 - `fail()` consistently reports source coordinates for malformed markup, missing quotes, and unclosed tags or expressions.
 
 The tokenizer establishes lexical structure only. It does not validate matching opening and closing tags; that is the template parser's responsibility.
@@ -178,6 +218,10 @@ This module owns structural validation because only it has the complete nesting 
 - unknown token types fail instead of being silently discarded.
 
 Text and expression tokens become `Text` and `Expression` AST nodes. An `Expression` node retains its raw `value` until `integrateExpressions()` processes it. Element locations come from their opening-tag tokens, which makes an unclosed-element diagnostic point at the element that needs attention.
+
+#### Pre-family newline normalization
+
+The HTML tree builder drops a single newline immediately after a `pre`, `textarea`, or `listing` start tag and immediately after its end tag (the authoring newline that keeps source indentation out of a preformatted box). The parser strips that one newline from the AST — a `\r\n` pair counts as the one newline; a lone `\r` is conservatively left alone — and pushes no text node at all when the newline was the whole token, so the AST models the DOM the delivered markup actually produces. The drop fires only when a Text token is the *immediately* next token: an expression or block in between could emit runtime text the compiler cannot see, so under-normalizing there is safe (worst case an adoption fallback, never wrong rendered content). Without this, the server emitted the newline, the browser dropped it from the delivered markup, and the hydration walk verified text the browser never stored.
 
 ### `expressionLexer.js` - Interpolation Lexer
 
@@ -234,6 +278,14 @@ Traversal visits children in reverse order. That allows `splice()` to remove a c
 
 Script reconstruction handles both `Text` and `Expression` children. Normally the tokenizer's `SCRIPT` state makes a script entirely `Text`; wrapping an expression child back in `{}` keeps reconstruction resilient if an AST is supplied from another source or transformed before extraction.
 
+**Export:** `extractHeadBlock(ast)` (also from this module)
+
+`extractHeadBlock()` finds the root-level `HeadBlock` node the template parser created for `<wizz:head>`, splices it out of `Root.children` so body generation never sees it, and returns the node — or `null` when the component declares no head. The block's children (title text, static and dynamic attributes) ride along inside the returned node for the generators to consume.
+
+**Export:** `extractStyleBlock(ast)` (also from this module)
+
+`extractStyleBlock()` performs the same splice for the root-level `StyleBlock` node the template parser created for `<wizz:style>`, so the raw CSS never reaches body generation.
+
 ### `componentImportExtractor.js` - Component Import Extraction
 
 **Export:** `extractComponentImports(scriptContent)`
@@ -250,6 +302,8 @@ Statement extents are resolved on the shared scriptLexer token stream (`../scrip
 
 The default expression runs to the first `;` back at the declaration's own nesting depth; a terminating semicolon is required, and an identifier directly after a completed operand (the start of a new statement) or a bare comma (a second declarator) is rejected rather than silently absorbed. Defaults are author-script expressions — full JavaScript — not the narrower template expression grammar.
 
+`persist()` cannot initialize a prop: a default whose text starts with `persist\s*\(` throws a located `SyntaxError` (`persist() cannot initialize the prop '<name>'; props are parent-owned…`), because a prop's value is parent-owned and storage-reading it client-side would split ownership between two components.
+
 `RESERVED_PROP_NAMES` is the set of names that cannot be props: strict-mode reserved words, the generated closure's `props` parameter, `__proto__`, and every `__wizz`-prefixed name, which the framework reserves for generated identifiers.
 
 ### `stateScanner.js` - Lightweight Script Declaration Scanner
@@ -264,6 +318,18 @@ It performs two global scans:
 2. `functionRegex` recognizes named `function` declarations and emits `FunctionDeclaration` nodes with their names.
 
 Variables are reported before functions because each regular expression completes its full scan before the next begins; this is part of the current output contract even when functions appear first in the script source. The scanner deliberately stops short of full JavaScript semantics. Future syntax support should replace or extend this module with a real JavaScript parser rather than continually broadening the regular expressions.
+
+#### Persistent-state markers
+
+When a variable declaration's initializer text starts with `persist\s*\(`, `scanState()` parses the marker instead of recording the raw text alone. A persistent declaration keeps every field above and adds `isPersistent: true`, `storageKey` (the cooked string-literal first argument), `defaultValue` (the source text of the second argument, trimmed), and the `initialValueStart`/`initialValueEnd` offsets of the whole `persist(…)` span — offsets, not re-matched text, so look-alike `persist(...)` text in earlier comments or strings cannot redirect the generator's later splice. Plain declarations keep their node shape byte-for-byte (no new fields), which the tests pin with a deepEqual.
+
+Marker parsing is hand-rolled for the same reason the rest of the scanner is: no full parser, but no false confidence either. `walkPersistArguments()` tracks a mode stack (round/curly/square brackets, single/double/template quotes with the quote character itself as the mode, line and block comments) and splits only top-level commas, so defaults may contain object literals, nested calls, and comment noise. Everything malformed is a located compile error, never a silent guess: `persist()` on a `const` (it must be reactive), a missing or non-string-literal key (only simple `\`-escape sequences are cooked; `\x41`-style escapes reject), an argument count other than two, statements after the closing parenthesis, a missing closing parenthesis, mismatched brackets, and template-literal interpolation in the default (the default must survive string splicing into arbitrary target code, and interpolated expressions cannot). The default expression itself is carried as opaque source text — the generator decides how to embed it.
+
+#### Marker placement
+
+The marker must initialize a **top-level** `let` declaration, and the scanner enforces it because the generators hoist every state reference to the component's mount scope: a marker inside a function body or block would emit read/write/subscribe machinery that references a variable existing only in the callback's own scope, and the first template evaluation would die with a `ReferenceError` of the declaration's own name — a component this rejects never worked, so the located error strictly replaces the runtime failure (`persist() must initialize a top-level let declaration; 'rawClicks' is declared inside a block or function body at 2:17.`). A `persist()` call nested inside another `persist()` default would survive the initializer splice verbatim and fail at runtime with `persist is not defined`; it is rejected too (`persist() cannot be nested inside another persist() default…`).
+
+Placement detection walks the script with `lexicalModesBefore()` — the same quote/comment/bracket mode stack as `walkPersistArguments()`, extended with regex-literal handling: a `/` opens a literal unless the previous significant character continues an expression (identifier character, closing bracket, quote, dot, or operator tail), so a regex literal containing quotes or comment starters cannot leave phantom modes open and make a top-level marker look nested. Division after prefix operators (`x++ /2/`) is the accepted residual ambiguity. An author who binds the name `persist` themselves — a `function persist()` or a `let/const persist =` — opts out of marker recognition entirely: no marker is recognized and no marker diagnostic applies, so scripts that compiled before the marker syntax existed keep compiling.
 
 ## Tests
 

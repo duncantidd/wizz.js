@@ -1,4 +1,12 @@
+<script>
+  import Card from '../components/Card.wizz';
+  import Panel from '../components/Panel.wizz';
+</script>
+
 <main>
   <h1>The Home section!</h1>
   <p>Lets build something.</p>
+  <Card />
+  <Panel />
+  <h2>Unscoped heading</h2>
 </main>

@@ -68,3 +68,50 @@ test('reports malformed tags and expressions', () => {
   assert.throws(() => tokenize('{count'), /Unclosed expression at 1:7/);
   assert.throws(() => tokenize('<div id=main>'), /Expected a quoted or brace-delimited value for attribute 'id'/);
 });
+test('scans wizz:style content as raw text so CSS braces never reach the expression lexer', () => {
+  const source = '<wizz:style>h2 { font-size: 30px; content: "{not an expression}"; }</wizz:style><main>Hi</main>';
+  const tokens = tokenize(source);
+
+  assert.deepEqual(tokens.map(withoutLocations), [
+    { type: 'OpenTag', name: 'wizz:style', attributes: [] },
+    { type: 'Text', value: 'h2 { font-size: 30px; content: "{not an expression}"; }' },
+    { type: 'CloseTag', name: 'wizz:style' },
+    { type: 'OpenTag', name: 'main', attributes: [] },
+    { type: 'Text', value: 'Hi' },
+    { type: 'CloseTag', name: 'main' }
+  ]);
+});
+
+test('scans a plain style element as raw text and keeps its content for the parser to reject', () => {
+  const tokens = tokenize('<style>p { color: red; }</style>');
+
+  assert.deepEqual(tokens.map(withoutLocations), [
+    { type: 'OpenTag', name: 'style', attributes: [] },
+    { type: 'Text', value: 'p { color: red; }' },
+    { type: 'CloseTag', name: 'style' }
+  ]);
+});
+
+test('raw text ends only at the matching end tag', () => {
+  const tokens = tokenize('<wizz:style>a { b: c; }</wizz:style>');
+  assert.equal(tokens[1].value, 'a { b: c; }');
+
+  // A similar-but-different end tag does not exit the mode.
+  assert.throws(() => tokenize('<wizz:style>a { b: c; }</style>'), /Unclosed tag/);
+});
+
+test('script and wizz:style with boolean attributes still enter raw text', () => {
+  const scriptTokens = tokenize('<script defer>let a = 1;</script>');
+  assert.deepEqual(scriptTokens.map(withoutLocations), [
+    { type: 'OpenTag', name: 'script', attributes: [{ name: 'defer', value: null }] },
+    { type: 'Text', value: 'let a = 1;' },
+    { type: 'CloseTag', name: 'script' }
+  ]);
+
+  const styleTokens = tokenize('<wizz:style media="all">p {}</wizz:style>');
+  assert.equal(styleTokens[1].value, 'p {}');
+});
+
+test('reports an unclosed raw text element at the end of input', () => {
+  assert.throws(() => tokenize('<main><wizz:style>p { color: red; }</main>'), /Unclosed tag at 1:43/);
+});

@@ -111,7 +111,10 @@ test('the managed installer copies the CLI runtime and installs a wizz launcher'
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
   writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main><p>Ready</p></main>');
 
-  const result = spawnSync('bash', [path.join(projectRoot, 'scripts', 'install-cli.sh')], {
+  // --local: the working-tree install. The default (no-argument) mode
+  // downloads a release tarball and is exercised by install-cli.test.js
+  // against a local tarball, never the network.
+  const result = spawnSync('bash', [path.join(projectRoot, 'scripts', 'install-cli.sh'), '--local'], {
     cwd: projectDirectory,
     encoding: 'utf8',
     env: {
@@ -123,7 +126,7 @@ test('the managed installer copies the CLI runtime and installs a wizz launcher'
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Installed Wizz to/);
+  assert.match(result.stdout, /Installed Wizz \d+\.\d+\.\d+ to/);
   const installedDirectory = path.join(homeDirectory, 'data', 'wizz');
   const launcher = path.join(homeDirectory, 'bin', 'wizz');
   assert.equal(fs.existsSync(path.join(installedDirectory, 'build.js')), true);

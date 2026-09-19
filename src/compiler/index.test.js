@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { compile, VERSIONS } = require('./index');
+const { compile, compileServer, VERSIONS } = require('./index');
 
 function createDocument() {
   const elements = new Map();
@@ -215,4 +215,111 @@ test('rejects non-string component source', () => {
   assert.throws(() => compile(undefined), /Component source must be a string\./);
   assert.throws(() => compile(undefined, { filePath: 'Home.wizz' }), /Home\.wizz: Component source must be a string\.$/);
   assert.throws(() => compile(undefined, null), /Component source must be a string\./);
+});
+
+test('compileServer produces the self-contained HTML string module contract', () => {
+  const { source, payload, sourceMap, version } = compileServer(
+    '<script>let count = 0;</script><main><p>Count: {count}</p></main>'
+  );
+
+  // Named exports only: no default browser mount, no DOM API anywhere.
+  assert.doesNotMatch(source, /export default/);
+  assert.match(source, /export function renderComponent\(props = \{\}\)/);
+  assert.match(source, /export \{ __wizzSerializeInitialState as serializeInitialState \};/);
+  assert.doesNotMatch(source, /createElement|createTextNode|appendChild/);
+  assert.match(source, /server output \d+\.\d+\.\d+/);
+
+  // Server output is evaluated as an HTML string at request time, so no
+  // source map is produced even for file-backed compiles.
+  assert.equal(sourceMap, null);
+  assert.deepEqual({ ...version }, { ...VERSIONS });
+  assert.equal(payload.template.children[0].name, 'main');
+});
+
+test('compileServer renders HTML and serializes state without a DOM', () => {
+  const { source } = compileServer(
+    '<script>let count = 0; const label = "A & B";</script><main><p title={label}>Count: {count}</p></main>'
+  );
+
+  const module = new Function(
+    `${source
+      .replace('export function renderComponent(', 'function renderComponent(')
+      .replace('export { __wizzSerializeInitialState as serializeInitialState };', '')
+    }\nreturn { renderComponent, __wizzSerializeInitialState };`
+  )();
+
+  const { html, state } = module.renderComponent();
+  // The dynamic attribute carries the analyzer's data-wizz-id for hydration.
+  assert.equal(html, '<main><p title="A &amp; B" data-wizz-id="1">Count: <!-- -->0</p></main>');
+  assert.deepEqual(state, { count: 0 });
+  assert.equal(
+    module.__wizzSerializeInitialState({ count: 5 }),
+    '<script type="application/wizz-state">{"count":5}</script>'
+  );
+});
+
+test('compileServer rejects the non-server-renderable surface with located errors', () => {
+  // Blocks and each lists are server-renderable since milestone 14.
+  const { source: ifSource } = compileServer('<main>{#if ready}<p>yes</p>{/if}</main>');
+  assert.match(ifSource, /if \(ready\)/);
+  const { source: eachSource } = compileServer('<main>{#each items as item}<p></p>{/each}</main>');
+  assert.match(eachSource, /for \(const item of items\)/);
+
+  // Component tags stay ineligible until the caller vouches for a child
+  // server build through the componentServerRenderable option.
+  assert.throws(
+    () => compileServer('<script>\nimport Counter from "./Counter.wizz";\n</script><main><Counter /></main>'),
+    /Server rendering does not support component tags; <Counter> cannot be rendered server-side at 3:16\./
+  );
+  assert.throws(
+    () => compileServer('<main><p>1 + 2 = {1 2}</p></main>'),
+    /Template Expression Error at 1:21/
+  );
+});
+
+test('compileServer errors identify the input file when compiling from a file', () => {
+  const error = (() => {
+    try {
+      compileServer(
+        '<script>\nimport Counter from "./Counter.wizz";\n</script><main><Counter /></main>',
+        { filePath: 'src/pages/Home.wizz' }
+      );
+    } catch (caught) {
+      return caught;
+    }
+  })();
+
+  assert.ok(error instanceof SyntaxError);
+  assert.equal(error.filePath, 'src/pages/Home.wizz');
+  assert.equal(
+    error.message,
+    'Server rendering does not support component tags; <Counter> cannot be rendered server-side at ' +
+      'src/pages/Home.wizz:3:16. No server-renderable build was provided for this import.\n\n' +
+      'src/pages/Home.wizz:3:16\n3 | </script><main><Counter /></main>\n  |                ^'
+  );
+});
+
+test('the hydratable option exports hydrateComponent and gates the surface', () => {
+  const { source } = compile(
+    '<script>let count = 0;</script><main><p>Count: {count}</p></main>',
+    { hydratable: true }
+  );
+
+  assert.match(source, /export default function mountComponent\(target, props = \{\}\)/);
+  assert.match(source, /export function hydrateComponent\(target, props = \{\}, state = null\)/);
+
+  // Blocks hydrate since nested hydration; the remaining gate is the
+  // server-renderable component surface (vouched imports only).
+  const { source: blockSource } = compile('<main>{#if ready}<p>yes</p>{/if}</main>', { hydratable: true });
+  assert.match(blockSource, /if \(ready\) \{/);
+  assert.throws(
+    () => compile('<script>\nimport Counter from "./Counter.wizz";\n</script><main><Counter /></main>', { hydratable: true }),
+    /Server rendering does not support component tags/
+  );
+
+  // Default compiles never carry the hydration surface.
+  const { source: defaultSource } = compile(
+    '<script>let count = 0;</script><main><p>Count: {count}</p></main>'
+  );
+  assert.doesNotMatch(defaultSource, /hydrateComponent|hydrateCreate/);
 });

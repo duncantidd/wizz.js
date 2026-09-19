@@ -1,0 +1,15 @@
+<script>
+  let count = 0;
+  let note = 'ready';
+
+  function increment() {
+    count += 1;
+    note = 'clicked';
+  }
+</script>
+
+<section class="panel">
+  <h1>Hydration</h1>
+  <p data-note={note}>Visits: {count}</p>
+  <button on:click={increment}>Increment</button>
+</section>

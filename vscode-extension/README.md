@@ -17,7 +17,7 @@ Install the Wizz CLI from the framework root before using build or diagnostic in
 ./scripts/install-cli.sh
 ```
 
-Open the repository root (`wizzjs/`) as the VS Code workspace. Choose **Run** > **Start Debugging** (or press `F5`). When VS Code asks for a configuration, choose `Run Wizz Extension`. VS Code then opens a separate **Extension Development Host** window with the Wizz project already open and the Wizz extension loaded.
+Open the repository root (`wizz.js/`) as the VS Code workspace. Choose **Run** > **Start Debugging** (or press `F5`). When VS Code asks for a configuration, choose `Run Wizz Extension`. VS Code then opens a separate **Extension Development Host** window with the Wizz project already open and the Wizz extension loaded.
 
 If `Run Wizz Extension` is not offered, run **Developer: Reload Window** from the Command Palette, then start debugging again. The root workspace contains the required `.vscode/launch.json` profile.
 
