@@ -236,9 +236,11 @@ test('e2e: init scaffolds, serves the version triple, refuses re-init, and build
   const initResult = spawnSync(process.execPath, [cli, 'init', '.'], { cwd: projectDirectory, encoding: 'utf8' });
   assert.equal(initResult.status, 0, initResult.stderr);
   assert.match(initResult.stdout, /Created index\.html/);
+  assert.match(initResult.stdout, /Created App\.css/);
   assert.match(initResult.stdout, /Created src\/App\.wizz/);
   assert.match(initResult.stdout, /Created src\/pages\/Home\.wizz/);
   assert.match(initResult.stdout, /Created src\/components\/Counter\.wizz/);
+  assert.match(initResult.stdout, /Created src\/components\/Card\.wizz/);
   assert.match(initResult.stdout, /Next: run `wizz dev` to start editing\./);
 
   // Scaffolded projects are never overwritten, even in-place.

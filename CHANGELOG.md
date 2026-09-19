@@ -11,6 +11,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Post-M19 — Showcase Starter Scaffold
+
+#### Added
+
+- `wizz init` now scaffolds the showcase landing page instead of a minimal four-file starter: the global `App.css` design-token stylesheet linked from the document shell, the reactive `<wizz:head>` greeting page (query-parameter customization behind `onMount`), the persistent Counter (`persist`, props, the reset branch), the animated terminal Card, and a token-themed `/home` page demonstrating the `src/pages` route convention (`scripts/initTemplates.js`).
+
+#### Changed
+
+- `wizz build` copies a global `App.css` sitting beside the located document shell into the output, mirroring the dev server's copy: shells link it as `./App.css`, so production builds previously shipped a link that 404'd. The lookup is shell-relative (input directory or its parent), covering both build layouts, and a shell-less project copies neither file, keeping today's behavior. The relative `./App.css` link does not suppress the extracted `app.css` injection — the href pattern stays slash-anchored and case-sensitive — so a built shell links both stylesheets. No compiler contract is touched: compiler holds at 1.9.0, syntax at 1.4.1, output at 1.8.2 (`build.js`).
+
 ### Milestone 19 — Scaffold Projects and Expose Structured Diagnostics
 
 #### Added

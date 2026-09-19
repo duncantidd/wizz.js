@@ -695,6 +695,91 @@ test('copies the document shell verbatim when no component has styles', (t) => {
   assert.equal(fs.readFileSync(path.join(outputDirectory, 'index.html'), 'utf8'), shell);
 });
 
+test('copies a shell-side App.css into the output for the root layout', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'App.wizz'), '<main><h1>Hi</h1></main><wizz:style>h1 { color: red }</wizz:style>');
+  writeFile(path.join(inputDirectory, 'index.html'), [
+    '<!DOCTYPE html>',
+    '<html>',
+    '<head>',
+    '  <link rel="stylesheet" href="./App.css">',
+    '</head>',
+    '<body>',
+    '  <div id="app"></div>',
+    '</body>',
+    '</html>',
+    ''
+  ].join('\n'));
+  const appCss = ':root { --wizz-accent: #facc15; }\n';
+  writeFile(path.join(inputDirectory, 'App.css'), appCss);
+
+  buildProject(inputDirectory, outputDirectory, createLogger());
+
+  // The global stylesheet is part of the document set: the shell links it as
+  // ./App.css, so the build must ship it or the link 404s.
+  assert.equal(fs.readFileSync(path.join(outputDirectory, 'App.css'), 'utf8'), appCss);
+  // The relative author link does not suppress the extracted app.css
+  // injection: the pattern is slash-anchored and case-sensitive, so the
+  // built shell links both stylesheets exactly once each.
+  const shell = fs.readFileSync(path.join(outputDirectory, 'index.html'), 'utf8');
+  assert.equal(shell.split('./App.css').length - 1, 1);
+  assert.equal(shell.split('href="/app.css"').length - 1, 1);
+});
+
+test('copies App.css from the shell directory for the src layout', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  // The conventional layout: components in src/, shell and global stylesheet
+  // at the project root.
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'App.wizz'), '<main><p>App</p></main>');
+  writeFile(path.join(projectDirectory, 'index.html'), '<!DOCTYPE html>\n<html><head><link rel="stylesheet" href="./App.css"></head><body><div id="app"></div></body></html>');
+  const appCss = 'html, body { background-color: #0b0f14; }\n';
+  writeFile(path.join(projectDirectory, 'App.css'), appCss);
+
+  buildProject(inputDirectory, outputDirectory, createLogger());
+
+  assert.equal(fs.readFileSync(path.join(outputDirectory, 'App.css'), 'utf8'), appCss);
+});
+
+test('builds without an App.css when the project has none', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'App.wizz'), '<main><p>App</p></main>');
+  writeFile(path.join(inputDirectory, 'index.html'), '<!DOCTYPE html>\n<html><head></head><body><div id="app"></div></body></html>');
+
+  const logger = createLogger();
+  buildProject(inputDirectory, outputDirectory, logger);
+
+  assert.equal(fs.existsSync(path.join(outputDirectory, 'App.css')), false);
+  assert.equal(logger.errors.length, 0);
+});
+
+test('a shell-less project does not copy a stray App.css', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  // App.css is part of the document set, so it is only copied when a shell
+  // was found to link it; a shell-less project keeps today's behavior.
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'App.wizz'), '<main><p>App</p></main>');
+  writeFile(path.join(inputDirectory, 'App.css'), ':root { color-scheme: dark; }\n');
+
+  buildProject(inputDirectory, outputDirectory, createLogger());
+
+  assert.equal(fs.existsSync(path.join(outputDirectory, 'App.css')), false);
+});
+
 test('leaves an already-linked app.css reference alone', (t) => {
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
