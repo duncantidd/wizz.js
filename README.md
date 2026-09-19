@@ -27,7 +27,7 @@ cd my-app
 wizz dev
 ```
 
-`wizz init` creates a document shell, a landing page at `/`, a `/home` page that server-renders and hydrates, and a styled counter component whose count persists across reloads and tabs — a project that runs correctly with no manual editing. It refuses to write into a non-empty directory unless you pass `--force`, and it never overwrites an existing file.
+`wizz init` scaffolds the showcase starter: the global design-token stylesheet (`App.css`) linked from the document shell, a landing page at `/` with the reactive document head, a counter whose count persists across reloads and tabs, and the animated terminal card — plus a `/home` page that server-renders and hydrates. It is a project that runs correctly with no manual editing. `wizz init` refuses to write into a non-empty directory unless you pass `--force`, and it never overwrites an existing file.
 
 ## CLI
 
