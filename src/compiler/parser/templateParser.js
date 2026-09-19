@@ -1,3 +1,5 @@
+const { CODES, compilerDiagnostic } = require('../diagnostics.js');
+
 // The framework-namespaced head block. Colon spelling matches the `on:`
 // directive convention; the tokenizer already accepts `:` inside tag names.
 const HEAD_BLOCK_NAME = 'wizz:head';
@@ -53,13 +55,13 @@ function parseTemplate(tokens) {
       case 'OpenTag': {
         if (token.name === HEAD_BLOCK_NAME) {
           if (currentParent.type !== 'Root') {
-            throw new SyntaxError(`<wizz:head> must be a top-level block; it cannot be nested inside <${currentParent.name}> at ${at}.`);
+            throw compilerDiagnostic(CODES.parser.headBlockNested, `<wizz:head> must be a top-level block; it cannot be nested inside <${currentParent.name}> at ${at}.`);
           }
           if (token.attributes && token.attributes.length > 0) {
-            throw new SyntaxError(`<wizz:head> does not accept attributes at ${at}.`);
+            throw compilerDiagnostic(CODES.parser.headBlockAttributes, `<wizz:head> does not accept attributes at ${at}.`);
           }
           if (root.children.some((child) => child.type === 'HeadBlock')) {
-            throw new SyntaxError(`A component can declare only one <wizz:head> block at ${at}.`);
+            throw compilerDiagnostic(CODES.parser.duplicateHeadBlock, `A component can declare only one <wizz:head> block at ${at}.`);
           }
           const headBlock = { type: 'HeadBlock', name: 'wizz:head', children: [], loc: token.loc };
           currentParent.children.push(headBlock);
@@ -69,13 +71,13 @@ function parseTemplate(tokens) {
         }
         if (token.name === STYLE_BLOCK_NAME) {
           if (currentParent.type !== 'Root') {
-            throw new SyntaxError(`<wizz:style> must be a top-level block; it cannot be nested inside <${currentParent.name || currentParent.type}> at ${at}.`);
+            throw compilerDiagnostic(CODES.parser.styleBlockNested, `<wizz:style> must be a top-level block; it cannot be nested inside <${currentParent.name || currentParent.type}> at ${at}.`);
           }
           if (token.attributes && token.attributes.length > 0) {
-            throw new SyntaxError(`<wizz:style> does not accept attributes at ${at}.`);
+            throw compilerDiagnostic(CODES.parser.styleBlockAttributes, `<wizz:style> does not accept attributes at ${at}.`);
           }
           if (root.children.some((child) => child.type === 'StyleBlock')) {
-            throw new SyntaxError(`A component can declare only one <wizz:style> block at ${at}.`);
+            throw compilerDiagnostic(CODES.parser.duplicateStyleBlock, `A component can declare only one <wizz:style> block at ${at}.`);
           }
           const styleBlock = { type: 'StyleBlock', name: 'wizz:style', value: '', loc: token.loc };
           currentParent.children.push(styleBlock);
@@ -83,17 +85,17 @@ function parseTemplate(tokens) {
           break;
         }
         if (currentParent.type === 'StyleBlock') {
-          throw new SyntaxError(`<${token.name}> is not allowed inside <wizz:style> — style content is raw CSS at ${at}.`);
+          throw compilerDiagnostic(CODES.parser.styleDisallowedChild, `<${token.name}> is not allowed inside <wizz:style> — style content is raw CSS at ${at}.`);
         }
         if (headDepth > 0) {
           // Inside a head block the only element ever pushed onto the stack is
           // <title> (meta and link are void), so a further open tag under an
           // Element parent is always a nested element inside <title>.
           if (currentParent.type === 'Element' && currentParent.name === 'title') {
-            throw new SyntaxError(`<${token.name}> is not allowed inside <title> at ${at}.`);
+            throw compilerDiagnostic(CODES.parser.titleDisallowedChild, `<${token.name}> is not allowed inside <title> at ${at}.`);
           }
           if (!HEAD_CHILD_ELEMENTS.has(token.name)) {
-            throw new SyntaxError(`<${token.name}> is not allowed inside <wizz:head> — only <title>, <meta>, and <link> are supported at ${at}.`);
+            throw compilerDiagnostic(CODES.parser.headDisallowedChild, `<${token.name}> is not allowed inside <wizz:head> — only <title>, <meta>, and <link> are supported at ${at}.`);
           }
           const element = {
             type: 'Element',
@@ -107,7 +109,7 @@ function parseTemplate(tokens) {
           break;
         }
         if (token.name === PLAIN_STYLE_ELEMENT_NAME) {
-          throw new SyntaxError(`Plain <style> blocks are not supported — use <wizz:style> for scoped component styles at ${at}.`);
+          throw compilerDiagnostic(CODES.parser.plainStyleBlock, `Plain <style> blocks are not supported — use <wizz:style> for scoped component styles at ${at}.`);
         }
         const element = {
           type: 'Element',
@@ -124,14 +126,14 @@ function parseTemplate(tokens) {
 
       case 'CloseTag': {
         if (currentParent.type === 'HeadBlock' && HEAD_VOID_ELEMENTS.has(token.name)) {
-          throw new SyntaxError(`The void element <${token.name}> cannot have a closing tag at ${at}.`);
+          throw compilerDiagnostic(CODES.parser.voidClosingTag, `The void element <${token.name}> cannot have a closing tag at ${at}.`);
         }
         // Validate that the closing tag matches the currently open tag
         if (currentParent.type === 'Root') {
-          throw new SyntaxError(`Unexpected closing tag </${token.name}> at ${at}. No open tags.`);
+          throw compilerDiagnostic(CODES.parser.unexpectedClosingTag, `Unexpected closing tag </${token.name}> at ${at}. No open tags.`);
         }
         if (currentParent.name !== token.name) {
-          throw new SyntaxError(`Mismatched closing tag. Expected </${currentParent.name}>, found </${token.name}> at ${at}.`);
+          throw compilerDiagnostic(CODES.parser.mismatchedClosingTag, `Mismatched closing tag. Expected </${currentParent.name}>, found </${token.name}> at ${at}.`);
         }
 
         if (currentParent.type === 'HeadBlock') headDepth -= 1;
@@ -146,13 +148,13 @@ function parseTemplate(tokens) {
         if (token.name === HEAD_BLOCK_NAME) {
           // An empty head block is a harmless no-op; it carries no children.
           if (currentParent.type !== 'Root') {
-            throw new SyntaxError(`<wizz:head> must be a top-level block; it cannot be nested inside <${currentParent.name}> at ${at}.`);
+            throw compilerDiagnostic(CODES.parser.headBlockNested, `<wizz:head> must be a top-level block; it cannot be nested inside <${currentParent.name}> at ${at}.`);
           }
           if (token.attributes && token.attributes.length > 0) {
-            throw new SyntaxError(`<wizz:head> does not accept attributes at ${at}.`);
+            throw compilerDiagnostic(CODES.parser.headBlockAttributes, `<wizz:head> does not accept attributes at ${at}.`);
           }
           if (root.children.some((child) => child.type === 'HeadBlock')) {
-            throw new SyntaxError(`A component can declare only one <wizz:head> block at ${at}.`);
+            throw compilerDiagnostic(CODES.parser.duplicateHeadBlock, `A component can declare only one <wizz:head> block at ${at}.`);
           }
           currentParent.children.push({ type: 'HeadBlock', name: 'wizz:head', children: [], loc: token.loc });
           // Do NOT push to stack because it immediately closes
@@ -160,13 +162,13 @@ function parseTemplate(tokens) {
         }
         if (token.name === STYLE_BLOCK_NAME) {
           if (currentParent.type !== 'Root') {
-            throw new SyntaxError(`<wizz:style> must be a top-level block; it cannot be nested inside <${currentParent.name || currentParent.type}> at ${at}.`);
+            throw compilerDiagnostic(CODES.parser.styleBlockNested, `<wizz:style> must be a top-level block; it cannot be nested inside <${currentParent.name || currentParent.type}> at ${at}.`);
           }
           if (token.attributes && token.attributes.length > 0) {
-            throw new SyntaxError(`<wizz:style> does not accept attributes at ${at}.`);
+            throw compilerDiagnostic(CODES.parser.styleBlockAttributes, `<wizz:style> does not accept attributes at ${at}.`);
           }
           if (root.children.some((child) => child.type === 'StyleBlock')) {
-            throw new SyntaxError(`A component can declare only one <wizz:style> block at ${at}.`);
+            throw compilerDiagnostic(CODES.parser.duplicateStyleBlock, `A component can declare only one <wizz:style> block at ${at}.`);
           }
           // An empty style block is a harmless no-op; it carries no CSS.
           currentParent.children.push({ type: 'StyleBlock', name: 'wizz:style', value: '', loc: token.loc });
@@ -175,7 +177,7 @@ function parseTemplate(tokens) {
         }
         if (headDepth > 0) {
           if (!HEAD_CHILD_ELEMENTS.has(token.name)) {
-            throw new SyntaxError(`<${token.name}> is not allowed inside <wizz:head> — only <title>, <meta>, and <link> are supported at ${at}.`);
+            throw compilerDiagnostic(CODES.parser.headDisallowedChild, `<${token.name}> is not allowed inside <wizz:head> — only <title>, <meta>, and <link> are supported at ${at}.`);
           }
           const element = {
             type: 'Element',
@@ -189,7 +191,7 @@ function parseTemplate(tokens) {
           break;
         }
         if (token.name === PLAIN_STYLE_ELEMENT_NAME) {
-          throw new SyntaxError(`Plain <style> blocks are not supported — use <wizz:style> for scoped component styles at ${at}.`);
+          throw compilerDiagnostic(CODES.parser.plainStyleBlock, `Plain <style> blocks are not supported — use <wizz:style> for scoped component styles at ${at}.`);
         }
         const element = {
           type: 'Element',
@@ -215,7 +217,7 @@ function parseTemplate(tokens) {
           // Whitespace between head elements is formatting, not content; only
           // the three allowed elements may appear as direct head children.
           if (token.value.trim() === '') break;
-          throw new SyntaxError(`Only <title>, <meta>, and <link> elements are allowed inside <wizz:head> at ${at}.`);
+          throw compilerDiagnostic(CODES.parser.headOnlyHeadElements, `Only <title>, <meta>, and <link> elements are allowed inside <wizz:head> at ${at}.`);
         }
         // A leading newline is dropped when this text immediately follows a
         // <pre>-family start or end tag, mirroring the HTML tree builder —
@@ -244,7 +246,7 @@ function parseTemplate(tokens) {
           // Unreachable through tokenize() — raw-text mode keeps expressions
           // out of style bodies — but guards hand-built token streams so a
           // future tokenizer regression fails here with a clear diagnostic.
-          throw new SyntaxError(`Expressions are not allowed inside <wizz:style> — style content is opaque CSS at ${at}.`);
+          throw compilerDiagnostic(CODES.parser.styleBlockExpression, `Expressions are not allowed inside <wizz:style> — style content is opaque CSS at ${at}.`);
         }
         if (headDepth > 0 && currentParent.type === 'HeadBlock') {
           // Head follows navigation, not state changes: neither block
@@ -254,9 +256,9 @@ function parseTemplate(tokens) {
           const directive = token.value.trim();
           if (directive.startsWith('#if ') || directive === ':else' || directive === '/if'
             || directive.startsWith('#each ') || directive === '/each') {
-            throw new SyntaxError(`Block directives are not supported inside <wizz:head> at ${at}.`);
+            throw compilerDiagnostic(CODES.parser.headBlockDirective, `Block directives are not supported inside <wizz:head> at ${at}.`);
           }
-          throw new SyntaxError(`Expressions are not allowed directly inside <wizz:head> — put them inside <title> text at ${at}.`);
+          throw compilerDiagnostic(CODES.parser.headBlockExpression, `Expressions are not allowed directly inside <wizz:head> — put them inside <title> text at ${at}.`);
         }
         const directive = token.value.trim();
         if (directive.startsWith('#if ')) {
@@ -267,19 +269,19 @@ function parseTemplate(tokens) {
           break;
         }
         if (directive === ':else') {
-          if (currentParent.type !== 'IfBlock') throw new SyntaxError('Unexpected {:else}.');
+          if (currentParent.type !== 'IfBlock') throw compilerDiagnostic(CODES.parser.unexpectedElse, 'Unexpected {:else}.');
           currentParent.alternate = [];
           currentParent.children = currentParent.alternate;
           break;
         }
         if (directive === '/if') {
-          if (currentParent.type !== 'IfBlock') throw new SyntaxError('Unexpected {/if}.');
+          if (currentParent.type !== 'IfBlock') throw compilerDiagnostic(CODES.parser.unexpectedIfEnd, 'Unexpected {/if}.');
           stack.pop();
           break;
         }
         if (directive.startsWith('#each ')) {
           const match = directive.match(/^#each\s+([A-Za-z_$][A-Za-z0-9_$]*)\s+as\s+([A-Za-z_$][A-Za-z0-9_$]*)(?:\s+\(\2\.([A-Za-z_$][A-Za-z0-9_$]*)\))?$/);
-          if (!match) throw new SyntaxError('Each blocks require `collection as item` or `collection as item (item.key)` syntax.');
+          if (!match) throw compilerDiagnostic(CODES.parser.eachBlockSyntax, 'Each blocks require `collection as item` or `collection as item (item.key)` syntax.');
           const [, collection, item, key] = match;
           const block = { type: 'EachBlock', collection, item, key: key ?? null, children: [], loc: token.loc };
           currentParent.children.push(block);
@@ -287,7 +289,7 @@ function parseTemplate(tokens) {
           break;
         }
         if (directive === '/each') {
-          if (currentParent.type !== 'EachBlock') throw new SyntaxError('Unexpected {/each}.');
+          if (currentParent.type !== 'EachBlock') throw compilerDiagnostic(CODES.parser.unexpectedEachEnd, 'Unexpected {/each}.');
           stack.pop();
           break;
         }
@@ -300,14 +302,14 @@ function parseTemplate(tokens) {
       }
 
       default:
-        throw new SyntaxError(`Unsupported token type '${token.type}' at ${token.loc.start.line}:${token.loc.start.column}.`);
+        throw compilerDiagnostic(CODES.parser.unsupportedTokenType, `Unsupported token type '${token.type}' at ${token.loc.start.line}:${token.loc.start.column}.`);
     }
   }
 
   // If the stack has more than just the Root node, a tag was left unclosed
   if (stack.length > 1) {
     const unclosed = stack[stack.length - 1];
-    throw new SyntaxError(`Unclosed tag <${unclosed.name}> starting at ${unclosed.loc.start.line}:${unclosed.loc.start.column}.`);
+    throw compilerDiagnostic(CODES.parser.unclosedTag, `Unclosed tag <${unclosed.name}> starting at ${unclosed.loc.start.line}:${unclosed.loc.start.column}.`);
   }
 
   return root;

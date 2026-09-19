@@ -1,5 +1,6 @@
 // src/compiler/generator/serverGenerator.js
 const { CodeBuilder } = require('./codeBuilder');
+const { CODES, compilerDiagnostic } = require('../diagnostics.js');
 const { findReactiveMutations } = require('./assignmentInterceptor');
 const { rewritePersistInitializers } = require('./persistInitializer');
 const { buildComponentPropsSource } = require('./domGenerator');
@@ -81,7 +82,7 @@ function assertServerRenderable(astPayload, options = {}) {
   for (const declaration of astPayload.script || []) {
     if (declaration.type === 'VariableDeclaration' && declaration.isReactive
       && (declaration.name === '__proto__' || declaration.name.startsWith('__wizz'))) {
-      throw new SyntaxError(`Reactive state name '${declaration.name}' is not allowed in server-rendered components.`);
+      throw compilerDiagnostic(CODES.generator.reactiveNameInServer, `Reactive state name '${declaration.name}' is not allowed in server-rendered components.`);
     }
   }
 
@@ -91,10 +92,10 @@ function assertServerRenderable(astPayload, options = {}) {
     const eventName = attribute.name.slice(3);
     const handlerExpression = attribute.value?.trim();
     if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(eventName)) {
-      throw new SyntaxError(`Invalid event directive '${attribute.name}'.`);
+      throw compilerDiagnostic(CODES.generator.invalidEventDirective, `Invalid event directive '${attribute.name}'.`);
     }
     if (!handlerExpression) {
-      throw new SyntaxError(`Event directive '${attribute.name}' requires a handler expression.`);
+      throw compilerDiagnostic(CODES.generator.eventMissingHandler, `Event directive '${attribute.name}' requires a handler expression.`);
     }
   };
 
@@ -106,14 +107,14 @@ function assertServerRenderable(astPayload, options = {}) {
       const suffix = reason
         ? ` Underlying reason: ${reason}`
         : ' No server-renderable build was provided for this import.';
-      throw new SyntaxError(`Server rendering does not support component tags; <${node.name}> cannot be rendered server-side at ${where(node)}.${suffix}`);
+      throw compilerDiagnostic(CODES.generator.serverUnsupportedComponent, `Server rendering does not support component tags; <${node.name}> cannot be rendered server-side at ${where(node)}.${suffix}`);
     }
     if (node.children && node.children.length > 0) {
-      throw new SyntaxError(`Component <${node.name}> does not support children at ${where(node)}.`);
+      throw compilerDiagnostic(CODES.generator.componentChildrenUnsupported, `Component <${node.name}> does not support children at ${where(node)}.`);
     }
     for (const attribute of node.attributes || []) {
       if (attribute.name.startsWith('on:')) {
-        throw new SyntaxError(`Event directive '${attribute.name}' is not supported on component <${node.name}>; component attributes become props at ${where(node)}.`);
+        throw compilerDiagnostic(CODES.generator.eventOnComponent, `Event directive '${attribute.name}' is not supported on component <${node.name}>; component attributes become props at ${where(node)}.`);
       }
     }
   };
@@ -124,7 +125,7 @@ function assertServerRenderable(astPayload, options = {}) {
       return;
     }
     if (VOID_ELEMENTS.has(node.name.toLowerCase()) && node.children && node.children.length > 0) {
-      throw new SyntaxError(`Void element <${node.name}> cannot have children at ${where(node)}.`);
+      throw compilerDiagnostic(CODES.generator.voidWithChildren, `Void element <${node.name}> cannot have children at ${where(node)}.`);
     }
     for (const attribute of node.attributes || []) {
       if (attribute.name.startsWith('on:')) assertEventDirective(attribute);
@@ -137,22 +138,22 @@ function assertServerRenderable(astPayload, options = {}) {
   const assertEachBody = (node) => {
     const contentNodes = node.children.filter((child) => child.type !== 'Text' || child.value.trim() !== '');
     if (contentNodes.length !== 1 || contentNodes[0].type !== 'Element') {
-      throw new SyntaxError(`Each blocks must contain exactly one root element at ${where(node)}.`);
+      throw compilerDiagnostic(CODES.generator.eachRootCount, `Each blocks must contain exactly one root element at ${where(node)}.`);
     }
     const assertListNode = (listNode) => {
       if (listNode.type === 'IfBlock' || listNode.type === 'EachBlock') {
-        throw new SyntaxError(`Each block bodies do not support '${listNode.type}' nodes yet at ${where(listNode)}.`);
+        throw compilerDiagnostic(CODES.generator.eachBodyUnsupported, `Each block bodies do not support '${listNode.type}' nodes yet at ${where(listNode)}.`);
       }
       if (listNode.type === 'Element') {
         if (importedNames.has(listNode.name)) {
-          throw new SyntaxError(`Imported components are not supported inside each blocks at ${where(listNode)}.`);
+          throw compilerDiagnostic(CODES.generator.componentInsideEach, `Imported components are not supported inside each blocks at ${where(listNode)}.`);
         }
         if (VOID_ELEMENTS.has(listNode.name.toLowerCase()) && listNode.children && listNode.children.length > 0) {
-          throw new SyntaxError(`Void element <${listNode.name}> cannot have children at ${where(listNode)}.`);
+          throw compilerDiagnostic(CODES.generator.voidWithChildren, `Void element <${listNode.name}> cannot have children at ${where(listNode)}.`);
         }
         for (const attribute of listNode.attributes || []) {
           if (attribute.name.startsWith('on:')) {
-            throw new SyntaxError(`Event directive '${attribute.name}' is not supported inside each blocks yet at ${where(listNode)}.`);
+            throw compilerDiagnostic(CODES.generator.eventInsideEach, `Event directive '${attribute.name}' is not supported inside each blocks yet at ${where(listNode)}.`);
           }
         }
         (listNode.children || []).forEach(assertListNode);
@@ -182,10 +183,10 @@ function assertServerRenderable(astPayload, options = {}) {
   // browser target refuses to mount one without a parent element.
   const rootNode = (templateAST.children || []).find(node => node.type === 'Element');
   if (!rootNode) {
-    throw new SyntaxError('Component template must contain a root element.');
+    throw compilerDiagnostic(CODES.generator.missingRootElement, 'Component template must contain a root element.');
   }
   if (importedNames.has(rootNode.name)) {
-    throw new SyntaxError(`Component <${rootNode.name}> must be nested inside an element at ${where(rootNode)}.`);
+    throw compilerDiagnostic(CODES.generator.componentOutsideElement, `Component <${rootNode.name}> must be nested inside an element at ${where(rootNode)}.`);
   }
   walk(rootNode);
 }
@@ -230,7 +231,7 @@ function generateServerComponent(astPayload, options = {}) {
     const propMutations = findReactiveMutations(astPayload.rawScript, props.map((prop) => prop.name));
     if (propMutations.length > 0) {
       const first = propMutations[0];
-      throw new SyntaxError(`Props are read-only: '${first.name}' cannot be assigned inside the component at ${first.line}:${first.column}.`);
+      throw compilerDiagnostic(CODES.generator.propAssignment, `Props are read-only: '${first.name}' cannot be assigned inside the component at ${first.line}:${first.column}.`);
     }
   }
 
@@ -333,7 +334,7 @@ function generateServerComponent(astPayload, options = {}) {
     // import inside renderComponent would be a module-load SyntaxError. Fail
     // at compile time with a clear message instead.
     if (/^\s*import\s*[A-Za-z0-9_$*{']/.test(astPayload.rawScript)) {
-      throw new SyntaxError('Import statements must each be on their own line inside the component script.');
+      throw compilerDiagnostic(CODES.generator.serverImportLines, 'Import statements must each be on their own line inside the component script.');
     }
     // persist() markers render as their plain defaults: the server has no
     // storage, so persistent state is client-authoritative and the persisted
@@ -430,7 +431,7 @@ function generateServerComponent(astPayload, options = {}) {
       return;
     }
     // The renderable gate rejects every other node type before generation.
-    throw new SyntaxError(`Server rendering does not support ${node.type} nodes at ${node.loc?.start?.line ?? '?'}:${node.loc?.start?.column ?? '?'}.`);
+    throw compilerDiagnostic(CODES.generator.serverUnsupportedNode, `Server rendering does not support ${node.type} nodes at ${node.loc?.start?.line ?? '?'}:${node.loc?.start?.column ?? '?'}.`);
   }
 
   // Head emission is deliberately separate from emitElement: head nodes carry
@@ -445,7 +446,7 @@ function generateServerComponent(astPayload, options = {}) {
         emitHeadElement(builder, node);
         continue;
       }
-      throw new SyntaxError(`Server rendering does not support ${node.type} nodes inside <wizz:head> at ${node.loc?.start?.line ?? '?'}:${node.loc?.start?.column ?? '?'}.`);
+      throw compilerDiagnostic(CODES.generator.serverUnsupportedHeadNode, `Server rendering does not support ${node.type} nodes inside <wizz:head> at ${node.loc?.start?.line ?? '?'}:${node.loc?.start?.column ?? '?'}.`);
     }
   }
 
@@ -491,7 +492,7 @@ function generateServerComponent(astPayload, options = {}) {
         segments.push(`__wizzEscapeText(String(${child.value}))`);
         continue;
       }
-      throw new SyntaxError(`<${child.name}> is not allowed inside <title> at ${at}.`);
+      throw compilerDiagnostic(CODES.generator.titleDisallowedChild, `<${child.name}> is not allowed inside <title> at ${at}.`);
     }
     if (pendingText !== '') segments.push(JSON.stringify(pendingText));
     const contentSource = segments.length === 0 ? "''" : segments.join(' + ');
@@ -520,7 +521,7 @@ function generateServerComponent(astPayload, options = {}) {
 
   function emitComponentTag(builder, node) {
     if (node.componentId == null) {
-      throw new SyntaxError(`Component <${node.name}> is missing its componentId; run the analyzer before generation.`);
+      throw compilerDiagnostic(CODES.generator.missingComponentId, `Component <${node.name}> is missing its componentId; run the analyzer before generation.`);
     }
     const idLiteral = JSON.stringify(String(node.componentId));
     // The child's head slice gets a scoped owner path so the hydration walk

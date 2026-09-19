@@ -47,8 +47,15 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // source is unchanged but a compiling pre element's rendered meaning
   // loses the authoring newline on the client too, which is the syntax
   // patch; the AST construction change is the compiler patch.
+  //
+  // compiler 1.9.0: additive diagnostics contract — every author-facing
+  // SyntaxError carries a stable code from src/compiler/diagnostics.js
+  // (WIZZ-P###/WIZZ-G###), thrown errors gain structured line/column fields,
+  // and the `diagnostics: 'collect'` option returns structured records
+  // instead of throwing. Accepted component syntax and generated output are
+  // unchanged, so the syntax and output contracts hold.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.8.3',
+    compiler: '1.9.0',
     syntax: '1.4.1',
     output: '1.8.2'
   });

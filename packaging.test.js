@@ -79,7 +79,8 @@ const EXPECTED_FILES = [
   'src/App.wizz',
   'src/components/Card.wizz', 'src/components/Counter.wizz', 'src/components/Panel.wizz',
   'src/pages/Home.wizz',
-  'scripts/cli.js', 'scripts/dev.js', 'scripts/ssr-demo.js', 'scripts/install-cli.sh'
+  'scripts/cli.js', 'scripts/dev.js', 'scripts/init.js', 'scripts/initTemplates.js',
+  'scripts/ssr-demo.js', 'scripts/install-cli.sh'
 ];
 
 function isAllowedMember(member) {

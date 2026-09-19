@@ -1,6 +1,6 @@
 {
   "name": "wizz",
-  "version": "1.8.3",
+  "version": "1.9.0",
   "description": "Zero-dependency compiled component framework: a build-time compiler that turns .wizz components into DOM-native ES modules, with a dev server that server-renders and hydrates.",
   "license": "MIT",
   "author": "Duncan Tidd",
@@ -35,6 +35,8 @@
     "src/compiler/",
     "src/runtime/",
     "!src/compiler/**/*.test.js",
+    "scripts/init.js",
+    "scripts/initTemplates.js",
     "scripts/cli.js",
     "scripts/dev.js",
     "scripts/ssr-demo.js",

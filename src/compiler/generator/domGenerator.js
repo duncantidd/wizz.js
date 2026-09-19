@@ -1,5 +1,6 @@
 // src/compiler/generator/domGenerator.js
 const { CodeBuilder } = require('./codeBuilder');
+const { CODES, compilerDiagnostic } = require('../diagnostics.js');
 
 // Component attributes are props, not DOM attributes: imported component tags
 // create no element, so native attribute semantics never apply to them.
@@ -9,10 +10,10 @@ function buildComponentPropsSource(node) {
   const entries = [];
   for (const attribute of node.attributes || []) {
     if (attribute.name === '__proto__') {
-      throw new SyntaxError(`'${attribute.name}' cannot be used as a prop name on <${node.name}>.`);
+      throw compilerDiagnostic(CODES.generator.propAttributeNameInvalid, `'${attribute.name}' cannot be used as a prop name on <${node.name}>.`);
     }
     if (attribute.name.startsWith('on:')) {
-      throw new SyntaxError(`Event directive '${attribute.name}' is not supported on component <${node.name}>; component attributes become props.`);
+      throw compilerDiagnostic(CODES.generator.eventOnComponent, `Event directive '${attribute.name}' is not supported on component <${node.name}>; component attributes become props.`);
     }
     if (attribute.dynamic) {
       entries.push(`${JSON.stringify(attribute.name)}: ${attribute.value}`);
@@ -78,10 +79,10 @@ function generateCreateFunction(templateAST, componentImports = []) {
 
   function walk(node, parentVarName) {
     if (node.type === 'EachBlock') {
-      if (!parentVarName) throw new SyntaxError('Each blocks must be nested inside an element.');
+      if (!parentVarName) throw compilerDiagnostic(CODES.generator.eachOutsideElement, 'Each blocks must be nested inside an element.');
       const contentNodes = node.children.filter((child) => child.type !== 'Text' || child.value.trim() !== '');
       if (contentNodes.length !== 1 || contentNodes[0].type !== 'Element') {
-        throw new SyntaxError('Each blocks must contain exactly one root element.');
+        throw compilerDiagnostic(CODES.generator.eachRootCount, 'Each blocks must contain exactly one root element.');
       }
 
       const listId = ++nodeCounter;
@@ -102,11 +103,11 @@ function generateCreateFunction(templateAST, componentImports = []) {
         listNodeVariables.set(listNode, listVarName);
         if (listNode.type === 'Element') {
           if (importedComponents.has(listNode.name)) {
-            throw new SyntaxError('Imported components are not supported inside each blocks.');
+            throw compilerDiagnostic(CODES.generator.componentInsideEach, 'Imported components are not supported inside each blocks.');
           }
           const eventAttribute = (listNode.attributes || []).find((attribute) => attribute.name.startsWith('on:'));
           if (eventAttribute) {
-            throw new SyntaxError(`Event directive '${eventAttribute.name}' is not supported inside each blocks yet.`);
+            throw compilerDiagnostic(CODES.generator.eventInsideEach, `Event directive '${eventAttribute.name}' is not supported inside each blocks yet.`);
           }
           builder.add(`const ${listVarName} = document.createElement(${JSON.stringify(listNode.name)});`);
           for (const attribute of listNode.attributes || []) {
@@ -124,7 +125,7 @@ function generateCreateFunction(templateAST, componentImports = []) {
         } else if (listNode.type === 'Expression') {
           builder.add(`const ${listVarName} = document.createTextNode(String(${listNode.value}));`);
         } else {
-          throw new SyntaxError(`Each block bodies do not support '${listNode.type}' nodes yet.`);
+          throw compilerDiagnostic(CODES.generator.eachBodyUnsupported, `Each block bodies do not support '${listNode.type}' nodes yet.`);
         }
         if (listParentName) builder.add(`${listParentName}.appendChild(${listVarName});`);
         (listNode.children || []).forEach((child) => walkListNode(child, listVarName));
@@ -194,10 +195,10 @@ function generateCreateFunction(templateAST, componentImports = []) {
     if (node.type === 'Element') {
       if (importedComponents.has(node.name)) {
         if (!parentVarName) {
-          throw new SyntaxError(`Component <${node.name}> must be nested inside an element.`);
+          throw compilerDiagnostic(CODES.generator.componentOutsideElement, `Component <${node.name}> must be nested inside an element.`);
         }
         if (node.children.length > 0) {
-          throw new SyntaxError(`Component <${node.name}> does not support children.`);
+          throw compilerDiagnostic(CODES.generator.componentChildrenUnsupported, `Component <${node.name}> does not support children.`);
         }
         const propsSource = buildComponentPropsSource(node);
         const hasReactiveProps = (node.attributes || []).some((attribute) => attribute.dynamic && attribute.dependencies?.length > 0);
@@ -205,7 +206,7 @@ function generateCreateFunction(templateAST, componentImports = []) {
           // The mounted instance is kept in a factory-scope reference so
           // update() can deliver prop changes without remounting.
           if (node.componentId == null) {
-            throw new SyntaxError(`Component <${node.name}> is missing its componentId; run the analyzer before generation.`);
+            throw compilerDiagnostic(CODES.generator.missingComponentId, `Component <${node.name}> is missing its componentId; run the analyzer before generation.`);
           }
           const refName = `component_${node.componentId}`;
           builder.add('mountChildren.push(() => {').indent();
@@ -235,10 +236,10 @@ function generateCreateFunction(templateAST, componentImports = []) {
             const eventName = attr.name.slice(3);
             const handlerExpression = attr.value?.trim();
             if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(eventName)) {
-              throw new SyntaxError(`Invalid event directive '${attr.name}'.`);
+              throw compilerDiagnostic(CODES.generator.invalidEventDirective, `Invalid event directive '${attr.name}'.`);
             }
             if (!handlerExpression) {
-              throw new SyntaxError(`Event directive '${attr.name}' requires a handler expression.`);
+              throw compilerDiagnostic(CODES.generator.eventMissingHandler, `Event directive '${attr.name}' requires a handler expression.`);
             }
             builder.add(`trackListener(${varName}, ${JSON.stringify(eventName)}, ${handlerExpression});`);
             return;
@@ -276,7 +277,7 @@ function generateCreateFunction(templateAST, componentImports = []) {
   // Components currently require one top-level element; ignore formatting text around it.
   const rootNode = templateAST.children.find(node => node.type === 'Element');
   if (!rootNode) {
-    throw new SyntaxError('Component template must contain a root element.');
+    throw compilerDiagnostic(CODES.generator.missingRootElement, 'Component template must contain a root element.');
   }
   const rootVarName = walk(rootNode, null);
 

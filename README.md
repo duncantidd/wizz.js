@@ -19,6 +19,16 @@ cd wizz
 node --test
 ```
 
+To start a new application project, install the CLI (see the next section) and scaffold the canonical starter:
+
+```bash
+wizz init my-app
+cd my-app
+wizz dev
+```
+
+`wizz init` creates a document shell, a landing page at `/`, a `/home` page that server-renders and hydrates, and a styled counter component whose count persists across reloads and tabs — a project that runs correctly with no manual editing. It refuses to write into a non-empty directory unless you pass `--force`, and it never overwrites an existing file.
+
 ## CLI
 
 Wizz installs without npm or a package registry. To install the latest release, run the repository's installer:
@@ -60,19 +70,49 @@ This compiles `src` into `dist`. To choose both directories explicitly, pass bot
 wizz build components public
 ```
 
+Add `--json` (in any argument position) to print a machine-parsable diagnostics envelope to stdout instead of the per-file prose — for editor and CI integrations:
+
+```json
+{
+  "format": "wizz-build-diagnostics@1",
+  "ok": false,
+  "diagnostics": [
+    {
+      "code": "WIZZ-P018",
+      "severity": "error",
+      "message": "Mismatched closing tag. Expected </p>, found </main> at Broken.wizz:1:16.",
+      "file": "Broken.wizz",
+      "line": 1,
+      "column": 16
+    }
+  ],
+  "files": [{ "file": "App.wizz", "serverRenderable": true }]
+}
+```
+
+Every compiler diagnostic carries a stable code (`WIZZ-P###` for parse-stage failures, `WIZZ-G###` for generate-stage failures) that tooling can switch on without parsing prose; the envelope's `format` field is versioned, so fields may be added within format version 1 but existing fields keep their meaning until it changes.
+
 Start the development server with:
 
 ```bash
 wizz dev
 ```
 
-`wizz dev` uses the directory where you run the command as the application project: it builds that directory's `src` into `dist`, serves the result, and watches `.wizz` source files. It uses native file events with a 250 ms polling fallback, so changes on mounted filesystems such as WSL's `/mnt/c` still rebuild when an event is missed. Rebuilds update `dist`; refresh the browser to load the new module because live reload is not implemented yet. The public CLI currently accepts only `build` and `dev`; `build` accepts either no directory arguments or both an input and an output directory.
+`wizz dev` uses the directory where you run the command as the application project: it builds that directory's `src` into `dist`, serves the result, and watches `.wizz` source files. It uses native file events with a 250 ms polling fallback, so changes on mounted filesystems such as WSL's `/mnt/c` still rebuild when an event is missed. Rebuilds update `dist`; refresh the browser to load the new module because live reload is not implemented yet.
+
+Print what you have installed with:
+
+```bash
+wizz --version
+```
+
+which prints the compiler and contract version triple, for example `wizz 1.9.0 (compiler 1.9.0, syntax 1.4.1, output 1.8.2)`. The public CLI accepts `init`, `build`, `dev`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory.
 
 `wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
 
 ### CLI Stability
 
-The installed `wizz` command is Wizz's public command-line interface. Its supported commands are `wizz build`, `wizz build <input-directory> <output-directory>`, and `wizz dev`; their documented defaults, generated output paths, and non-zero failure behavior are stable within a CLI major version.
+The installed `wizz` command is Wizz's public command-line interface. Its supported commands are `wizz init [directory] [--force]`, `wizz build`, `wizz build <input-directory> <output-directory>`, `wizz build --json`, `wizz dev`, and `wizz --version`; their documented defaults, generated output paths, and non-zero failure behavior are stable within a CLI major version.
 
 `build.js`, `scripts/cli.js`, and `scripts/dev.js` are implementation entry points used by the repository and may change as the CLI evolves. Use `wizz` for application automation and development workflows.
 
