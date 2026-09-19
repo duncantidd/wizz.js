@@ -1,3 +1,5 @@
+const { CODES, compilerDiagnostic } = require('../diagnostics.js');
+
 const PRECEDENCE = {
   'EOF': 0,
   '===': 5,
@@ -31,7 +33,7 @@ function parseExpression(tokens) {
       const expr = parse(0);
       const closingToken = advance();
       if (closingToken?.type !== ')') {
-        throw new SyntaxError(`Expected closing ')'${location(closingToken)}`);
+        throw compilerDiagnostic(CODES.parser.expectedClosingParen, `Expected closing ')'${location(closingToken)}`);
       }
       return expr;
     }
@@ -46,7 +48,7 @@ function parseExpression(tokens) {
     '.': (left, token) => {
       const rightToken = advance();
       if (rightToken?.type !== 'Identifier') {
-        throw new SyntaxError(`Expected property name after '.'${location(rightToken)}`);
+        throw compilerDiagnostic(CODES.parser.expectedPropertyAfterDot, `Expected property name after '.'${location(rightToken)}`);
       }
       return { type: 'MemberExpression', object: left, property: { type: 'Identifier', name: rightToken.value } };
     }
@@ -57,7 +59,7 @@ function parseExpression(tokens) {
     const prefixFunction = prefixParselets[token.type];
 
     if (!prefixFunction) {
-      throw new SyntaxError(`Cannot parse starting token: ${token.type}${location(token)}`);
+      throw compilerDiagnostic(CODES.parser.unparseableStartingToken, `Cannot parse starting token: ${token.type}${location(token)}`);
     }
 
     let left = prefixFunction(token);
@@ -74,7 +76,7 @@ function parseExpression(tokens) {
   const expression = parse(0);
   const nextToken = peek();
   if (nextToken?.type !== 'EOF') {
-    throw new SyntaxError(`Unexpected token ${nextToken?.type || 'end of input'}${location(nextToken)}`);
+    throw compilerDiagnostic(CODES.parser.unexpectedExpressionToken, `Unexpected token ${nextToken?.type || 'end of input'}${location(nextToken)}`);
   }
   return expression;
 }

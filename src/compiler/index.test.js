@@ -323,3 +323,81 @@ test('the hydratable option exports hydrateComponent and gates the surface', () 
   );
   assert.doesNotMatch(defaultSource, /hydrateComponent|hydrateCreate/);
 });
+
+test('collect mode adds an empty diagnostics array to a successful compile', () => {
+  const result = compile('<main><p>static</p></main>', { diagnostics: 'collect' });
+
+  assert.deepEqual(result.diagnostics, []);
+  assert.equal(typeof result.source, 'string');
+  assert.ok(result.version);
+});
+
+test('collect mode returns one structured record instead of throwing', () => {
+  const result = compile('<main><p>hi', {
+    filePath: 'src/App.wizz',
+    diagnostics: 'collect'
+  });
+
+  assert.equal(result.source, undefined);
+  assert.deepEqual(result.diagnostics, [{
+    code: 'WIZZ-P022',
+    severity: 'error',
+    message: 'Unclosed tag <p> starting at src/App.wizz:1:7.',
+    file: 'src/App.wizz',
+    line: 1,
+    column: 7
+  }]);
+});
+
+test('collect mode without a file path still locates the failure', () => {
+  const result = compile('</main>', { diagnostics: 'collect' });
+
+  assert.deepEqual(result.diagnostics, [{
+    code: 'WIZZ-P023',
+    severity: 'error',
+    message: 'Unexpected closing tag </main> at 1:1. No open tags.',
+    file: null,
+    line: 1,
+    column: 1
+  }]);
+});
+
+test('collect mode never throws, even for uncoded programmatic failures', () => {
+  // Misuse (null source) is not an author-facing diagnostic: the record's
+  // null code distinguishes it from every cataloged failure.
+  const result = compile(null, { diagnostics: 'collect' });
+
+  assert.deepEqual(result.diagnostics, [{
+    code: null,
+    severity: 'error',
+    message: 'Component source must be a string.',
+    file: null,
+    line: null,
+    column: null
+  }]);
+});
+
+test('collect mode works for the server target too', () => {
+  const ok = compileServer('<main><p>static</p></main>', { diagnostics: 'collect' });
+  assert.deepEqual(ok.diagnostics, []);
+
+  const failed = compileServer('<main><p>{@}</p></main>', { diagnostics: 'collect' });
+  assert.equal(failed.diagnostics.length, 1);
+  assert.equal(failed.diagnostics[0].code, 'WIZZ-P033');
+  assert.equal(failed.diagnostics[0].severity, 'error');
+});
+
+test('thrown errors carry structured line and column beside the prose', () => {
+  assert.throws(() => compile('<main><p>hi', { filePath: 'src/App.wizz' }), (error) => {
+    assert.equal(error.code, 'WIZZ-P022');
+    assert.equal(error.line, 1);
+    assert.equal(error.column, 7);
+    return true;
+  });
+});
+
+test('a diagnostics option other than collect is rejected before compiling', () => {
+  assert.throws(() => compile('<main></main>', { diagnostics: 'json' }), TypeError);
+  assert.throws(() => compile('<main></main>', { diagnostics: true }), TypeError);
+  assert.throws(() => compileServer('<main></main>', { diagnostics: 'collect ' }), TypeError);
+});

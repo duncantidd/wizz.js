@@ -55,12 +55,21 @@
 //     has). An author who binds the name `persist` themselves opts out of
 //     marker recognition entirely.
 //
+// The compiler's compile()/compileServer() entry points additionally carry
+// the additive diagnostics contract: every author-facing SyntaxError carries
+// a stable `code` from src/compiler/diagnostics.js (never reworded into a
+// different meaning, never reused), thrown errors expose structured
+// `line`/`column` fields beside the prose locations, and the
+// `diagnostics: 'collect'` option returns structured diagnostics records
+// instead of throwing. None of this changes accepted component syntax or
+// generated output.
+//
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.8.3',
+  compiler: '1.9.0',
   syntax: '1.4.1',
   output: '1.8.2'
 });

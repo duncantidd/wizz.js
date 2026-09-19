@@ -1,3 +1,5 @@
+const { CODES, compilerDiagnostic } = require('../diagnostics.js');
+
 /**
  * Scans a raw JavaScript string for top-level state and function declarations.
  * @param {string} scriptContent - The raw JS string extracted from the <script> tag.
@@ -58,7 +60,7 @@ function scanState(scriptContent) {
       if (declaration.kind === 'const') {
         // A persistent value the author cannot reassign has nothing to write
         // back; the marker only makes sense on reactive state.
-        throw new SyntaxError(
+        throw compilerDiagnostic(CODES.parser.persistOnConst,
           `persist() requires a reactive 'let' declaration; '${declaration.name}' is const${sourceLocation(scriptContent, initializerStart)}.`
         );
       }
@@ -70,7 +72,7 @@ function scanState(scriptContent) {
       // rejects never worked, so the located error is strictly better than
       // the runtime failure it replaces.
       if (lexicalModesBefore(scriptContent, match.index).length !== 0) {
-        throw new SyntaxError(
+        throw compilerDiagnostic(CODES.parser.persistNotTopLevel,
           `persist() must initialize a top-level let declaration; '${declaration.name}' is declared inside a block or function body${sourceLocation(scriptContent, match.index)}.`
         );
       }
@@ -121,25 +123,25 @@ function parsePersistInitializer(initialValue, scriptContent, offset) {
   const at = locationAt(scriptContent, offset);
   const walk = walkPersistArguments(initialValue);
   if (walk.error !== null) {
-    throw new SyntaxError(`${walk.error}${at(walk.errorOffset)}.`);
+    throw compilerDiagnostic(CODES.parser.persistCallUnparseable, `${walk.error}${at(walk.errorOffset)}.`);
   }
   if (!/^[\s]*$/.test(initialValue.slice(walk.closeIndex + 1))) {
-    throw new SyntaxError(
+    throw compilerDiagnostic(CODES.parser.persistTrailingStatements,
       `persist() takes no statements after its closing parenthesis${at(walk.closeIndex + 1)}.`
     );
   }
 
   const parts = walk.parts.map((part) => initialValue.slice(part.start, part.end).trim());
   if (parts.length < 2) {
-    throw new SyntaxError(`persist() requires a storage key and a default value${at(0)}.`);
+    throw compilerDiagnostic(CODES.parser.persistMissingArguments, `persist() requires a storage key and a default value${at(0)}.`);
   }
   if (parts.length > 2) {
-    throw new SyntaxError(`persist() takes exactly two arguments${at(0)}.`);
+    throw compilerDiagnostic(CODES.parser.persistExtraArguments, `persist() takes exactly two arguments${at(0)}.`);
   }
 
   const key = parsePersistKey(parts[0]);
   if (key === null) {
-    throw new SyntaxError(
+    throw compilerDiagnostic(CODES.parser.persistKeyNotStringLiteral,
       `persist() requires a string-literal storage key${at(walk.parts[0].start)}.`
     );
   }
@@ -151,7 +153,7 @@ function parsePersistInitializer(initialValue, scriptContent, offset) {
   // through the initializer's start without trim-shift arithmetic.
   const nestedCall = findPersistCallInCode(initialValue.slice(walk.parts[1].start, walk.parts[1].end));
   if (nestedCall !== -1) {
-    throw new SyntaxError(
+    throw compilerDiagnostic(CODES.parser.persistNested,
       `persist() cannot be nested inside another persist() default${at(walk.parts[1].start + nestedCall)}.`
     );
   }

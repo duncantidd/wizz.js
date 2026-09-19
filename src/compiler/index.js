@@ -3,7 +3,7 @@ const { analyzeDependencies } = require('./analyzer/dependencyAnalyzer.js');
 const { assignNodeIds } = require('./analyzer/idAssigner.js');
 const { generateComponent } = require('./generator/componentGenerator.js');
 const { generateServerComponent } = require('./generator/serverGenerator.js');
-const { augmentErrorWithFile } = require('./errorAugmenter.js');
+const { augmentErrorWithFile, buildDiagnosticRecord } = require('./errorAugmenter.js');
 const { createSourceMap } = require('./sourceMapGenerator.js');
 const { VERSIONS } = require('./version.js');
 
@@ -29,15 +29,26 @@ const { VERSIONS } = require('./version.js');
  * @param {Object<string, string>} [options.componentIneligibilityReasons] -
  *   Import names mapped to the child's own gate failure, chained into the
  *   thrown diagnostic ("Underlying reason: …").
- * @returns {{ source: string, payload: Object, sourceMap: Object|null, version: Object }}
+ * @param {string} [options.diagnostics] - Set to `'collect'` to receive a
+ *   structured diagnostic instead of a thrown error: a failed compile
+ *   returns `{ diagnostics: [record] }`, and a successful compile adds
+ *   `diagnostics: []` to its result. A record is
+ *   `{ code, severity, message, file, line, column }` — the stable catalog
+ *   code (null when the failure is not a coded compiler diagnostic), the
+ *   `'error'` severity, a single-line file-qualified message, and the
+ *   source location. Collect mode never throws for compile failures; any
+ *   other value is rejected before compiling.
+ * @returns {{ source: string, payload: Object, sourceMap: Object|null, version: Object, diagnostics?: Array }}
  *   The generated module source, final analyzed handoff payload, optional
  *   source map, and frozen compatibility versions (`compiler`, `syntax`,
- *   `output`) the component was compiled with.
+ *   `output`) the component was compiled with — plus `diagnostics` when
+ *   collect mode is requested.
  */
 function compile(source, options = {}) {
   const optionObject = options && typeof options === 'object' ? options : {};
   const filePath = optionObject.filePath;
   const hydratable = optionObject.hydratable === true;
+  const collectDiagnostics = collectOption(optionObject);
   const gateOptions = {
     componentServerRenderable: optionObject.componentServerRenderable,
     componentIneligibilityReasons: optionObject.componentIneligibilityReasons,
@@ -49,13 +60,18 @@ function compile(source, options = {}) {
     const payload = assignNodeIds(analyzeDependencies(parseComponent(source)));
     const generatedSource = generateComponent(payload, { hydratable, ...gateOptions });
 
-    return {
+    const result = {
       source: generatedSource,
       payload,
       sourceMap: createSourceMap(source, generatedSource, filePath, payload.rawScript),
       version: VERSIONS
     };
+    if (collectDiagnostics) result.diagnostics = [];
+    return result;
   } catch (error) {
+    if (collectDiagnostics) {
+      return { diagnostics: [buildDiagnosticRecord(error, filePath, source)] };
+    }
     throw augmentErrorWithFile(error, filePath, source);
   }
 }
@@ -86,13 +102,19 @@ function compile(source, options = {}) {
  * @param {Object<string, string>} [options.componentIneligibilityReasons] -
  *   Import names mapped to the child's own gate failure, chained into the
  *   thrown diagnostic ("Underlying reason: …").
- * @returns {{ source: string, payload: Object, sourceMap: null, version: Object }}
+ * @param {string} [options.diagnostics] - Set to `'collect'` to receive a
+ *   structured diagnostic instead of a thrown error, exactly as with
+ *   `compile()`: a failed compile returns `{ diagnostics: [record] }`, and
+ *   a successful compile adds `diagnostics: []` to its result.
+ * @returns {{ source: string, payload: Object, sourceMap: null, version: Object, diagnostics?: Array }}
  *   The generated server module source, final analyzed handoff payload, and
- *   frozen compatibility versions.
+ *   frozen compatibility versions — plus `diagnostics` when collect mode is
+ *   requested.
  */
 function compileServer(source, options = {}) {
   const optionObject = options && typeof options === 'object' ? options : {};
   const filePath = optionObject.filePath;
+  const collectDiagnostics = collectOption(optionObject);
   const gateOptions = {
     componentServerRenderable: optionObject.componentServerRenderable,
     componentIneligibilityReasons: optionObject.componentIneligibilityReasons,
@@ -108,15 +130,37 @@ function compileServer(source, options = {}) {
     const payload = assignNodeIds(analyzeDependencies(parseComponent(source)));
     const generatedSource = generateServerComponent(payload, gateOptions);
 
-    return {
+    const result = {
       source: generatedSource,
       payload,
       sourceMap: null,
       version: VERSIONS
     };
+    if (collectDiagnostics) result.diagnostics = [];
+    return result;
   } catch (error) {
+    if (collectDiagnostics) {
+      return { diagnostics: [buildDiagnosticRecord(error, filePath, source)] };
+    }
     throw augmentErrorWithFile(error, filePath, source);
   }
+}
+
+/**
+ * Validates the `diagnostics` option and reports whether collect mode is on.
+ * The only supported value is 'collect'; anything else — including values of
+ * the wrong type — is a caller bug, rejected with a TypeError before any
+ * compilation runs (a programmatic guard, deliberately uncoded: the catalog
+ * is for author-facing diagnostics).
+ * @param {Object} optionObject - The normalized options object.
+ * @returns {boolean} True when collect mode is requested.
+ * @throws {TypeError} When the option is set to anything but 'collect'.
+ */
+function collectOption(optionObject) {
+  const value = optionObject.diagnostics;
+  if (value === undefined) return false;
+  if (value === 'collect') return true;
+  throw new TypeError(`The diagnostics option accepts only 'collect', received ${typeof value}.`);
 }
 
 module.exports = { compile, compileServer, augmentErrorWithFile, VERSIONS };

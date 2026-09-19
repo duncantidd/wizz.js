@@ -18,12 +18,24 @@ function writeFile(filePath, contents) {
 }
 
 test('parses build and dev commands', () => {
-  assert.deepEqual(parseCommand(['build']), { command: 'build', argumentsList: [] });
+  assert.deepEqual(parseCommand(['build']), { command: 'build', argumentsList: [], json: false });
   assert.deepEqual(parseCommand(['build', 'components', 'output']), {
     command: 'build',
-    argumentsList: ['components', 'output']
+    argumentsList: ['components', 'output'],
+    json: false
   });
-  assert.deepEqual(parseCommand(['dev']), { command: 'dev', argumentsList: [] });
+  assert.deepEqual(parseCommand(['dev']), { command: 'dev', argumentsList: [], json: false });
+});
+
+test('strips the build --json flag from any argument position', () => {
+  assert.deepEqual(parseCommand(['build', '--json']), { command: 'build', argumentsList: [], json: true });
+  assert.deepEqual(parseCommand(['build', 'src', 'dist', '--json']), {
+    command: 'build',
+    argumentsList: ['src', 'dist'],
+    json: true
+  });
+  // A build unknown-flag stays positional and fails the directory count.
+  assert.throws(() => parseCommand(['build', '--json', 'src']), /both <input-directory> and <output-directory>/);
 });
 
 test('rejects unknown commands and incomplete command arguments', () => {
@@ -31,6 +43,31 @@ test('rejects unknown commands and incomplete command arguments', () => {
   assert.throws(() => parseCommand(['preview']), /wizz dev/);
   assert.throws(() => parseCommand(['build', 'src']), /both <input-directory> and <output-directory>/);
   assert.throws(() => parseCommand(['dev', '--port', '3001']), /Dev does not accept arguments/);
+  assert.throws(() => parseCommand(['init', 'a', 'b']), /Init accepts at most one \[directory\]/);
+  assert.throws(() => parseCommand(['--version', 'extra']), /Version does not accept arguments/);
+});
+
+test('parses the init command with its directory and --force flag', () => {
+  assert.deepEqual(parseCommand(['init']), { command: 'init', argumentsList: [], json: false, force: false });
+  assert.deepEqual(parseCommand(['init', 'my-app']), { command: 'init', argumentsList: ['my-app'], json: false, force: false });
+  assert.deepEqual(parseCommand(['init', 'my-app', '--force']), { command: 'init', argumentsList: ['my-app'], json: false, force: true });
+  assert.deepEqual(parseCommand(['init', '--force', 'my-app']), { command: 'init', argumentsList: ['my-app'], json: false, force: true });
+});
+
+test('the version command prints the compiler and contract version triple', () => {
+  const lines = [];
+  const logger = { log: (message) => lines.push(message), error() {} };
+
+  assert.equal(runCli(['--version'], { logger }), 0);
+  assert.equal(lines.length, 1);
+  assert.match(
+    lines[0],
+    /^wizz \d+\.\d+\.\d+ \(compiler \d+\.\d+\.\d+, syntax \d+\.\d+\.\d+, output \d+\.\d+\.\d+\)$/
+  );
+
+  lines.length = 0;
+  assert.equal(runCli(['version'], { logger }), 0);
+  assert.equal(lines.length, 1);
 });
 
 test('uses src and dist defaults for build', () => {
@@ -136,4 +173,85 @@ test('the managed installer copies the CLI runtime and installs a wizz launcher'
   const build = spawnSync(launcher, ['build'], { cwd: projectDirectory, encoding: 'utf8' });
   assert.equal(build.status, 0, build.stderr);
   assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'App.js')), true);
+});
+test('passes the build --json flag through to the build', () => {
+  const calls = [];
+
+  assert.equal(runCli(['build', 'components', 'public', '--json'], { build(argv) { calls.push(argv); return 0; } }), 0);
+  assert.deepEqual(calls, [['components', 'public', '--json']]);
+
+  calls.length = 0;
+  assert.equal(runCli(['build', '--json'], { build(argv) { calls.push(argv); return 0; } }), 0);
+  assert.deepEqual(calls, [['src', 'dist', '--json']]);
+});
+
+test('prints a machine-parsable envelope and exits non-zero for json build failures', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main><p>Ready</p></main>');
+  writeFile(path.join(projectDirectory, 'src', 'Broken.wizz'), '<main><p>Broken</main>');
+
+  const result = spawnSync(process.execPath, [path.join(projectRoot, 'scripts', 'cli.js'), 'build', '--json'], {
+    cwd: projectDirectory,
+    encoding: 'utf8'
+  });
+
+  assert.equal(result.status, 1, result.stderr);
+  const envelope = JSON.parse(result.stdout);
+  assert.equal(envelope.format, 'wizz-build-diagnostics@1');
+  assert.equal(envelope.ok, false);
+  assert.equal(envelope.diagnostics.length, 1);
+  assert.equal(envelope.diagnostics[0].code, 'WIZZ-P018');
+  assert.equal(envelope.diagnostics[0].file, 'Broken.wizz');
+  assert.equal(envelope.diagnostics[0].line, 1);
+  assert.equal(envelope.diagnostics[0].column, 16);
+  assert.deepEqual(envelope.files.map((entry) => entry.file), ['App.wizz', 'Broken.wizz']);
+  // stdout carries only the envelope: no prose may corrupt machine parsing.
+  assert.equal(result.stdout.trim().startsWith('{'), true);
+});
+
+test('prints a clean envelope and exits zero for a successful json build', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main><p>Ready</p></main>');
+
+  const result = spawnSync(process.execPath, [path.join(projectRoot, 'scripts', 'cli.js'), 'build', 'src', 'dist', '--json'], {
+    cwd: projectDirectory,
+    encoding: 'utf8'
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const envelope = JSON.parse(result.stdout);
+  assert.equal(envelope.ok, true);
+  assert.deepEqual(envelope.diagnostics, []);
+  assert.deepEqual(envelope.files, [{ file: 'App.wizz', serverRenderable: true }]);
+  assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'App.js')), true);
+});
+
+test('e2e: init scaffolds, serves the version triple, refuses re-init, and builds cleanly', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  const cli = path.join(projectRoot, 'scripts', 'cli.js');
+
+  const initResult = spawnSync(process.execPath, [cli, 'init', '.'], { cwd: projectDirectory, encoding: 'utf8' });
+  assert.equal(initResult.status, 0, initResult.stderr);
+  assert.match(initResult.stdout, /Created index\.html/);
+  assert.match(initResult.stdout, /Created src\/App\.wizz/);
+  assert.match(initResult.stdout, /Created src\/pages\/Home\.wizz/);
+  assert.match(initResult.stdout, /Created src\/components\/Counter\.wizz/);
+  assert.match(initResult.stdout, /Next: run `wizz dev` to start editing\./);
+
+  // Scaffolded projects are never overwritten, even in-place.
+  const reinit = spawnSync(process.execPath, [cli, 'init', '--force'], { cwd: projectDirectory, encoding: 'utf8' });
+  assert.equal(reinit.status, 1);
+  assert.match(reinit.stderr, /Refusing to overwrite existing file\(s\): index\.html/);
+
+  const versionResult = spawnSync(process.execPath, [cli, '--version'], { cwd: projectDirectory, encoding: 'utf8' });
+  assert.equal(versionResult.status, 0, versionResult.stderr);
+  assert.match(versionResult.stdout, /^wizz \d+\.\d+\.\d+ \(compiler \d+\.\d+\.\d+, syntax \d+\.\d+\.\d+, output \d+\.\d+\.\d+\)$/m);
+
+  const buildResult = spawnSync(process.execPath, [cli, 'build'], { cwd: projectDirectory, encoding: 'utf8' });
+  assert.equal(buildResult.status, 0, buildResult.stderr);
+  assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'App.js')), true);
+  assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'pages', 'Home.js')), true);
 });

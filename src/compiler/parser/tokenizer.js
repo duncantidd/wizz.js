@@ -1,3 +1,5 @@
+const { CODES, compilerDiagnostic } = require('../diagnostics.js');
+
 const STATES = {
   TEXT: 'TEXT',
   TAG_OPEN: 'TAG_OPEN',
@@ -59,7 +61,7 @@ function tokenize(input) {
   };
   const fail = (message) => {
     const { line: errorLine, column: errorColumn } = position();
-    throw new SyntaxError(`${message} at ${errorLine}:${errorColumn}.`);
+    throw compilerDiagnostic(CODES.parser.tokenizerError, `${message} at ${errorLine}:${errorColumn}.`);
   };
   const emit = ({ location, ...token }) => {
     tokens.push({

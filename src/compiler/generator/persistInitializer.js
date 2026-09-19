@@ -1,3 +1,5 @@
+const { CODES, compilerDiagnostic } = require('../diagnostics.js');
+
 /**
  * Rewrites persistent state initializers out of a raw component script.
  *
@@ -38,7 +40,7 @@ function rewritePersistInitializers(rawScript, declarations, buildReplacement) {
   for (const rewrite of rewrites) {
     const span = output.slice(rewrite.start, rewrite.end);
     if (!/^persist\s*\(/.test(span.trimStart())) {
-      throw new SyntaxError(
+      throw compilerDiagnostic(CODES.generator.persistSpanDrift,
         `Persistent initializer span no longer points at a persist() marker (compiler bug): ${JSON.stringify(span.slice(0, 40))}.`
       );
     }
