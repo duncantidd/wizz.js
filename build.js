@@ -282,6 +282,12 @@ function findDocumentShell(inputDirectory) {
  * shell that already links /app.css is left untouched (no double link), and
  * a project without a shell keeps today's behavior — the dev server reports
  * the missing shell at serve time.
+ *
+ * A global App.css beside the shell is part of the document set: shells link
+ * it as ./App.css, and the dev server copies it alongside index.html, so a
+ * production build copies it too or the shell's link would 404. It is looked
+ * up beside the located shell (input directory or its parent), matching both
+ * build layouts.
  */
 function copyDocumentShell(inputDirectory, outputDirectory, hasStyles, logger = console) {
   const shellPath = findDocumentShell(inputDirectory);
@@ -306,6 +312,11 @@ function copyDocumentShell(inputDirectory, outputDirectory, hasStyles, logger = 
   }
 
   fs.writeFileSync(path.join(outputDirectory, 'index.html'), shell, 'utf8');
+
+  const shellStylesheetPath = path.join(path.dirname(shellPath), 'App.css');
+  if (fs.existsSync(shellStylesheetPath)) {
+    fs.copyFileSync(shellStylesheetPath, path.join(outputDirectory, 'App.css'));
+  }
   return true;
 }
 
