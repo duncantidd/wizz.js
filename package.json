@@ -6,7 +6,7 @@
   "author": "Duncan Tidd",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/duncantidd/wizzjs.git"
+    "url": "git+https://github.com/duncantidd/wizz.js.git"
   },
   "keywords": [
     "components",

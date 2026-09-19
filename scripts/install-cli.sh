@@ -5,7 +5,7 @@
 # tree. The installed tree is self-contained: nothing registers with npm.
 set -euo pipefail
 
-repository="duncantidd/wizzjs"
+repository="duncantidd/wizz.js"
 source_directory=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 data_directory="${XDG_DATA_HOME:-$HOME/.local/share}/wizz"
 bin_directory="${XDG_BIN_HOME:-$HOME/.local/bin}"
