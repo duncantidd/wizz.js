@@ -11,6 +11,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Milestone 19 — Scaffold Projects and Expose Structured Diagnostics
+
+#### Added
+
+- Stable diagnostic codes: every author-facing compiler `SyntaxError` carries a stable code from the frozen catalog `src/compiler/diagnostics.js` — `WIZZ-P###` for parser-stage failures (tokenizer, template parser, expression lexer, pratt parser, integrator, prop extractor, state scanner), `WIZZ-G###` for generator-stage failures (dom, component, server, hydration, persist initializer), and a deliberately empty, reserved `WIZZ-A###` analyzer namespace. All 104 throw sites across 13 compiler modules stamp their code through `compilerDiagnostic(code, message, ErrorConstructor)` with messages byte-for-byte untouched; identical failure conditions share one code, and programmatic `TypeError` guards (entry-point argument validation) stay uncoded by design. A 44-test corpus pins one verified author-facing failure per load-bearing code — P025–P030 are pinned through direct `lexExpression`/`parseExpression` calls, because the integrator wraps those failures in its own `WIZZ-P033` (`src/compiler/diagnostics.js` and the swept parser/generator modules).
+- Structured error locations: thrown compiler errors carry numeric `error.line`/`error.column` beside the prose `at L:C` location, stamped by the error augmenter from the message's locator even when no `filePath` was supplied (`src/compiler/errorAugmenter.js`).
+- The `diagnostics: 'collect'` compile option on both entry points: a failed compile returns `{ diagnostics: [record] }` instead of throwing and a successful one adds `diagnostics: []`; a record is `{ code, severity: 'error', message, file, line, column }` with a single-line file-qualified message (code frames stay exclusive to thrown errors). Collect mode never throws — uncoded failures such as entry-point misuse produce `code: null` records — and any other `diagnostics` value is rejected with a `TypeError` before compiling (`src/compiler/index.js`, `src/compiler/errorAugmenter.js`).
+- `wizz build --json` (the flag is accepted in any argument position by both the CLI and `build.js`): prints the versioned envelope `wizz-build-diagnostics@1` — `{ format, ok, diagnostics, files }` — to stdout instead of the per-file prose. Per-file records reuse the compiler's collect-mode records with input-relative posix paths, build-level failures (bad directories, route collisions, unexpected filesystem errors) become null-code records so the envelope stays parsable on every failure path, and `files` lists every discovered component with its server-rendering eligibility in stable discovery order. stdout carries only the envelope in JSON mode; human output and exit codes are unchanged when the flag is absent (`build.js`, `scripts/cli.js`).
+- `wizz init [directory] [--force]`: scaffolds the canonical starter project from `scripts/initTemplates.js` — a document shell carrying the runtime mount contract, `src/App.wizz` at `/` (document head block, scoped styles, link to `/home`), `src/pages/Home.wizz` at `/home` (server-renders and hydrates), and `src/components/Counter.wizz` demonstrating `persist('count', 0)`, props, `on:click`, and `<wizz:style>` — with no stylesheet or asset dependencies, so a scaffolded project runs with nothing but `wizz dev`. Refusals are conservative: a missing target directory is created at any depth, an existing non-empty directory is refused without `--force`, and an existing template file refuses the whole scaffold even with `--force` (all-or-nothing pre-check before any write); the command prints exactly what it created (`scripts/init.js`, `scripts/initTemplates.js`).
+- `wizz --version` (also `wizz version`): prints the compiler and contract version triple from the frozen `VERSIONS` table, e.g. `wizz 1.9.0 (compiler 1.9.0, syntax 1.4.1, output 1.8.2)` (`scripts/cli.js`).
+
+#### Changed
+
+- Compiler version 1.8.3 → 1.9.0: the stable codes, structured locations, collect option, and JSON envelope are an additive diagnostics contract — accepted component syntax and generated output are unchanged, so syntax holds at 1.4.1 and output holds at 1.8.2. `package.json` stays in lockstep and the generator-banner fixture test is synced to the new banner string (`src/compiler/version.js`, `src/compiler/generator/componentGenerator.test.js`).
+- The managed installer's copy list and the release tarball whitelist now ship `scripts/init.js` and `scripts/initTemplates.js`, so an installed `wizz` launcher supports init (`scripts/install-cli.sh`, `package.json`, `packaging.test.js`).
+
+#### Docs
+
+- ROADMAP §19 is marked complete with implementation notes and the version-impact assessment; `STRUCTURE.md` gains `diagnostics.js`, `init.js`, and `initTemplates.js` plus the new CLI surfaces; the README documents `wizz init`, `wizz --version`, and the `wizz build --json` envelope; `src/compiler/README.md` documents the codes catalog, structured locations, and collect mode (its stale 1.7.0 version examples synced to 1.9.0); this changelog gains the milestone section.
+
 ### Post-M17 Maintenance
 
 #### Fixed
