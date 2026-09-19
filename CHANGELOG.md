@@ -41,6 +41,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### Fixed
 
 - The installer's default `--latest` mode crashed with a raw `JSON.parse` stack trace when the GitHub API returned an error (e.g. the repository is private or has no published releases): `curl -f` delivers no body on a 4xx, and the script piped it into `JSON.parse` without checking curl's exit status. The lookup failure and the tarball download now fail with explicit guidance — the repository may be private or have no releases yet, and `--local` or an explicit tarball path are the alternatives. The release repository can be overridden via `WIZZ_INSTALL_REPOSITORY` for testing the failure paths (`scripts/install-cli.sh`).
+- The installer is pipe-safe for the first-time `curl … | bash` bootstrap: a script read from stdin has no `BASH_SOURCE`, which under `set -u` could abort the install depending on the bash version; the source-directory lookup falls back to `$0` (it only matters for `--local` installs). A piped invocation is pinned by test, and the README documents the one-command first-time install.
 
 #### Docs
 

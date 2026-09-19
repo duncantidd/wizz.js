@@ -111,6 +111,24 @@ test('--help prints the usage and exits cleanly', (t) => {
   assert.equal(fs.existsSync(installedDataDirectory(home)), false, '--help must not install anything');
 });
 
+test('a piped invocation (the curl | bash bootstrap) runs without a BASH_SOURCE', (t) => {
+  if (skipInstallerTests) { t.skip('bash-based installer test'); return; }
+  const home = createHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+
+  // A script read from stdin has no BASH_SOURCE; under `set -u` the
+  // first-time `curl ... | bash` bootstrap must not abort on it.
+  const piped = spawnSync('bash', ['-s', '--', '--help'], {
+    encoding: 'utf8',
+    env: installEnvironment(home),
+    input: fs.readFileSync(installer, 'utf8')
+  });
+  assert.equal(piped.status, 0, piped.stderr);
+  assert.match(piped.stdout, /Usage:/);
+  assert.doesNotMatch(piped.stderr, /unbound variable/);
+  assert.equal(fs.existsSync(installedDataDirectory(home)), false);
+});
+
 test('an unknown flag prints the usage and refuses to install', (t) => {
   if (skipInstallerTests) { t.skip('bash-based installer test'); return; }
   const home = createHome();
