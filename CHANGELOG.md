@@ -24,6 +24,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - Showcase landing page restyled (purely styling, no markup or behavior changes): `App.css` gains dark graphite design tokens (solid colors, no gradients) with an amber accent, a balanced display headline, the subtitle re-ordered above the headline as a pill badge, and refined focus/selection states; the Counter's scoped style becomes a modern pill CTA with hover lift and tabular numerals; the Card terminal adopts the theme, adds macOS traffic-light dots via a CSS `::before`, and drops the dead `.copy_toggle` rules and `clipboard-check` keyframes that had no matching element in the markup. Responsive layout: `index.html` gains the missing viewport meta (the cause of everything rendering zoomed-out tiny on phones) plus a `theme-color`; below 960px the page is a single centered column with a horizontal white divider between the copy/counter block and the card, above 960px it becomes a two-column hero (terminal card left, badge/headline/counter right) with a vertical white divider in its own 1px grid track that stretches to exactly the copy column's height — both dividers are a `main::after` pseudo-element so no extra markup is needed.
 
+#### Removed
+
+- Showcase scratch files pruned ahead of milestone 18 packaging: the root `test.js` manual compile-demo script, `src/components/TestProps.wizz`, and the retired `src/pages/About.wizz` / `src/pages/Contact.wizz` showcase routes nothing routes to. The shipped boilerplate is now exactly the live landing page surface — `src/App.wizz` with `Card.wizz` and `Counter.wizz`, plus `index.html` and `App.css` — while `src/pages/Home.wizz` (and the `Panel.wizz` it imports) remain as the SSR reference demo's input.
+
+- The development server degrades to its snapshot poller instead of refusing to start on platforms where recursive `fs.watch` is unavailable (Linux before Node 20 raises `ERR_FEATURE_UNAVAILABLE_ON_PLATFORM` at call time): a synchronous watch failure or a native watcher dying mid-session routes through a one-line notice and the existing 250 ms poller carries rebuild detection, so `wizz dev` keeps working all the way down to the supported Node floor (`scripts/dev.js`).
+
+- `wizz build` writes `{"type":"module"}` into the output directory (when the output carries no package.json of its own): dist holds only ES modules, and Node 18 — which has no module-syntax detection — could not import the emitted server modules from a CommonJS application, breaking the dev server's SSR imports and the SSR recipe for application-owned servers. A package.json already present in the output directory is respected as the embedding project's deliberate choice (`build.js`).
+
+#### Added
+
+- The repository is now an npm-installable package: `package.json` (name `wizz`, zero dependencies, `engines.node >=18`, `type: commonjs`, `bin` wiring `wizz` to `scripts/cli.js`) with a strict `files` whitelist shipping the compiler (tests stripped), the browser runtime, the build and dev-server scripts, the SSR reference, the installer, the docs, and the landing-page boilerplate (`src/App.wizz`, `Card.wizz`, `Counter.wizz`, `index.html`, `App.css`) — plus an MIT `LICENSE`. The package version is pinned in lockstep to the compiler contract version by `packaging.test.js`, which also pins the zero-dependency mandate, the exact tarball surface (nothing from `test/`, `dist/`, `vscode-extension/`, or any `*.test.js` leaks), and runs a packed install end to end: `npm pack` → extract → `wizz build` a fresh two-file project with the shipped CLI.
+
+#### Changed
+
+- The installer installs from release tarballs by default: `scripts/install-cli.sh` with no arguments resolves the latest GitHub release asset (`wizz-<version>.tgz`), and a specific tarball path or URL is accepted; `--local` keeps the working-tree install for development. Both paths land the same managed layout and print the installed version, and a truncated or foreign tarball is rejected loudly instead of installed (`scripts/install-cli.sh`, covered by `scripts/install-cli.test.js`).
+
+#### Docs
+
+- ROADMAP §18 is marked complete with implementation notes; STRUCTURE.md gains the packaging artifacts (`package.json`, `packaging.test.js`, `LICENSE`, `.github/workflows/`, `scripts/install-cli.test.js`); the README's install section documents the release-tarball default with `--local` for development installs, and its build section documents the output directory's module-type marker.
+
 ### Milestone 17 — Persistent Cross-Tab State
 
 #### Added

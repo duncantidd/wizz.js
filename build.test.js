@@ -770,3 +770,39 @@ test('threads moduleQuery into child server import specifiers', (t) => {
   const cardServer = fs.readFileSync(path.join(outputDirectory, 'Card.server.js'), 'utf8');
   assert.doesNotMatch(cardServer, /^import \* as __wizzServer_/m);
 });
+
+test('pins the output directory as ES modules for Node-side imports', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'App.wizz'), '<main><p>Ready</p></main>');
+
+  buildProject(inputDirectory, outputDirectory, createLogger());
+
+  // Node 18 has no module-syntax detection: without this marker, importing
+  // the emitted server modules from a CommonJS application (the SSR recipe)
+  // fails on it. The dev server makes the same import on every request.
+  const markerPath = path.join(outputDirectory, 'package.json');
+  assert.deepEqual(JSON.parse(fs.readFileSync(markerPath, 'utf8')), { type: 'module' });
+});
+
+test('a package.json already present in the output directory is respected', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'App.wizz'), '<main><p>Ready</p></main>');
+  writeFile(path.join(outputDirectory, 'package.json'), '{"type":"commonjs","name":"embedder-dist"}');
+
+  buildProject(inputDirectory, outputDirectory, createLogger());
+
+  // The embedding project may have placed it deliberately; a build is an
+  // overwrite of Wizz's own artifacts, not of the output directory's owner.
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(outputDirectory, 'package.json'), 'utf8')), {
+    type: 'commonjs',
+    name: 'embedder-dist'
+  });
+});

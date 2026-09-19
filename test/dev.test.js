@@ -304,6 +304,77 @@ test('polling watcher rebuilds after a source file changes without a native watc
   assert.equal(clearedTimer, 'poller');
 });
 
+test('a platform without recursive fs.watch degrades to the poller and keeps rebuilding', (t) => {
+  const inputDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(inputDirectory, { recursive: true, force: true }));
+  const sourceFile = path.join(inputDirectory, 'pages', 'Home.wizz');
+  writeFile(sourceFile, '<main>Before</main>');
+  // The exact failure Node 18 on Linux raises for a recursive watch.
+  const unavailable = Object.assign(
+    new TypeError('The feature watch recursively is unavailable on the current platform, which is being used to run Node.js'),
+    { code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' }
+  );
+  const notices = [];
+  const callbacks = [];
+  const changes = [];
+  let clearedTimer;
+  const watcher = watchSourceFiles(inputDirectory, (eventType, fileName) => changes.push({ eventType, fileName }), {
+    watch() {
+      throw unavailable;
+    },
+    onWatchUnavailable: (error) => notices.push(error),
+    setInterval(callback) {
+      callbacks.push({ poll: callback });
+      return 'poller';
+    },
+    clearInterval(timer) { clearedTimer = timer; }
+  });
+
+  assert.deepEqual(notices, [unavailable]);
+  writeFile(sourceFile, '<main>After the fallback rebuild</main>');
+  callbacks[0].poll();
+  assert.deepEqual(changes, [{ eventType: 'change', fileName: 'source files' }]);
+  // Closing without a native watcher only clears the poller.
+  watcher.close();
+  assert.equal(clearedTimer, 'poller');
+});
+
+test('a native watcher that dies mid-session routes through the fallback notice and leaves the poller running', (t) => {
+  const inputDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(inputDirectory, { recursive: true, force: true }));
+  writeFile(path.join(inputDirectory, 'pages', 'Home.wizz'), '<main>Before</main>');
+  const notices = [];
+  const callbacks = [];
+  const changes = [];
+  let watcherErrorListener;
+  const watcher = watchSourceFiles(inputDirectory, (eventType, fileName) => changes.push({ eventType, fileName }), {
+    watch() {
+      return {
+        on(eventName, listener) {
+          if (eventName === 'error') watcherErrorListener = listener;
+        },
+        close() {}
+      };
+    },
+    onWatchUnavailable: (error) => notices.push(error),
+    setInterval(callback) {
+      callbacks.push({ poll: callback });
+      return 'poller';
+    },
+    clearInterval() {}
+  });
+
+  // The error listener is wired at creation, before anything can fail.
+  assert.equal(typeof watcherErrorListener, 'function');
+  const midSession = Object.assign(new Error('watched directory removed'), { code: 'ENOENT' });
+  watcherErrorListener(midSession);
+  assert.deepEqual(notices, [midSession]);
+  writeFile(path.join(inputDirectory, 'pages', 'Home.wizz'), '<main>After the watcher died</main>');
+  callbacks[0].poll();
+  assert.deepEqual(changes, [{ eventType: 'change', fileName: 'source files' }]);
+  watcher.close();
+});
+
 test('reports component compilation failures while continuing to start the server', async (t) => {
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));

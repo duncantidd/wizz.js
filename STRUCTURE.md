@@ -7,6 +7,10 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 ├── STRUCTURE.md                         Project map and compiler pipeline
 ├── ROADMAP.md                           Ordered development milestones
 ├── CHANGELOG.md                         Notable changes, grouped by milestone
+├── package.json                         npm package definition (zero dependencies, files whitelist, bin wizz)
+├── packaging.test.js                    Package lockstep, tarball surface, and workflow pins plus a packed-install end-to-end test
+├── LICENSE                              MIT license
+├── .github/workflows/                   CI (Node 18/20/22 matrix) and v* tag release pipelines
 ├── .vscode/launch.json                  Repository-root Extension Development Host debug profile
 ├── vscode-extension/                    First-party VS Code language and project tooling
 │   ├── extension.js                      Extension-host activation, diagnostics, navigation, and commands
@@ -19,8 +23,9 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 │   ├── cli.js                            Public wizz build/dev command dispatcher
 │   ├── dev.js                            Builds, serves dist (server-rendering eligible routes), and watches .wizz source files
 │   ├── ssr-demo.js                       Manual zero-dependency SSR delivery reference (milestone 12; wizz dev now delivers natively)
-│   └── install-cli.sh                    Managed local installation script for wizz
-├── test.js                              End-to-end compilation example
+│   ├── install-cli.sh                    Installs wizz from a release tarball (default) or --local from the working tree
+│   ├── cli.test.js                       Focused Node tests for the CLI dispatcher
+│   └── install-cli.test.js               Focused Node tests for the installer (tarball, --local, and refusal paths)
 ├── test/
 │   ├── componentImports.test.js          Builds component-importing pages and delivers/hydrates them through the real generated modules
 │   ├── hydration.test.js                 Renders server HTML, hydrates it, and pins mismatch fallbacks
