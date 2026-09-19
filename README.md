@@ -31,13 +31,19 @@ wizz dev
 
 ## CLI
 
-Wizz installs without npm or a package registry. To install the latest release, run the repository's installer:
+Wizz installs without npm or a package registry. A first-time install needs only Node.js 18+, curl, and tar — one command fetches the installer from the repository and runs it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/duncantidd/wizz.js/main/scripts/install-cli.sh | bash
+```
+
+The installer resolves the latest GitHub release, downloads its `wizz-<version>.tgz` asset — the release tarball carries the whole CLI: the compiler, runtime, `wizz init` templates, and build tooling — and installs it. To install the latest release from a cloned repository instead, run the same installer from the checkout:
 
 ```bash
 ./scripts/install-cli.sh
 ```
 
-This downloads the latest GitHub release tarball (curl and tar are required) and installs it. A specific tarball can be passed as a path or URL. To install from a cloned working tree instead — the usual path when developing Wizz itself — pass `--local`:
+A specific tarball can be passed as a path or URL. To install from the working tree — the usual path when developing Wizz itself — pass `--local`:
 
 ```bash
 ./scripts/install-cli.sh --local
