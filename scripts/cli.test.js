@@ -246,7 +246,7 @@ test('e2e: init scaffolds, serves the version triple, refuses re-init, and build
   // Scaffolded projects are never overwritten, even in-place.
   const reinit = spawnSync(process.execPath, [cli, 'init', '--force'], { cwd: projectDirectory, encoding: 'utf8' });
   assert.equal(reinit.status, 1);
-  assert.match(reinit.stderr, /Refusing to overwrite existing file\(s\): index\.html/);
+  assert.match(reinit.stderr, /Refusing to overwrite existing file\(s\): README\.md, index\.html/);
 
   const versionResult = spawnSync(process.execPath, [cli, '--version'], { cwd: projectDirectory, encoding: 'utf8' });
   assert.equal(versionResult.status, 0, versionResult.stderr);

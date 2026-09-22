@@ -27,7 +27,7 @@ cd my-app
 wizz dev
 ```
 
-`wizz init` scaffolds the showcase starter: the global design-token stylesheet (`App.css`) linked from the document shell, a landing page at `/` with the reactive document head, a counter whose count persists across reloads and tabs, and the animated terminal card — plus a `/home` page that server-renders and hydrates. It is a project that runs correctly with no manual editing. `wizz init` refuses to write into a non-empty directory unless you pass `--force`, and it never overwrites an existing file.
+`wizz init` scaffolds the showcase starter: the global design-token stylesheet (`App.css`) linked from the document shell, a landing page at `/` with the reactive document head, a counter whose count persists across reloads and tabs, and the animated terminal card — plus a `/home` page that server-renders and hydrates. The scaffold also carries a `README.md` documenting the project layout, the dev/build commands, and how to install the VS Code extension from a release. It is a project that runs correctly with no manual editing. `wizz init` refuses to write into a non-empty directory unless you pass `--force`, and it never overwrites an existing file.
 
 ### Your project and the framework
 

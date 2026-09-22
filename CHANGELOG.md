@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Post-M19 — Scaffolded Project README
+
+#### Added
+
+- `wizz init` scaffolds a `README.md` as the project's front door: what a Wizz application is, the CLI one-liner prerequisite, the `wizz dev` (http://localhost:3000, SSR + watch) and `wizz build` (disposable `dist/`) commands, the project layout, and how to install the VS Code extension — routing through the release assets (`wizz-vscode-<version>.vsix` from the GitHub releases page) rather than repository paths, because a scaffolded project has no clone of wizz.js. The template rides the existing scaffold semantics unchanged: it joins the all-or-nothing pre-check and is never overwritten, so initializing into a directory that already carries a README leaves it untouched (`scripts/initTemplates.js`). `initTemplates.test.js` pins the template set order and the README's release-asset/CLI/extension references; `init.test.js` and `cli.test.js` expect the new file and its place in the refusal message.
+
 ### Post-M19 — VS Code Extension Packaging
 
 #### Added
