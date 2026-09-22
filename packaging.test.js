@@ -52,11 +52,15 @@ test('a v* tag release is guarded, tested, packed, and attached in order', () =>
   const guard = workflow.indexOf('Refuse a tag that does not match package.json');
   const suite = workflow.indexOf('Run the suite');
   const pack = workflow.indexOf('Pack the release tarball');
+  const packExtension = workflow.indexOf('Pack the VS Code extension');
   const publish = workflow.indexOf('Create the GitHub release with the tarball');
   assert.equal(guard > -1 && suite > guard && pack > suite && publish > pack, true,
     'workflow steps must run guard, suite, pack, publish in that order');
   assert.match(workflow, /mkdir -p release && npm pack --pack-destination=release/);
-  assert.match(workflow, /gh release create "\$GITHUB_REF_NAME" release\/wizz-\*\.tgz/);
+  assert.match(workflow, /node vscode-extension\/scripts\/pack\.js --out release/);
+  assert.equal(packExtension > -1 && packExtension > pack && publish > packExtension, true,
+    'the extension pack step must run after the tarball pack and before the release is created');
+  assert.match(workflow, /gh release create "\$GITHUB_REF_NAME" release\/wizz-\*\.tgz release\/wizz-vscode-\*\.vsix/);
   // Registry publication is out of scope; the tarball must not be pushed to
   // npm by the workflow.
   assert.doesNotMatch(workflow, /npm publish/);
