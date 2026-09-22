@@ -53,14 +53,11 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // collect mode (see the history above). compiler 1.10.0: the post-M19
   // package-release bump for the showcase starter scaffold and the build
   // layer's shell-side App.css copy — no compiler contract moved, so syntax
-  // and output hold.
-  // SyntaxError carries a stable code from src/compiler/diagnostics.js
-  // (WIZZ-P###/WIZZ-G###), thrown errors gain structured line/column fields,
-  // and the `diagnostics: 'collect'` option returns structured records
-  // instead of throwing. Accepted component syntax and generated output are
-  // unchanged, so the syntax and output contracts hold.
+  // and output hold. compiler 1.10.1: the release cut carrying the VS Code
+  // extension's .vsix packaging — additive only, so the syntax and output
+  // contracts hold.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.10.0',
+    compiler: '1.10.1',
     syntax: '1.4.1',
     output: '1.8.2'
   });

@@ -27,7 +27,7 @@ cd my-app
 wizz dev
 ```
 
-`wizz init` scaffolds the showcase starter: the global design-token stylesheet (`App.css`) linked from the document shell, a landing page at `/` with the reactive document head, a counter whose count persists across reloads and tabs, and the animated terminal card — plus a `/home` page that server-renders and hydrates. It is a project that runs correctly with no manual editing. `wizz init` refuses to write into a non-empty directory unless you pass `--force`, and it never overwrites an existing file.
+`wizz init` scaffolds the showcase starter: the global design-token stylesheet (`App.css`) linked from the document shell, a landing page at `/` with the reactive document head, a counter whose count persists across reloads and tabs, and the animated terminal card — plus a `/home` page that server-renders and hydrates. The scaffold also carries a `README.md` documenting the project layout, the dev/build commands, and how to install the VS Code extension from a release. It is a project that runs correctly with no manual editing. `wizz init` refuses to write into a non-empty directory unless you pass `--force`, and it never overwrites an existing file.
 
 ### Your project and the framework
 
@@ -35,7 +35,7 @@ A Wizz project contains only source files. The framework is not vendored into th
 
 You edit only `index.html`, `App.css`, and `src/**/*.wizz`. Everything else is generated: `wizz dev` and `wizz build` write `dist/` containing the compiled component modules, a copy of the runtime (`dist/runtime/`), and the extracted `app.css`. Treat `dist/` as disposable build output — browsers never see the compiler, and the generated `dist/` is self-contained for deployment.
 
-To upgrade the installed framework after a new release, re-run the installer (the install is a snapshot, not a link to any repository).
+To upgrade the installed framework after a new release, run `wizz update` (or re-run the installer; the install is a snapshot, not a link to any repository).
 
 ## CLI
 
@@ -57,7 +57,13 @@ A specific tarball can be passed as a path or URL. To install from the working t
 ./scripts/install-cli.sh --local
 ```
 
-Every release page also carries the first-party VS Code extension as `wizz-vscode-<version>.vsix`. Download it and run `code --install-extension wizz-vscode-<version>.vsix`, or use VS Code's **Install from VSIX...**; see [`vscode-extension/README.md`](vscode-extension/README.md) for what it provides.
+Every release page also carries the first-party VS Code extension as `wizz-vscode-<version>.vsix`. With the CLI installed, one command downloads the latest release's extension package and installs it through the `code` command:
+
+```bash
+wizz install-vscode-extension
+```
+
+Without the `wizz` CLI (or without `code` on PATH), download the `.vsix` from the release page and run `code --install-extension wizz-vscode-<version>.vsix`, or use VS Code's **Install from VSIX...**; see [`vscode-extension/README.md`](vscode-extension/README.md) for what it provides.
 
 The installer requires Node.js 18 or newer. It installs the compiler and CLI runtime to `${XDG_DATA_HOME:-~/.local/share}/wizz` and places the `wizz` launcher in `${XDG_BIN_HOME:-~/.local/bin}`. It does not require administrator privileges or modify shell configuration files.
 
@@ -67,7 +73,7 @@ Ensure the launcher directory is on your `PATH`. For Bash or Zsh using the defau
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-The installed `wizz` command is a copy, not a live link to the source. Run the installer again to upgrade to a newer release, or with `--local` after pulling updates that change the compiler, runtime, build script, or CLI scripts; otherwise `wizz build` and `wizz dev` continue using the previously installed copy. Source-only `.wizz` component changes do not require reinstalling. To remove the managed installation, delete the launcher and installed runtime:
+The installed `wizz` command is a copy, not a live link to the source. Run `wizz update` to fetch the latest release and swap it into the managed directory in place — the old installation is kept aside until the new one is in place, and the launcher keeps working without changes. Re-running the installer does the same from a terminal without the CLI. When developing Wizz itself, install the working tree with `--local` after pulling updates that change the compiler, runtime, build script, or CLI scripts; otherwise `wizz build` and `wizz dev` continue using the previously installed copy. Source-only `.wizz` component changes do not require reinstalling. To remove the managed installation, delete the launcher and installed runtime:
 
 ```bash
 rm -f "${XDG_BIN_HOME:-$HOME/.local/bin}/wizz"
@@ -122,13 +128,13 @@ Print what you have installed with:
 wizz --version
 ```
 
-which prints the compiler and contract version triple, for example `wizz 1.10.0 (compiler 1.10.0, syntax 1.4.1, output 1.8.2)`. The public CLI accepts `init`, `build`, `dev`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory.
+which prints the compiler and contract version triple, for example `wizz 1.10.1 (compiler 1.10.1, syntax 1.4.1, output 1.8.2)`. The public CLI accepts `init`, `build`, `dev`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory.
 
 `wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
 
 ### CLI Stability
 
-The installed `wizz` command is Wizz's public command-line interface. Its supported commands are `wizz init [directory] [--force]`, `wizz build`, `wizz build <input-directory> <output-directory>`, `wizz build --json`, `wizz dev`, and `wizz --version`; their documented defaults, generated output paths, and non-zero failure behavior are stable within a CLI major version.
+The installed `wizz` command is Wizz's public command-line interface. Its supported commands are `wizz init [directory] [--force]`, `wizz build`, `wizz build <input-directory> <output-directory>`, `wizz build --json`, `wizz dev`, `wizz update`, `wizz install-vscode-extension`, and `wizz --version`; their documented defaults, generated output paths, and non-zero failure behavior are stable within a CLI major version.
 
 `build.js`, `scripts/cli.js`, and `scripts/dev.js` are implementation entry points used by the repository and may change as the CLI evolves. Use `wizz` for application automation and development workflows.
 

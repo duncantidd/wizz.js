@@ -5,6 +5,7 @@ const { compile, compileServer } = require('../src/compiler');
 
 test('the template set covers exactly the canonical starter files', () => {
   assert.deepEqual(Object.keys(TEMPLATES), [
+    'README.md',
     'index.html',
     'App.css',
     'src/App.wizz',
@@ -12,6 +13,23 @@ test('the template set covers exactly the canonical starter files', () => {
     'src/components/Counter.wizz',
     'src/components/Card.wizz'
   ]);
+});
+
+test('the scaffolded README points a fresh project at the release distribution surface', () => {
+  const readme = TEMPLATES['README.md'];
+  // A scaffolded project has no clone of wizz.js: the extension install
+  // instructions must route through the release assets, not repository
+  // paths, and the CLI instructions through the public one-liner.
+  assert.match(readme, /https:\/\/github\.com\/duncantidd\/wizz\.js\/releases/);
+  assert.match(readme, /wizz install-vscode-extension/);
+  assert.match(readme, /wizz-vscode-<version>\.vsix/);
+  assert.match(readme, /code --install-extension wizz-vscode-<version>\.vsix/);
+  assert.match(readme, /raw\.githubusercontent\.com\/duncantidd\/wizz\.js\/main\/scripts\/install-cli\.sh/);
+  // The documented commands and defaults the rest of the templates assume.
+  assert.match(readme, /wizz dev/);
+  assert.match(readme, /http:\/\/localhost:3000/);
+  assert.match(readme, /wizz build/);
+  assert.match(readme, /dist\//);
 });
 
 test('the document shell carries the runtime mount contract and links the global stylesheet', () => {

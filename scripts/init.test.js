@@ -7,6 +7,7 @@ const TEMPLATES = require('./initTemplates.js');
 const { initProject } = require('./init.js');
 
 const EXPECTED_PATHS = [
+  'README.md',
   'index.html',
   'App.css',
   'src/App.wizz',

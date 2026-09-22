@@ -11,7 +11,13 @@ First-party editor support for Wizz components. This extension is separate from 
 
 ## Install From A Release
 
-Every release page at https://github.com/duncantidd/wizz.js/releases attaches the extension package `wizz-vscode-<version>.vsix` alongside the framework tarball. Download it and install with:
+With the Wizz CLI installed, one command downloads the latest release's extension package and installs it through the `code` command:
+
+```bash
+wizz install-vscode-extension
+```
+
+Every release page at https://github.com/duncantidd/wizz.js/releases also attaches the extension package `wizz-vscode-<version>.vsix` alongside the framework tarball. Download it and install with:
 
 ```bash
 code --install-extension wizz-vscode-<version>.vsix

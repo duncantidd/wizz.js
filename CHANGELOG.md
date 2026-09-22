@@ -11,6 +11,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Post-M19 — CLI Self-Update and Extension Install
+
+#### Added
+
+- `wizz update` fetches the latest GitHub release and swaps it into the managed installation (`${XDG_DATA_HOME:-~/.local/share}/wizz`) in place (`scripts/update.js`). The installed version is read from `src/compiler/version.js` by regex — never `require()`, so `--local` installs without a `package.json` and repeated test sandboxes behave alike — and compared numerically per segment (`1.10` sorts above `1.9`); an up-to-date install short-circuits before downloading and a locally newer install (e.g. a `--local` working-tree snapshot) is never downgraded. The swap improves on the installer's delete-then-rename: the old installation is renamed aside and restored if the second rename fails, and when the restore itself fails the staging directory holding the only copy is preserved and named in the error. An advisory lock (`.wizz-update.lock`, mkdir-EEXIST) serializes concurrent updates with the apt/dpkg remove-and-retry posture. Extraction shells out to `tar` with an argument array — GNU tar's extract mode refuses absolute and traversal members, which hand-rolling a parser would have to re-earn. `scripts/update.test.js` drives a fake managed installation against a real `tar`-built tarball served by a fake GitHub API server, covering the swap, the up-to-date and downgrade refusals, corrupt and foreign tarballs, missing `tar`, rollback, the preserved-copy failure, the lock, and the repository override.
+- `wizz install-vscode-extension` downloads the release's `wizz-vscode-<version>.vsix` (independently versioned from the framework; its own regex, never assumed to match) and installs it through the `code` command (`scripts/installVscodeExtension.js`). The probe precedes any network work — a machine without VS Code fails fast with the manual releases URL and `code --install-extension` command instead of after a wasted download — and a nonzero install exit surfaces `code`'s stderr. On Windows the probe and install spawn through `cmd.exe /d /s /c` with an argument array, because Node ≥ 18.20 refuses to spawn `.cmd` shims without a shell (CVE-2024-27980) and `shell: true` stays off the table. `scripts/installVscodeExtension.test.js` adds the repo's first PATH-stubbed fake binary (a `#!/bin/sh` `code` script logging its invocations) alongside injected-spawn tests for probe failure, the happy path, stderr surfacing, the missing-asset refusal, and temp-directory cleanup.
+- A shared release-asset layer, `scripts/releaseAssets.js`: one API call resolves the latest release for both commands (framework version taken from the tarball asset name's capture group, never the `v`-prefixed tag), with installer-matching error wording, a repository-shape validation before any URL composition, request timeouts via `AbortSignal.timeout`, streaming downloads into caller-owned staging paths, and a single download-URL choke point requiring `https:` or the operator's API host. `scripts/releaseAssets.test.js` exercises it against a local fake GitHub API server: happy resolution, missing-tarball and missing-vsix shapes, API-error passthrough, non-JSON and non-OK responses, foreign-host http refusal, api-base-host acceptance, repository validation with zero network calls, and streaming interruption.
+
+#### Changed
+
+- `runCli` now returns a promise of an exit code for the release-backed commands (`wizz update`, `wizz install-vscode-extension`); the entry block settles it into `process.exitCode`, and synchronous commands keep their exact number contract (`scripts/cli.js`). Both commands reject every argument, including `--json`. The three new modules join the shipped surface in all four places that list CLI scripts: `package.json` `files`, `packaging.test.js` `EXPECTED_FILES`, the installer's `--local` copy list, and the installer test's fake tarball — the latter so the installed-launcher test exercises the CLI's new top-level requires for free.
+
+#### Docs
+
+- The root README routes extension installation through `wizz install-vscode-extension` first and documents `wizz update` beside the re-run-installer upgrade path; the CLI Stability list gains both commands. `STRUCTURE.md` gains the three modules and their tests and extends the CLI prose. `vscode-extension/README.md` leads its release section with the CLI command. The scaffolded project README offers `wizz install-vscode-extension` before the manual `.vsix` download (`scripts/initTemplates.js`, `scripts/initTemplates.test.js`).
+
+### Post-M19 — Scaffolded Project README
+
+#### Added
+
+- `wizz init` scaffolds a `README.md` as the project's front door: what a Wizz application is, the CLI one-liner prerequisite, the `wizz dev` (http://localhost:3000, SSR + watch) and `wizz build` (disposable `dist/`) commands, the project layout, and how to install the VS Code extension — routing through the release assets (`wizz-vscode-<version>.vsix` from the GitHub releases page) rather than repository paths, because a scaffolded project has no clone of wizz.js. The template rides the existing scaffold semantics unchanged: it joins the all-or-nothing pre-check and is never overwritten, so initializing into a directory that already carries a README leaves it untouched (`scripts/initTemplates.js`). `initTemplates.test.js` pins the template set order and the README's release-asset/CLI/extension references; `init.test.js` and `cli.test.js` expect the new file and its place in the refusal message.
+
 ### Post-M19 — VS Code Extension Packaging
 
 #### Added
@@ -19,7 +41,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 
-- The `Release` workflow packs the extension into the same `release/` staging directory and attaches `release/wizz-vscode-*.vsix` to the same `v*` tag GitHub Release as the framework tarball — after the `wizz-*.tgz` token the workflow contract pins — so installing the extension needs no marketplace and no separate repository (`.github/workflows/release.yml`, `packaging.test.js`). No compiler, runtime, or generator code is touched, so the contract triple holds at compiler 1.10.0 / syntax 1.4.1 / output 1.8.2, and the extension keeps its first-distribution version 0.1.0. The `.vsix` asset name cannot match the CLI installer's `^wizz-\d+\.\d+\.\d+\.tgz$` asset regex, so `scripts/install-cli.sh` is untouched.
+- The `Release` workflow packs the extension into the same `release/` staging directory and attaches `release/wizz-vscode-*.vsix` to the same `v*` tag GitHub Release as the framework tarball — after the `wizz-*.tgz` token the workflow contract pins — so installing the extension needs no marketplace and no separate repository (`.github/workflows/release.yml`, `packaging.test.js`). No compiler, runtime, or generator code is touched, so the syntax and output contracts hold at 1.4.1 / 1.8.2, and the extension keeps its first-distribution version 0.1.0. The `.vsix` asset name cannot match the CLI installer's `^wizz-\d+\.\d+\.\d+\.tgz$` asset regex, so `scripts/install-cli.sh` is untouched.
+- Package and compiler version 1.10.0 → 1.10.1 for the release cut carrying the extension packaging: additive only, so the syntax and output contracts hold (`src/compiler/version.js`, `package.json`). The version-history note in `version.test.js` also regains its proper ending — the previous bump had spliced the 1.10.0 note into the middle of the 1.9.0 diagnostics paragraph, leaving a duplicated tail.
 
 #### Docs
 
