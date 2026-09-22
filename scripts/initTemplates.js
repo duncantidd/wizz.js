@@ -616,7 +616,11 @@ Writes the production build to dist/: compiled component modules, the copied run
 
 ## Editor setup (VS Code)
 
-Install the Wizz extension for .wizz syntax highlighting, compiler diagnostics, component navigation, and build commands. Download the latest wizz-vscode-<version>.vsix from https://github.com/duncantidd/wizz.js/releases and install it:
+Install the Wizz extension for .wizz syntax highlighting, compiler diagnostics, component navigation, and build commands. With the wizz CLI on your PATH, one command installs the latest release's extension package:
+
+    wizz install-vscode-extension
+
+Without the CLI, download the latest wizz-vscode-<version>.vsix from https://github.com/duncantidd/wizz.js/releases and install it:
 
     code --install-extension wizz-vscode-<version>.vsix
 

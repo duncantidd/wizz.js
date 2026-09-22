@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const test = require('node:test');
-const { parseCommand, runCli } = require('./cli');
+const { parseCommand, runCli, USAGE } = require('./cli');
 
 const projectRoot = path.join(__dirname, '..');
 
@@ -54,6 +54,25 @@ test('parses the init command with its directory and --force flag', () => {
   assert.deepEqual(parseCommand(['init', '--force', 'my-app']), { command: 'init', argumentsList: ['my-app'], json: false, force: true });
 });
 
+test('parses the update command and rejects any arguments', () => {
+  assert.deepEqual(parseCommand(['update']), { command: 'update', argumentsList: [], json: false, force: false });
+  assert.throws(() => parseCommand(['update', '--force']), /The update command does not accept arguments/);
+  // --json is a build flag: here it is a mistake, not a directory.
+  assert.throws(() => parseCommand(['update', '--json']), /The update command does not accept arguments/);
+  assert.match(USAGE, /wizz update/);
+});
+
+test('parses the install-vscode-extension command and rejects any arguments', () => {
+  assert.deepEqual(parseCommand(['install-vscode-extension']), {
+    command: 'install-vscode-extension',
+    argumentsList: [],
+    json: false,
+    force: false
+  });
+  assert.throws(() => parseCommand(['install-vscode-extension', 'x']), /The install-vscode-extension command does not accept arguments/);
+  assert.match(USAGE, /wizz install-vscode-extension/);
+});
+
 test('the version command prints the compiler and contract version triple', () => {
   const lines = [];
   const logger = { log: (message) => lines.push(message), error() {} };
@@ -96,6 +115,108 @@ test('starts the existing development server through the dev command', () => {
     }
   }), 0);
   assert.deepEqual(calls, [{ projectDirectory: process.cwd(), logger }, 'listen']);
+});
+
+test('the update command resolves through the async command path', async () => {
+  const lines = [];
+  const logger = { log: (message) => lines.push(message), error() {} };
+
+  const result = runCli(['update'], {
+    logger,
+    update: async () => ({ status: 'current', fromVersion: '1.10.1', toVersion: '1.10.1', dataDirectory: '/data/wizz' })
+  });
+
+  // The release-backed commands return a promise of an exit code.
+  assert.equal(typeof result.then, 'function');
+  assert.equal(await result, 0);
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /Resolving the latest Wizz release from GitHub\.\.\./);
+  assert.match(lines[1], /Wizz 1\.10\.1 is already up to date\./);
+
+  lines.length = 0;
+  await runCli(['update'], {
+    logger,
+    update: async () => ({ status: 'updated', fromVersion: '1.10.0', toVersion: '1.10.1', dataDirectory: '/data/wizz' })
+  });
+  assert.match(lines[1], /Updated Wizz 1\.10\.0 to 1\.10\.1 \(\/data\/wizz\)\./);
+
+  lines.length = 0;
+  await runCli(['update'], {
+    logger,
+    update: async () => ({ status: 'newer-local', fromVersion: '1.11.0', toVersion: '1.11.0', latestVersion: '1.10.1', dataDirectory: '/data/wizz' })
+  });
+  assert.match(lines[1], /newer than the latest release \(1\.10\.1\); refusing to downgrade\./);
+});
+
+test('a rejected async command surfaces its message and a non-zero exit code through runCli', async () => {
+  const errors = [];
+  const logger = { log() {}, error: (message) => errors.push(message) };
+
+  const result = runCli(['update'], {
+    logger,
+    update: async () => { throw new Error('the release could not be resolved'); }
+  });
+
+  await assert.rejects(result, /could not be resolved/);
+  // The rejected promise is what runCli returns; the entry block is what
+  // turns it into exit code 1 (covered by the subprocess tests below).
+  assert.equal(errors.length, 0);
+});
+
+test('e2e: update fails offline-deterministically without a managed installation', (t) => {
+  const homeDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(homeDirectory, { recursive: true, force: true }));
+  const env = { ...process.env, HOME: homeDirectory };
+  delete env.XDG_DATA_HOME;
+  delete env.XDG_BIN_HOME;
+  delete env.WIZZ_INSTALL_REPOSITORY;
+
+  const result = spawnSync(process.execPath, [path.join(projectRoot, 'scripts', 'cli.js'), 'update'], {
+    env,
+    encoding: 'utf8'
+  });
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /No managed Wizz installation/);
+});
+
+test('the install-vscode-extension command resolves through the async command path', async () => {
+  const lines = [];
+  const logger = { log: (message) => lines.push(message), error() {} };
+
+  const result = runCli(['install-vscode-extension'], {
+    logger,
+    installVscodeExtension: async () => ({ status: 'installed', version: '0.1.0', vsixName: 'wizz-vscode-0.1.0.vsix', codeCommand: 'code' })
+  });
+
+  assert.equal(typeof result.then, 'function');
+  assert.equal(await result, 0);
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /Installing the Wizz VS Code extension from the latest release\.\.\./);
+  assert.match(lines[1], /Installed the Wizz VS Code extension 0\.1\.0 via code\./);
+});
+
+test('e2e: install-vscode-extension fails fast when no code command is on PATH', (t) => {
+  const homeDirectory = createTemporaryDirectory();
+  const emptyBinDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(homeDirectory, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(emptyBinDirectory, { recursive: true, force: true }));
+  const env = { ...process.env, HOME: homeDirectory, PATH: emptyBinDirectory };
+  delete env.XDG_DATA_HOME;
+  delete env.XDG_BIN_HOME;
+  delete env.WIZZ_INSTALL_REPOSITORY;
+
+  // Spawning node by absolute path keeps the emptied PATH from breaking the
+  // process itself; inside, the probe finds no `code` and fails before any
+  // network work — the deterministic seam for the async entry block.
+  const result = spawnSync(process.execPath, [path.join(projectRoot, 'scripts', 'cli.js'), 'install-vscode-extension'], {
+    env,
+    encoding: 'utf8'
+  });
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /'code' command was not found/);
+  assert.match(result.stderr, /releases/);
 });
 
 test('runs a default project build from the command working directory', (t) => {

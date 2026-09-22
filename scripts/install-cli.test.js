@@ -42,6 +42,11 @@ function createReleaseTarball(destination) {
   fs.copyFileSync(path.join(root, 'scripts', 'dev.js'), path.join(packageDirectory, 'scripts', 'dev.js'));
   fs.copyFileSync(path.join(root, 'scripts', 'init.js'), path.join(packageDirectory, 'scripts', 'init.js'));
   fs.copyFileSync(path.join(root, 'scripts', 'initTemplates.js'), path.join(packageDirectory, 'scripts', 'initTemplates.js'));
+  // Required by cli.js at top level: the installed launcher test below
+  // exercises these requires for free.
+  fs.copyFileSync(path.join(root, 'scripts', 'releaseAssets.js'), path.join(packageDirectory, 'scripts', 'releaseAssets.js'));
+  fs.copyFileSync(path.join(root, 'scripts', 'update.js'), path.join(packageDirectory, 'scripts', 'update.js'));
+  fs.copyFileSync(path.join(root, 'scripts', 'installVscodeExtension.js'), path.join(packageDirectory, 'scripts', 'installVscodeExtension.js'));
   fs.writeFileSync(
     path.join(packageDirectory, 'package.json'),
     JSON.stringify({ name: 'wizz', version: '9.9.9-test' })
