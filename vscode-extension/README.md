@@ -9,7 +9,19 @@ First-party editor support for Wizz components. This extension is separate from 
 - Go to Definition for default `.wizz` imports and `Wizz: Open Page`, which lists application pages by their generated routes.
 - `Wizz: Build Project` and `Wizz: Start Development Server` commands.
 
-## Install And Run
+## Install From A Release
+
+Every release page at https://github.com/duncantidd/wizz.js/releases attaches the extension package `wizz-vscode-<version>.vsix` alongside the framework tarball. Download it and install with:
+
+```bash
+code --install-extension wizz-vscode-<version>.vsix
+```
+
+or from VS Code: Extensions view → "Views and More Actions" (…) → **Install from VSIX...**.
+
+The extension's version is independent of the framework version: it drives the installed stable `wizz` CLI (found on `PATH`, or via `wizz.compilerPath`) and never bundles the compiler, so upgrading the framework does not require reinstalling the extension and the other way around.
+
+## Install And Run (Development)
 
 Install the Wizz CLI from the framework root before using build or diagnostic integration:
 
