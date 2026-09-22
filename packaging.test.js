@@ -55,6 +55,7 @@ test('a v* tag release is guarded, tested, packed, and attached in order', () =>
   const publish = workflow.indexOf('Create the GitHub release with the tarball');
   assert.equal(guard > -1 && suite > guard && pack > suite && publish > pack, true,
     'workflow steps must run guard, suite, pack, publish in that order');
+  assert.match(workflow, /mkdir -p release && npm pack --pack-destination=release/);
   assert.match(workflow, /gh release create "\$GITHUB_REF_NAME" release\/wizz-\*\.tgz/);
   // Registry publication is out of scope; the tarball must not be pushed to
   // npm by the workflow.
