@@ -5,6 +5,7 @@ const { main: buildProject } = require('../build');
 const { startDevelopmentServer } = require('./dev');
 const { initProject } = require('./init');
 const { update: updateInstallation } = require('./update');
+const { installVscodeExtension } = require('./installVscodeExtension');
 const { DEFAULT_REPOSITORY } = require('./releaseAssets');
 const { VERSIONS } = require('../src/compiler');
 
@@ -13,6 +14,7 @@ const USAGE = `Usage:
   wizz build [input-directory] [output-directory] [--json]
   wizz dev                          Start the development server
   wizz update                       Update the managed installation to the latest release
+  wizz install-vscode-extension     Install the latest VS Code extension from a release
   wizz --version                    Print the compiler and contract versions`;
 
 function parseCommand(argv) {
@@ -29,16 +31,17 @@ function parseCommand(argv) {
     return { command: 'version', argumentsList: [], json: false, force: false };
   }
 
-  if (command !== 'build' && command !== 'dev' && command !== 'init' && command !== 'update') {
+  if (command !== 'build' && command !== 'dev' && command !== 'init' &&
+      command !== 'update' && command !== 'install-vscode-extension') {
     throw new Error(USAGE);
   }
 
   // The release-backed commands take no arguments at all: a stray `--json`
   // here is a mistake, not a directory, so it is rejected rather than
   // silently reinterpreted (the same discipline the dev command applies).
-  if (command === 'update') {
+  if (command === 'update' || command === 'install-vscode-extension') {
     if (argumentsList.length !== 0) {
-      throw new Error(`The update command does not accept arguments.\n\n` + USAGE);
+      throw new Error(`The ${command} command does not accept arguments.\n\n` + USAGE);
     }
     return { command, argumentsList: [], json: false, force: false };
   }
@@ -78,6 +81,7 @@ function runCli(argv, dependencies = {}) {
   const startDev = dependencies.startDev || startDevelopmentServer;
   const init = dependencies.init || initProject;
   const updateCommand = dependencies.update || updateInstallation;
+  const installExtension = dependencies.installVscodeExtension || installVscodeExtension;
   const logger = dependencies.logger || console;
 
   if (command === 'version') {
@@ -117,6 +121,15 @@ function runCli(argv, dependencies = {}) {
       } else {
         logger.log(`Wizz ${result.fromVersion} is already up to date.`);
       }
+      return 0;
+    });
+  }
+
+  if (command === 'install-vscode-extension') {
+    const repository = process.env.WIZZ_INSTALL_REPOSITORY || DEFAULT_REPOSITORY;
+    logger.log('Installing the Wizz VS Code extension from the latest release...');
+    return installExtension({ repository }).then((result) => {
+      logger.log(`Installed the Wizz VS Code extension ${result.version} via code.`);
       return 0;
     });
   }

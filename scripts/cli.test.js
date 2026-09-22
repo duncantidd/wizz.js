@@ -62,6 +62,17 @@ test('parses the update command and rejects any arguments', () => {
   assert.match(USAGE, /wizz update/);
 });
 
+test('parses the install-vscode-extension command and rejects any arguments', () => {
+  assert.deepEqual(parseCommand(['install-vscode-extension']), {
+    command: 'install-vscode-extension',
+    argumentsList: [],
+    json: false,
+    force: false
+  });
+  assert.throws(() => parseCommand(['install-vscode-extension', 'x']), /The install-vscode-extension command does not accept arguments/);
+  assert.match(USAGE, /wizz install-vscode-extension/);
+});
+
 test('the version command prints the compiler and contract version triple', () => {
   const lines = [];
   const logger = { log: (message) => lines.push(message), error() {} };
@@ -167,6 +178,45 @@ test('e2e: update fails offline-deterministically without a managed installation
 
   assert.equal(result.status, 1, result.stderr);
   assert.match(result.stderr, /No managed Wizz installation/);
+});
+
+test('the install-vscode-extension command resolves through the async command path', async () => {
+  const lines = [];
+  const logger = { log: (message) => lines.push(message), error() {} };
+
+  const result = runCli(['install-vscode-extension'], {
+    logger,
+    installVscodeExtension: async () => ({ status: 'installed', version: '0.1.0', vsixName: 'wizz-vscode-0.1.0.vsix', codeCommand: 'code' })
+  });
+
+  assert.equal(typeof result.then, 'function');
+  assert.equal(await result, 0);
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /Installing the Wizz VS Code extension from the latest release\.\.\./);
+  assert.match(lines[1], /Installed the Wizz VS Code extension 0\.1\.0 via code\./);
+});
+
+test('e2e: install-vscode-extension fails fast when no code command is on PATH', (t) => {
+  const homeDirectory = createTemporaryDirectory();
+  const emptyBinDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(homeDirectory, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(emptyBinDirectory, { recursive: true, force: true }));
+  const env = { ...process.env, HOME: homeDirectory, PATH: emptyBinDirectory };
+  delete env.XDG_DATA_HOME;
+  delete env.XDG_BIN_HOME;
+  delete env.WIZZ_INSTALL_REPOSITORY;
+
+  // Spawning node by absolute path keeps the emptied PATH from breaking the
+  // process itself; inside, the probe finds no `code` and fails before any
+  // network work — the deterministic seam for the async entry block.
+  const result = spawnSync(process.execPath, [path.join(projectRoot, 'scripts', 'cli.js'), 'install-vscode-extension'], {
+    env,
+    encoding: 'utf8'
+  });
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /'code' command was not found/);
+  assert.match(result.stderr, /releases/);
 });
 
 test('runs a default project build from the command working directory', (t) => {

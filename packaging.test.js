@@ -85,7 +85,7 @@ const EXPECTED_FILES = [
   'src/components/Card.wizz', 'src/components/Counter.wizz', 'src/components/Panel.wizz',
   'src/pages/Home.wizz',
   'scripts/cli.js', 'scripts/dev.js', 'scripts/init.js', 'scripts/initTemplates.js',
-  'scripts/releaseAssets.js', 'scripts/update.js',
+  'scripts/releaseAssets.js', 'scripts/update.js', 'scripts/installVscodeExtension.js',
   'scripts/ssr-demo.js', 'scripts/install-cli.sh'
 ];
 
