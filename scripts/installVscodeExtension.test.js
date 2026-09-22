@@ -213,7 +213,14 @@ test('a failed download removes the temporary directory', async (t) => {
   };
 
   await assert.rejects(
-    installVscodeExtension({ repository: 'o/r', apiBase: serverUrl, tempDirectoryFactory }),
+    installVscodeExtension({
+      repository: 'o/r',
+      apiBase: serverUrl,
+      // The probe would otherwise stop execution on machines (CI runners)
+      // without a `code` command, and the test is about the download.
+      spawnImpl: () => ({ status: 0 }),
+      tempDirectoryFactory
+    }),
     /Could not download/
   );
   assert.deepEqual(tempDirectories.filter((directory) => fs.existsSync(directory)), []);
