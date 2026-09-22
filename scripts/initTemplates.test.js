@@ -21,6 +21,7 @@ test('the scaffolded README points a fresh project at the release distribution s
   // instructions must route through the release assets, not repository
   // paths, and the CLI instructions through the public one-liner.
   assert.match(readme, /https:\/\/github\.com\/duncantidd\/wizz\.js\/releases/);
+  assert.match(readme, /wizz install-vscode-extension/);
   assert.match(readme, /wizz-vscode-<version>\.vsix/);
   assert.match(readme, /code --install-extension wizz-vscode-<version>\.vsix/);
   assert.match(readme, /raw\.githubusercontent\.com\/duncantidd\/wizz\.js\/main\/scripts\/install-cli\.sh/);
