@@ -1,14 +1,18 @@
 #!/usr/bin/env node
+const os = require('node:os');
 const path = require('node:path');
 const { main: buildProject } = require('../build');
 const { startDevelopmentServer } = require('./dev');
 const { initProject } = require('./init');
+const { update: updateInstallation } = require('./update');
+const { DEFAULT_REPOSITORY } = require('./releaseAssets');
 const { VERSIONS } = require('../src/compiler');
 
 const USAGE = `Usage:
   wizz init [directory] [--force]   Scaffold a starter project
   wizz build [input-directory] [output-directory] [--json]
   wizz dev                          Start the development server
+  wizz update                       Update the managed installation to the latest release
   wizz --version                    Print the compiler and contract versions`;
 
 function parseCommand(argv) {
@@ -25,8 +29,18 @@ function parseCommand(argv) {
     return { command: 'version', argumentsList: [], json: false, force: false };
   }
 
-  if (command !== 'build' && command !== 'dev' && command !== 'init') {
+  if (command !== 'build' && command !== 'dev' && command !== 'init' && command !== 'update') {
     throw new Error(USAGE);
+  }
+
+  // The release-backed commands take no arguments at all: a stray `--json`
+  // here is a mistake, not a directory, so it is rejected rather than
+  // silently reinterpreted (the same discipline the dev command applies).
+  if (command === 'update') {
+    if (argumentsList.length !== 0) {
+      throw new Error(`The update command does not accept arguments.\n\n` + USAGE);
+    }
+    return { command, argumentsList: [], json: false, force: false };
   }
 
   // `--json` is a build flag, not a directory: it may appear in any position
@@ -63,6 +77,7 @@ function runCli(argv, dependencies = {}) {
   const build = dependencies.build || buildProject;
   const startDev = dependencies.startDev || startDevelopmentServer;
   const init = dependencies.init || initProject;
+  const updateCommand = dependencies.update || updateInstallation;
   const logger = dependencies.logger || console;
 
   if (command === 'version') {
@@ -87,6 +102,25 @@ function runCli(argv, dependencies = {}) {
     return 0;
   }
 
+  if (command === 'update') {
+    // Both arms must receive the join: an env override replaces the root,
+    // not the installation directory itself (installer layout, XDG-based).
+    const dataRoot = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share');
+    const dataDirectory = path.join(dataRoot, 'wizz');
+    const repository = process.env.WIZZ_INSTALL_REPOSITORY || DEFAULT_REPOSITORY;
+    logger.log('Resolving the latest Wizz release from GitHub...');
+    return updateCommand({ dataDirectory, repository }).then((result) => {
+      if (result.status === 'updated') {
+        logger.log(`Updated Wizz ${result.fromVersion} to ${result.toVersion} (${result.dataDirectory}).`);
+      } else if (result.status === 'newer-local') {
+        logger.log(`Installed Wizz ${result.fromVersion} is newer than the latest release (${result.latestVersion}); refusing to downgrade.`);
+      } else {
+        logger.log(`Wizz ${result.fromVersion} is already up to date.`);
+      }
+      return 0;
+    });
+  }
+
   const developmentServer = startDev({ projectDirectory: process.cwd(), logger });
   void developmentServer.listen();
   return 0;
@@ -94,7 +128,18 @@ function runCli(argv, dependencies = {}) {
 
 if (require.main === module) {
   try {
-    process.exitCode = runCli(process.argv.slice(2));
+    const result = runCli(process.argv.slice(2));
+    // The release-backed commands resolve asynchronously: their contract is
+    // a promise of an exit code, which this entry block settles once the
+    // network work completes. Synchronous commands still return a number.
+    if (result && typeof result.then === 'function') {
+      result.then(
+        (code) => { process.exitCode = code; },
+        (error) => { console.error(error.message); process.exitCode = 1; }
+      );
+    } else {
+      process.exitCode = result;
+    }
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

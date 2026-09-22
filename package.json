@@ -39,6 +39,8 @@
     "scripts/initTemplates.js",
     "scripts/cli.js",
     "scripts/dev.js",
+    "scripts/releaseAssets.js",
+    "scripts/update.js",
     "scripts/ssr-demo.js",
     "scripts/install-cli.sh",
     "README.md",
