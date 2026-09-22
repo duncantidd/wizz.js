@@ -29,6 +29,14 @@ wizz dev
 
 `wizz init` scaffolds the showcase starter: the global design-token stylesheet (`App.css`) linked from the document shell, a landing page at `/` with the reactive document head, a counter whose count persists across reloads and tabs, and the animated terminal card — plus a `/home` page that server-renders and hydrates. It is a project that runs correctly with no manual editing. `wizz init` refuses to write into a non-empty directory unless you pass `--force`, and it never overwrites an existing file.
 
+### Your project and the framework
+
+A Wizz project contains only source files. The framework is not vendored into the project: the compiler, runtime, and CLI live in the managed install (`${XDG_DATA_HOME:-~/.local/share}/wizz`), and the `wizz` command loads them from there.
+
+You edit only `index.html`, `App.css`, and `src/**/*.wizz`. Everything else is generated: `wizz dev` and `wizz build` write `dist/` containing the compiled component modules, a copy of the runtime (`dist/runtime/`), and the extracted `app.css`. Treat `dist/` as disposable build output — browsers never see the compiler, and the generated `dist/` is self-contained for deployment.
+
+To upgrade the installed framework after a new release, re-run the installer (the install is a snapshot, not a link to any repository).
+
 ## CLI
 
 Wizz installs without npm or a package registry. A first-time install needs only Node.js 18+, curl, and tar — one command fetches the installer from the repository and runs it:
