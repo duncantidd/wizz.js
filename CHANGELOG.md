@@ -22,6 +22,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### Changed
 
 - `runCli` now returns a promise of an exit code for the release-backed commands (`wizz update`, `wizz install-vscode-extension`); the entry block settles it into `process.exitCode`, and synchronous commands keep their exact number contract (`scripts/cli.js`). Both commands reject every argument, including `--json`. The three new modules join the shipped surface in all four places that list CLI scripts: `package.json` `files`, `packaging.test.js` `EXPECTED_FILES`, the installer's `--local` copy list, and the installer test's fake tarball — the latter so the installed-launcher test exercises the CLI's new top-level requires for free.
+- Package and compiler version 1.10.1 → 1.11.0 for the release cut carrying the CLI self-update and extension-install commands and the scaffolded project README: additive only, so the syntax and output contracts hold (`src/compiler/version.js`, `package.json`). The README's `wizz --version` example moves with the bump and its inline CLI enumeration — which had silently trailed the CLI Stability list — now names `update` and `install-vscode-extension`.
 
 #### Docs
 
