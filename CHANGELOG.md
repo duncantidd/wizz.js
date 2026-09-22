@@ -22,6 +22,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `wizz build` copies a global `App.css` sitting beside the located document shell into the output, mirroring the dev server's copy: shells link it as `./App.css`, so production builds previously shipped a link that 404'd. The lookup is shell-relative (input directory or its parent), covering both build layouts, and a shell-less project copies neither file, keeping today's behavior. The relative `./App.css` link does not suppress the extracted `app.css` injection — the href pattern stays slash-anchored and case-sensitive — so a built shell links both stylesheets. No compiler contract is touched: syntax holds at 1.4.1 and output at 1.8.2 (`build.js`).
 - Package and compiler version 1.9.0 → 1.10.0 for the next release cut: the version bump covers the showcase scaffold, the App.css build copy, and the installer failure-handling fix — all additive, so only the compiler's own version string moves while the syntax and output contracts hold (`src/compiler/version.js`, `package.json`).
 
+#### Fixed
+
+- The `Release` GitHub Actions workflow now creates its `release/` staging directory before running `npm pack --pack-destination=release`; `npm pack` does not create the destination itself, so tagged releases previously failed after the test suite with `ENOENT` while opening `release/wizz-<version>.tgz`. `packaging.test.js` now pins that guard in the workflow contract (`.github/workflows/release.yml`, `packaging.test.js`).
+
 ### Milestone 19 — Scaffold Projects and Expose Structured Diagnostics
 
 #### Added

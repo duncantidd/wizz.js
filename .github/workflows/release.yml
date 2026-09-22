@@ -29,7 +29,7 @@ jobs:
       - name: Run the suite
         run: node --test
       - name: Pack the release tarball
-        run: npm pack --pack-destination=release
+        run: mkdir -p release && npm pack --pack-destination=release
       - name: Create the GitHub release with the tarball
         env:
           GH_TOKEN: ${{ github.token }}
