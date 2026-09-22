@@ -1,6 +1,6 @@
 {
   "name": "wizz",
-  "version": "1.10.1",
+  "version": "1.11.0",
   "description": "Zero-dependency compiled component framework: a build-time compiler that turns .wizz components into DOM-native ES modules, with a dev server that server-renders and hydrates.",
   "license": "MIT",
   "author": "Duncan Tidd",

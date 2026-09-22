@@ -55,9 +55,13 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // layer's shell-side App.css copy — no compiler contract moved, so syntax
   // and output hold. compiler 1.10.1: the release cut carrying the VS Code
   // extension's .vsix packaging — additive only, so the syntax and output
-  // contracts hold.
+  // contracts hold. compiler 1.11.0: the release cut carrying `wizz update`
+  // (self-update of the managed installation) and `wizz install-vscode-extension`
+  // (one-command extension install), plus the scaffolded project README —
+  // CLI-layer additions with no compiler contract movement, so syntax and
+  // output hold.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.10.1',
+    compiler: '1.11.0',
     syntax: '1.4.1',
     output: '1.8.2'
   });
