@@ -289,7 +289,7 @@ test('update preserves the only copy of the old installation when the restore it
   );
   // The staging directory holding staging/old must survive: it is now the
   // only copy of the previous installation.
-  const leftover = fs.readdirSync(workspace).find((entry) => entry.startsWith('.wizz-update.'));
+  const leftover = fs.readdirSync(workspace).find((entry) => entry.startsWith('.wizz-update'));
   assert.notEqual(leftover, undefined);
   assert.equal(fs.existsSync(path.join(workspace, leftover, 'old', 'src', 'compiler', 'version.js')), true);
 });

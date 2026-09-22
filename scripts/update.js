@@ -105,8 +105,10 @@ async function update({
   let stagingHoldsTheOnlyCopy = false;
   try {
     // A sibling of the data directory: same filesystem, so the swap is a
-    // plain rename.
-    staging = fs.mkdtempSync(path.join(dataParent, '.wizz-update.XXXXXX'));
+    // plain rename. The template ends without X — Node's mkdtemp appends
+    // random characters (unlike bash mktemp's X replacement) and warns on
+    // X-terminated templates.
+    staging = fs.mkdtempSync(path.join(dataParent, '.wizz-update-'));
 
     const release = await resolveLatestRelease({ repository, apiBase, fetchImpl });
     const comparison = compareVersions(release.version, currentVersion);
