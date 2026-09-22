@@ -19,7 +19,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 
-- The `Release` workflow packs the extension into the same `release/` staging directory and attaches `release/wizz-vscode-*.vsix` to the same `v*` tag GitHub Release as the framework tarball — after the `wizz-*.tgz` token the workflow contract pins — so installing the extension needs no marketplace and no separate repository (`.github/workflows/release.yml`, `packaging.test.js`). No compiler, runtime, or generator code is touched, so the contract triple holds at compiler 1.10.0 / syntax 1.4.1 / output 1.8.2, and the extension keeps its first-distribution version 0.1.0. The `.vsix` asset name cannot match the CLI installer's `^wizz-\d+\.\d+\.\d+\.tgz$` asset regex, so `scripts/install-cli.sh` is untouched.
+- The `Release` workflow packs the extension into the same `release/` staging directory and attaches `release/wizz-vscode-*.vsix` to the same `v*` tag GitHub Release as the framework tarball — after the `wizz-*.tgz` token the workflow contract pins — so installing the extension needs no marketplace and no separate repository (`.github/workflows/release.yml`, `packaging.test.js`). No compiler, runtime, or generator code is touched, so the syntax and output contracts hold at 1.4.1 / 1.8.2, and the extension keeps its first-distribution version 0.1.0. The `.vsix` asset name cannot match the CLI installer's `^wizz-\d+\.\d+\.\d+\.tgz$` asset regex, so `scripts/install-cli.sh` is untouched.
+- Package and compiler version 1.10.0 → 1.10.1 for the release cut carrying the extension packaging: additive only, so the syntax and output contracts hold (`src/compiler/version.js`, `package.json`). The version-history note in `version.test.js` also regains its proper ending — the previous bump had spliced the 1.10.0 note into the middle of the 1.9.0 diagnostics paragraph, leaving a duplicated tail.
 
 #### Docs
 
