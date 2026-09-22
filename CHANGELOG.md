@@ -26,6 +26,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - The `Release` GitHub Actions workflow now creates its `release/` staging directory before running `npm pack --pack-destination=release`; `npm pack` does not create the destination itself, so tagged releases previously failed after the test suite with `ENOENT` while opening `release/wizz-<version>.tgz`. `packaging.test.js` now pins that guard in the workflow contract (`.github/workflows/release.yml`, `packaging.test.js`).
 
+#### Docs
+
+- The Get Started guide now states the project/framework separation up front: a Wizz project contains only source files (`index.html`, `App.css`, `src/**/*.wizz`), the compiler, runtime, and CLI live in the managed install rather than being vendored into the project, and everything under `dist/` is disposable generated output — compiled component modules, the copied runtime, and the extracted `app.css` — that ships self-contained for deployment (README.md).
+
 ### Milestone 19 — Scaffold Projects and Expose Structured Diagnostics
 
 #### Added
