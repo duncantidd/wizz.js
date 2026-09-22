@@ -578,8 +578,56 @@ const CARD_WIZZ = `<div class="card">
 </wizz:style>
 `;
 
+// The scaffolded project's front door: what it is, how to run it, and the
+// VS Code extension that makes editing it pleasant. Release-asset URLs are
+// used instead of repository paths because a scaffolded project has no
+// clone of wizz.js — the reader installed the CLI from a release.
+const README_MD = `# My Wizz App
+
+A [Wizz](https://github.com/duncantidd/wizz.js) application: .wizz components compiled to platform-native DOM code, server-rendered and hydrated by default, with nothing to install beyond the Wizz CLI itself.
+
+## Prerequisites
+
+- Node.js 18 or newer
+- The Wizz CLI:
+
+    curl -fsSL https://raw.githubusercontent.com/duncantidd/wizz.js/main/scripts/install-cli.sh | bash
+
+## Develop
+
+    wizz dev
+
+Builds the project, serves it at http://localhost:3000, and watches src/**/*.wizz for changes. Pages server-render on the server and hydrate in the browser.
+
+## Build
+
+    wizz build
+
+Writes the production build to dist/: compiled component modules, the copied runtime, and the extracted styles, self-contained for static deployment. dist/ is disposable generated output — everything you edit lives in index.html, App.css, and src/**/*.wizz.
+
+## Project layout
+
+    index.html                   Document shell
+    App.css                      Global design tokens and landing-page layout
+    src/App.wizz                 Landing page (served at /)
+    src/pages/Home.wizz          Routed page (served at /home)
+    src/components/Counter.wizz  Imported component with persistent state
+    src/components/Card.wizz     Imported component
+
+## Editor setup (VS Code)
+
+Install the Wizz extension for .wizz syntax highlighting, compiler diagnostics, component navigation, and build commands. Download the latest wizz-vscode-<version>.vsix from https://github.com/duncantidd/wizz.js/releases and install it:
+
+    code --install-extension wizz-vscode-<version>.vsix
+
+or from VS Code: Extensions view -> "Views and More Actions" (...) -> Install from VSIX...
+
+The extension drives the installed wizz CLI, so keep the launcher on your PATH (or point the wizz.compilerPath setting at it).
+`;
+
 // Insertion order is the scaffold order init reports.
 module.exports = {
+  'README.md': README_MD,
   'index.html': INDEX_HTML,
   'App.css': APP_CSS,
   'src/App.wizz': APP_WIZZ,
