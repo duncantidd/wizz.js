@@ -17,6 +17,8 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 │   ├── services.js                       Pure diagnostic/import utility functions
 │   ├── language-configuration.json      Wizz bracket, comment, and pairing behavior
 │   ├── syntaxes/wizz.tmLanguage.json    TextMate grammar for Wizz source
+│   ├── scripts/pack.js                   Zero-dependency .vsix packer (CRC-32, zip writer, escaped vsix manifest)
+│   ├── scripts/pack.test.js              Round-trip, manifest, escaping, and refusal tests for the packer
 │   ├── .vscode/launch.json              Extension Development Host debug profile
 │   └── test/services.test.js             Focused Node tests for extension utilities
 ├── scripts/

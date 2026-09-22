@@ -57,6 +57,8 @@ A specific tarball can be passed as a path or URL. To install from the working t
 ./scripts/install-cli.sh --local
 ```
 
+Every release page also carries the first-party VS Code extension as `wizz-vscode-<version>.vsix`. Download it and run `code --install-extension wizz-vscode-<version>.vsix`, or use VS Code's **Install from VSIX...**; see [`vscode-extension/README.md`](vscode-extension/README.md) for what it provides.
+
 The installer requires Node.js 18 or newer. It installs the compiler and CLI runtime to `${XDG_DATA_HOME:-~/.local/share}/wizz` and places the `wizz` launcher in `${XDG_BIN_HOME:-~/.local/bin}`. It does not require administrator privileges or modify shell configuration files.
 
 Ensure the launcher directory is on your `PATH`. For Bash or Zsh using the default location, add this to your shell profile, then open a new shell:

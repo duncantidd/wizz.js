@@ -11,6 +11,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Post-M19 — VS Code Extension Packaging
+
+#### Added
+
+- The VS Code extension is packaged as `wizz-vscode-<version>.vsix` by a zero-dependency packer, `vscode-extension/scripts/pack.js`: a hand-rolled OPC/zip writer (CRC-32 over a cached 256-entry table, `zlib.deflateRawSync` with a store fallback, deterministic 1980-01-01 DOS timestamps, unix-mode external attributes) producing `[Content_Types].xml`, an escaped `extension.vsixmanifest` (PackageManifest 2.0.0: identity, engine `^1.85.0`, workspace ExtensionKind, the `Microsoft.VisualStudio.Code.Manifest` asset), and the `extension/` surface — `package.json`, `extension.js`, `services.js`, `language-configuration.json`, `syntaxes/wizz.tmLanguage.json`, `README.md`, and the repository MIT `LICENSE` — with `test/`, `.vscode/`, and the packer itself excluded. Every manifest value derived from `package.json` passes XML escaping. `vscode-extension/scripts/pack.test.js` pins the CRC vectors, a full central-directory round-trip with independent local/central header cross-checks, byte-equality with the source files, member order and exclusions, manifest identity/engine/asset fields, XML escaping, byte determinism, and refusal of malformed metadata, missing whitelisted files, and pre-existing targets, plus `unzip -t` validation where `unzip` exists (skipped locally).
+
+#### Changed
+
+- The `Release` workflow packs the extension into the same `release/` staging directory and attaches `release/wizz-vscode-*.vsix` to the same `v*` tag GitHub Release as the framework tarball — after the `wizz-*.tgz` token the workflow contract pins — so installing the extension needs no marketplace and no separate repository (`.github/workflows/release.yml`, `packaging.test.js`). No compiler, runtime, or generator code is touched, so the contract triple holds at compiler 1.10.0 / syntax 1.4.1 / output 1.8.2, and the extension keeps its first-distribution version 0.1.0. The `.vsix` asset name cannot match the CLI installer's `^wizz-\d+\.\d+\.\d+\.tgz$` asset regex, so `scripts/install-cli.sh` is untouched.
+
+#### Docs
+
+- `vscode-extension/README.md` documents installing the release `.vsix` beside the F5 development flow; the root README's install section notes the `.vsix` asset on the same release pages; `STRUCTURE.md` gains the packer tree lines; ROADMAP section 11 gains its completion notes.
+
 ### Post-M19 — Showcase Starter Scaffold
 
 #### Added
