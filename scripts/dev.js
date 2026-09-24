@@ -3,6 +3,18 @@ const http = require('node:http');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { buildProject, discoverWizzFiles } = require('../build');
+const {
+  API_ROUTE_PREFIX,
+  createApiRequestContext,
+  discoverApiRoutes,
+  isServerOutputPath,
+  listJavaScriptFiles,
+  loadServerEnv,
+  readRequestBody,
+  resolveApiRoute,
+  sendApiErrorResponse,
+  sendApiResult
+} = require('./apiRoutes');
 
 const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -128,14 +140,136 @@ async function renderServerRoute(routeEntry, indexPath, response) {
   response.end(document);
 }
 
+// Milestone 21: `/api/**` requests resolve against `src/server/api/**`
+// through the discovered route table (a Map lookup, never a filesystem join,
+// so traversal has nothing to resolve against) and run inside the dev server
+// process. Handlers execute from their `dist/server/**` copies, never from
+// source: the build pins `dist/package.json` to `{"type":"module"}`, and
+// Node 18/20 have no module-syntax detection, so importing the authored
+// `src/.../*.js` directly would parse as CommonJS and fail on `export` in
+// any project without its own type declaration. Dev therefore runs the same
+// ESM-typed artifacts production runs.
+//
+// The watcher only rebuilds on `.wizz` changes, so handler edits would leave
+// the dist copies stale; each API request re-copies any source module newer
+// than its copy (source mtimes are preserved on copies, so the comparison is
+// stable) and imports the copy cache-busted by the source mtime — a handler
+// edit takes effect on the next request without a rebuild. A relative edit
+// to a private module refreshes its copy on disk, but the importing
+// handler's module URL only changes when the handler file itself changes
+// (Node's ESM cache keys on it): touch the handler too, or restart, to pick
+// up shared-module edits.
+function syncServerModules(serverSourceDirectory, outputDirectory) {
+  if (!fs.existsSync(serverSourceDirectory) || !fs.statSync(serverSourceDirectory).isDirectory()) {
+    return;
+  }
+
+  for (const sourcePath of listJavaScriptFiles(serverSourceDirectory)) {
+    const targetPath = path.join(outputDirectory, 'server', path.relative(serverSourceDirectory, sourcePath));
+    let stale = true;
+    try {
+      stale = fs.statSync(targetPath).mtimeMs < fs.statSync(sourcePath).mtimeMs;
+    } catch {
+      stale = true;
+    }
+    if (!stale) continue;
+
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.copyFileSync(sourcePath, targetPath);
+    // utimesSync accepts Dates (it would read raw numbers as seconds, which
+    // the *Ms fields are not) — preserving the source mtime keeps the
+    // staleness comparison stable across repeated requests.
+    const { atime, mtime } = fs.statSync(sourcePath);
+    fs.utimesSync(targetPath, atime, mtime);
+  }
+
+  // The module-type marker the build writes beside its output: a dev server
+  // serving a dist that predates it (or a direct createRequestHandler caller
+  // that never built) still needs the pin for Node 18/20 ESM parsing.
+  const moduleTypeMarkerPath = path.join(outputDirectory, 'package.json');
+  if (!fs.existsSync(moduleTypeMarkerPath)) {
+    fs.writeFileSync(moduleTypeMarkerPath, '{"type":"module"}\n', 'utf8');
+  }
+}
+
+async function handleApiRequest(request, response, url, requestPath, apiDirectory, outputDirectory, logger) {
+  // A handler created without an API source directory (older direct
+  // createRequestHandler callers) simply has no API surface.
+  if (!apiDirectory) {
+    sendApiErrorResponse(response, 404, logger);
+    return;
+  }
+
+  let routes;
+  try {
+    routes = discoverApiRoutes(apiDirectory);
+  } catch (error) {
+    logger.error(error.message);
+    sendApiErrorResponse(response, 404, logger);
+    return;
+  }
+
+  const routeEntry = resolveApiRoute(routes, requestPath);
+  if (!routeEntry) {
+    sendApiErrorResponse(response, 404, logger);
+    return;
+  }
+
+  try {
+    const serverSourceDirectory = path.dirname(apiDirectory);
+    syncServerModules(serverSourceDirectory, outputDirectory);
+    const relativeModulePath = path.relative(serverSourceDirectory, routeEntry.modulePath);
+    const moduleCopyPath = path.join(outputDirectory, 'server', relativeModulePath);
+    // Cache-bust by the SOURCE mtime: sync preserves it on the copy, so an
+    // edit forms a fresh module URL even though the copy is rewritten.
+    const { mtimeMs } = fs.statSync(routeEntry.modulePath);
+    const handlerModule = await import(`${pathToFileURL(moduleCopyPath).href}?v=${mtimeMs}`);
+    const handler = handlerModule.default;
+    if (typeof handler !== 'function') {
+      throw new Error(`API module has no default export function: ${routeEntry.modulePath}`);
+    }
+
+    const body = await readRequestBody(request);
+    const result = await handler(createApiRequestContext(request, url, body, requestPath));
+    sendApiResult(response, result);
+  } catch (error) {
+    // Framework-level request problems carry the status to answer with;
+    // everything else — a handler throw, a bad import, a missing default
+    // export — is a 500 whose detail goes to the log, never the client.
+    const statusCode = error && typeof error.statusCode === 'number' ? error.statusCode : 500;
+    sendApiErrorResponse(response, statusCode, logger, `${routeEntry.routePath}: ${error.message}`);
+  }
+}
+
 function createRequestHandler(outputDirectory, options = {}) {
   const resolvedOutputDirectory = path.resolve(outputDirectory);
   const indexPath = path.join(resolvedOutputDirectory, 'index.html');
   const getRouteTable = options.getRouteTable || (() => readRouteTable(resolvedOutputDirectory));
   const logger = options.logger || console;
+  const apiDirectory = options.apiDirectory || null;
 
   return (request, response) => {
-    const requestPath = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
+    let requestPath;
+    let url;
+    try {
+      url = new URL(request.url, 'http://localhost');
+      requestPath = decodeURIComponent(url.pathname);
+    } catch {
+      // An undecodable pathname is a malformed request, not a crash.
+      response.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Bad request');
+      return;
+    }
+
+    // Handler source lives in `dist/server/` for external Node hosts after a
+    // production build; a dev server pointed at that dist must never serve it
+    // as a static file.
+    if (isServerOutputPath(requestPath)) {
+      response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Not found');
+      return;
+    }
+
     const filePath = path.resolve(resolvedOutputDirectory, `.${requestPath}`);
     const isInsideOutput = filePath === resolvedOutputDirectory
       || filePath.startsWith(`${resolvedOutputDirectory}${path.sep}`);
@@ -150,6 +284,21 @@ function createRequestHandler(outputDirectory, options = {}) {
     if (path.extname(requestPath)) {
       response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       response.end('Not found');
+      return;
+    }
+
+    // Server API routes: extensionless `/api/**` paths run their handler
+    // inside this process. An unmatched API path answers 404 JSON — never the
+    // SPA shell, which would make an API miss look like a 200 HTML page.
+    if (requestPath === API_ROUTE_PREFIX || requestPath.startsWith(`${API_ROUTE_PREFIX}/`)) {
+      handleApiRequest(request, response, url, requestPath, apiDirectory, resolvedOutputDirectory, logger).catch((error) => {
+        logger.error(`API request failed for ${requestPath}: ${error.message}`);
+        if (!response.headersSent) {
+          sendApiErrorResponse(response, 500, logger);
+        } else {
+          response.destroy();
+        }
+      });
       return;
     }
 
@@ -233,10 +382,22 @@ function startDevelopmentServer(options = {}) {
   const port = options.port ?? 3000;
   const logger = options.logger || console;
   const build = options.build || buildProject;
+  const loadEnv = options.loadEnv || loadServerEnv;
+
+  // Server-side secrets load once before the first request: handlers read
+  // them through process.env, and the file they come from is never copied
+  // into the served output.
+  const loadedEnvCount = loadEnv(projectDirectory);
+  if (loadedEnvCount > 0) {
+    logger.log(`Loaded ${loadedEnvCount} server environment variable(s) from .env.server.`);
+  }
 
   buildApplication(inputDirectory, outputDirectory, projectDirectory, logger, build);
   assertDocumentShell(outputDirectory);
-  const server = http.createServer(createRequestHandler(outputDirectory, { logger }));
+  const server = http.createServer(createRequestHandler(outputDirectory, {
+    logger,
+    apiDirectory: path.join(inputDirectory, 'server', 'api')
+  }));
   const watcher = watchSourceFiles(inputDirectory, (eventType, fileName) => {
     logger.log(`Rebuilding after ${eventType}: ${fileName}`);
     buildApplication(inputDirectory, outputDirectory, projectDirectory, logger, build);

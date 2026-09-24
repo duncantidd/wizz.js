@@ -1064,3 +1064,106 @@ test('main prints only the diagnostics envelope in JSON mode and exits zero when
   assert.deepEqual(envelope.diagnostics, []);
   assert.deepEqual(envelope.files, [{ file: 'App.wizz', serverRenderable: true }]);
 });
+
+// ---------------------------------------------------------------------------
+// Milestone 21: server API route artifacts
+// ---------------------------------------------------------------------------
+
+test('a project without server/api still emits an empty api manifest', (t) => {
+  const inputDirectory = createTemporaryDirectory();
+  const outputDirectory = createTemporaryDirectory();
+  t.after(() => { fs.rmSync(inputDirectory, { recursive: true, force: true }); fs.rmSync(outputDirectory, { recursive: true, force: true }); });
+  writeFile(path.join(inputDirectory, 'App.wizz'), '<main>Hi</main>');
+
+  const result = buildProject(inputDirectory, outputDirectory, createLogger());
+  assert.equal(result.failedCount, 0);
+
+  const manifestPath = path.join(outputDirectory, 'runtime', 'apiRoutes.js');
+  assert.equal(fs.existsSync(manifestPath), true);
+  assert.equal(fs.existsSync(path.join(outputDirectory, 'server')), false);
+  assert.match(fs.readFileSync(manifestPath, 'utf8'), /export const apiModules = \[\]/);
+});
+
+test('api handlers copy verbatim with a manifest advertising their routes', (t) => {
+  const inputDirectory = createTemporaryDirectory();
+  const outputDirectory = createTemporaryDirectory();
+  t.after(() => { fs.rmSync(inputDirectory, { recursive: true, force: true }); fs.rmSync(outputDirectory, { recursive: true, force: true }); });
+  writeFile(path.join(inputDirectory, 'App.wizz'), '<main>Hi</main>');
+  const handlerSource = 'export default async function handler() { return process.env.SECRET_KEY; };\n';
+  writeFile(path.join(inputDirectory, 'server', 'api', 'index.js'), handlerSource);
+  writeFile(path.join(inputDirectory, 'server', 'api', 'v1', 'Users.js'), 'export default async function handler() { return 1; };\n');
+  writeFile(path.join(inputDirectory, 'server', 'api', '_shared.js'), 'export const helper = 1;\n');
+  writeFile(path.join(inputDirectory, '.env.server'), 'SECRET_KEY=never-copied\n');
+
+  buildProject(inputDirectory, outputDirectory, createLogger());
+
+  // Verbatim copies under dist/server/api, importable as ESM (dist pins
+  // type: module) but never web-served by the dev server's /server/ guard.
+  assert.equal(
+    fs.readFileSync(path.join(outputDirectory, 'server', 'api', 'index.js'), 'utf8'),
+    handlerSource
+  );
+  assert.equal(fs.existsSync(path.join(outputDirectory, 'server', 'api', 'v1', 'users.js')), false,
+    'lowercasing is route-level only: file copies keep authored names');
+  // Private modules copy too (handlers import them) but stay out of the
+  // manifest — they are not routable.
+  assert.equal(fs.readFileSync(path.join(outputDirectory, 'server', 'api', '_shared.js'), 'utf8'), 'export const helper = 1;\n');
+
+  const manifestPath = path.join(outputDirectory, 'runtime', 'apiRoutes.js');
+  const manifest = fs.readFileSync(manifestPath, 'utf8');
+  assert.equal(manifest.includes('_shared'), false);
+  assert.match(manifest, /"routePath": "\/api"/);
+  assert.match(manifest, /"routePath": "\/api\/v1\/users"/);
+  assert.match(manifest, /"filePath": "server\/api\/index\.js"/);
+
+  // Secrets stay in the project root; neither the copy nor the manifest
+  // carries them, and dist contains no .env.server.
+  assert.equal(fs.existsSync(path.join(outputDirectory, '.env.server')), false);
+  assert.equal(manifest.includes('SECRET_KEY'), false);
+});
+
+test('an api route collision fails the build but writes an empty manifest', (t) => {
+  const inputDirectory = createTemporaryDirectory();
+  const outputDirectory = createTemporaryDirectory();
+  t.after(() => { fs.rmSync(inputDirectory, { recursive: true, force: true }); fs.rmSync(outputDirectory, { recursive: true, force: true }); });
+  writeFile(path.join(inputDirectory, 'App.wizz'), '<main>Hi</main>');
+  writeFile(path.join(inputDirectory, 'server', 'api', 'Health.js'), 'export default 1;\n');
+  writeFile(path.join(inputDirectory, 'server', 'api', 'health.js'), 'export default 2;\n');
+
+  const logger = createLogger();
+  const result = buildProject(inputDirectory, outputDirectory, logger);
+  assert.equal(result.failedCount, 1);
+  assert.equal(logger.errors.some((message) => /Ambiguous API route/.test(message)), true);
+
+  // The empty manifest replaces any stale routing table from an earlier
+  // build, and no handler copies land.
+  assert.match(fs.readFileSync(path.join(outputDirectory, 'runtime', 'apiRoutes.js'), 'utf8'), /export const apiModules = \[\]/);
+  assert.equal(fs.existsSync(path.join(outputDirectory, 'server', 'api', 'health.js')), false);
+});
+
+test('the JSON build mode reports an api route collision as an envelope record', (t) => {
+  const inputDirectory = createTemporaryDirectory();
+  const outputDirectory = createTemporaryDirectory();
+  t.after(() => { fs.rmSync(inputDirectory, { recursive: true, force: true }); fs.rmSync(outputDirectory, { recursive: true, force: true }); });
+  writeFile(path.join(inputDirectory, 'App.wizz'), '<main>Hi</main>');
+  writeFile(path.join(inputDirectory, 'server', 'api', 'Health.js'));
+  writeFile(path.join(inputDirectory, 'server', 'api', 'health.js'));
+
+  const result = buildProject(inputDirectory, outputDirectory, createLogger(), { json: true });
+  assert.equal(result.ok, false);
+  assert.equal(result.diagnostics.length, 1);
+  assert.equal(result.diagnostics[0].code, null);
+  assert.match(result.diagnostics[0].message, /Ambiguous API route/);
+});
+
+test('a page cannot claim the reserved /api namespace', () => {
+  assert.throws(
+    () => validateRouteEntries([{ routePath: '/api', filePath: 'src/pages/Api.wizz', inputPath: '/x/pages/Api.wizz' }]),
+    /reserved for server API routes/
+  );
+  assert.throws(
+    () => validateRouteEntries([{ routePath: '/api/health', filePath: 'src/pages/Api/Health.wizz', inputPath: '/x/pages/Api/Health.wizz' }]),
+    /reserved for server API routes/
+  );
+  assert.doesNotThrow(() => validateRouteEntries([{ routePath: '/apis', filePath: 'src/pages/Apis.wizz', inputPath: '/x/pages/Apis.wizz' }]));
+});

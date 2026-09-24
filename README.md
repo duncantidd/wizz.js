@@ -128,7 +128,7 @@ Print what you have installed with:
 wizz --version
 ```
 
-which prints the compiler and contract version triple, for example `wizz 1.11.0 (compiler 1.11.0, syntax 1.4.1, output 1.8.2)`. The public CLI accepts `init`, `build`, `dev`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory.
+which prints the compiler and contract version triple, for example `wizz 1.12.0 (compiler 1.12.0, syntax 1.4.1, output 1.8.2)`. The public CLI accepts `init`, `build`, `dev`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory.
 
 `wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
 
@@ -409,6 +409,39 @@ The variable keeps every reactive behavior it already had — templates read it,
 Storage is untrusted input: reads parse defensively (`JSON.parse` failure falls back to the declared default, and stored values replace state wholesale — never merged, so hostile stored objects have no merge vector), and writes are guarded so quota failures or private-mode storage leave the in-memory state intact while the channel keeps peers converged. Keys are author-supplied and used verbatim — components of one origin share one namespace, so two components persisting the same key intentionally share that state.
 
 Two documented behaviors: the server has no storage, so server rendering (and the first paint of hydrated pages) shows the declared default until hydration reads the real value — a theme stored as `dark` flashes `light` on first paint. And keys are never namespaced or validated beyond being string literals, so choosing `'settings'` for two unrelated variables is a collision you can create.
+
+## Server API Routes
+
+Everything in a `.wizz` script compiles to a **browser** ES module — any API key a form `fetch`es with is visible in the network tab, by construction. Code that must stay server-side lives in `src/server/api/*.js`: each file's default export runs inside `wizz dev` when a request hits its route, so third-party API calls and their secrets never reach the browser.
+
+```js
+// src/server/api/submit-form.js  →  served at /api/submit-form
+export default async function handler(request) {
+  const payload = await request.json(); // 400 on malformed input
+  const response = await fetch('https://third-party.example/v1/submit', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.THIRD_PARTY_KEY}` },
+    body: JSON.stringify(payload)
+  });
+  return { status: response.status, body: await response.json() };
+}
+```
+
+The browser (or any client) calls the same-origin `/api/submit-form`; the key lives in a **gitignored `.env.server`** file at the project root (`KEY=VALUE` lines, `#` comments allowed — add it to your `.gitignore`), which the development server loads into `process.env` before the first request. Real environment variables win over file entries. The file is never copied into build output and never appears in any served artifact — the handler reads keys at request time, server-side.
+
+**Routes** mirror pages: `src/server/api/health.js` serves `/api/health`, `index.js` names the directory itself, nested directories nest the path, and everything lowercases. Files and directories starting with `_` are importable helpers, never routable. Duplicate routes fail the build naming both claimants, and the `/api` namespace is reserved — a page named `src/pages/Api.wizz` fails the build.
+
+**The request context** is a frozen plain object, so handler code stays runtime-portable (no Node `req`/`res`):
+
+- `method` — `'GET'`, `'POST'`, …
+- `path` — the decoded pathname (`'/api/submit-form'`)
+- `query` — `URLSearchParams`
+- `headers` — lowercased plain object
+- `body` — raw body text, or `null` when empty; `await request.json()` parses it (a malformed body answers `400`)
+
+**The return value**: a plain value answers `200` as JSON, a string answers as plain text, `undefined` answers `204`, and `{ status, headers, body }` gives full control. Errors are deliberately one-way: a handler throw (or a module without a default function, or a syntax error) answers a fixed `500 {"error":"Internal server error"}` — the detail goes to the server log only, so an error message quoting a secret never reaches the client. Request bodies are capped at 1 MB (`413` above it).
+
+**Freshness and deployment**: handler edits apply on the next request — no rebuild. Dev runs handlers from their `dist/server/**` copies (the build pins `dist/package.json` to `{"type":"module"}`, so ESM parses on every supported Node — 18/20 have no module-syntax detection), re-copying any source module newer than its copy before the import, which is cache-busted by the source mtime. A relative import must stay within `src/server/` (only that tree is copied); editing a private `_` module refreshes its copy, but the importing handler re-imports it once the handler file itself changes — touch the handler or restart. `wizz build` copies the whole `src/server/` tree verbatim (private modules included) with a generated manifest (`dist/runtime/apiRoutes.js`) so an external Node host can import and run them following the same recipe as the SSR delivery; the dev server never serves `/server/**` as static files, so handler source is unreachable in both workflows. Production application hosting itself stays outside the framework — Wizz ships no application server, and handlers get no sessions, persistence, or middleware.
 
 ## Compatibility and Versioning
 
