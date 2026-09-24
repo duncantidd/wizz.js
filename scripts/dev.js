@@ -3,6 +3,17 @@ const http = require('node:http');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { buildProject, discoverWizzFiles } = require('../build');
+const {
+  API_ROUTE_PREFIX,
+  createApiRequestContext,
+  discoverApiRoutes,
+  isServerOutputPath,
+  loadServerEnv,
+  readRequestBody,
+  resolveApiRoute,
+  sendApiErrorResponse,
+  sendApiResult
+} = require('./apiRoutes');
 
 const MIME_TYPES = {
   '.css': 'text/css; charset=utf-8',
@@ -128,14 +139,84 @@ async function renderServerRoute(routeEntry, indexPath, response) {
   response.end(document);
 }
 
+// Milestone 21: `/api/**` requests resolve against `src/server/api/**`
+// through the discovered route table (a Map lookup, never a filesystem join,
+// so traversal has nothing to resolve against) and run inside the dev server
+// process. Handlers are imported straight from source, cache-busted by file
+// mtime exactly like the SSR server modules — a handler edit takes effect on
+// the next request without a rebuild.
+async function handleApiRequest(request, response, url, requestPath, apiDirectory, logger) {
+  // A handler created without an API source directory (older direct
+  // createRequestHandler callers) simply has no API surface.
+  if (!apiDirectory) {
+    sendApiErrorResponse(response, 404, logger);
+    return;
+  }
+
+  let routes;
+  try {
+    routes = discoverApiRoutes(apiDirectory);
+  } catch (error) {
+    logger.error(error.message);
+    sendApiErrorResponse(response, 404, logger);
+    return;
+  }
+
+  const routeEntry = resolveApiRoute(routes, requestPath);
+  if (!routeEntry) {
+    sendApiErrorResponse(response, 404, logger);
+    return;
+  }
+
+  try {
+    const { mtimeMs } = fs.statSync(routeEntry.modulePath);
+    const handlerModule = await import(`${pathToFileURL(routeEntry.modulePath).href}?v=${mtimeMs}`);
+    const handler = handlerModule.default;
+    if (typeof handler !== 'function') {
+      throw new Error(`API module has no default export function: ${routeEntry.modulePath}`);
+    }
+
+    const body = await readRequestBody(request);
+    const result = await handler(createApiRequestContext(request, url, body, requestPath));
+    sendApiResult(response, result);
+  } catch (error) {
+    // Framework-level request problems carry the status to answer with;
+    // everything else — a handler throw, a bad import, a missing default
+    // export — is a 500 whose detail goes to the log, never the client.
+    const statusCode = error && typeof error.statusCode === 'number' ? error.statusCode : 500;
+    sendApiErrorResponse(response, statusCode, logger, `${routeEntry.routePath}: ${error.message}`);
+  }
+}
+
 function createRequestHandler(outputDirectory, options = {}) {
   const resolvedOutputDirectory = path.resolve(outputDirectory);
   const indexPath = path.join(resolvedOutputDirectory, 'index.html');
   const getRouteTable = options.getRouteTable || (() => readRouteTable(resolvedOutputDirectory));
   const logger = options.logger || console;
+  const apiDirectory = options.apiDirectory || null;
 
   return (request, response) => {
-    const requestPath = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
+    let requestPath;
+    let url;
+    try {
+      url = new URL(request.url, 'http://localhost');
+      requestPath = decodeURIComponent(url.pathname);
+    } catch {
+      // An undecodable pathname is a malformed request, not a crash.
+      response.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Bad request');
+      return;
+    }
+
+    // Handler source lives in `dist/server/` for external Node hosts after a
+    // production build; a dev server pointed at that dist must never serve it
+    // as a static file.
+    if (isServerOutputPath(requestPath)) {
+      response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Not found');
+      return;
+    }
+
     const filePath = path.resolve(resolvedOutputDirectory, `.${requestPath}`);
     const isInsideOutput = filePath === resolvedOutputDirectory
       || filePath.startsWith(`${resolvedOutputDirectory}${path.sep}`);
@@ -150,6 +231,21 @@ function createRequestHandler(outputDirectory, options = {}) {
     if (path.extname(requestPath)) {
       response.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
       response.end('Not found');
+      return;
+    }
+
+    // Server API routes: extensionless `/api/**` paths run their handler
+    // inside this process. An unmatched API path answers 404 JSON — never the
+    // SPA shell, which would make an API miss look like a 200 HTML page.
+    if (requestPath === API_ROUTE_PREFIX || requestPath.startsWith(`${API_ROUTE_PREFIX}/`)) {
+      handleApiRequest(request, response, url, requestPath, apiDirectory, logger).catch((error) => {
+        logger.error(`API request failed for ${requestPath}: ${error.message}`);
+        if (!response.headersSent) {
+          sendApiErrorResponse(response, 500, logger);
+        } else {
+          response.destroy();
+        }
+      });
       return;
     }
 
@@ -233,10 +329,22 @@ function startDevelopmentServer(options = {}) {
   const port = options.port ?? 3000;
   const logger = options.logger || console;
   const build = options.build || buildProject;
+  const loadEnv = options.loadEnv || loadServerEnv;
+
+  // Server-side secrets load once before the first request: handlers read
+  // them through process.env, and the file they come from is never copied
+  // into the served output.
+  const loadedEnvCount = loadEnv(projectDirectory);
+  if (loadedEnvCount > 0) {
+    logger.log(`Loaded ${loadedEnvCount} server environment variable(s) from .env.server.`);
+  }
 
   buildApplication(inputDirectory, outputDirectory, projectDirectory, logger, build);
   assertDocumentShell(outputDirectory);
-  const server = http.createServer(createRequestHandler(outputDirectory, { logger }));
+  const server = http.createServer(createRequestHandler(outputDirectory, {
+    logger,
+    apiDirectory: path.join(inputDirectory, 'server', 'api')
+  }));
   const watcher = watchSourceFiles(inputDirectory, (eventType, fileName) => {
     logger.log(`Rebuilding after ${eventType}: ${fileName}`);
     buildApplication(inputDirectory, outputDirectory, projectDirectory, logger, build);

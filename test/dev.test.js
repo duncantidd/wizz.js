@@ -839,3 +839,279 @@ test('delivers a document whose markup hydrates without recreating DOM', async (
   assert.equal(target.childNodes.length, 0);
   assert.equal(document.metrics.addedListeners, 1);
 });
+// ---------------------------------------------------------------------------
+// Milestone 21: server API routes
+// ---------------------------------------------------------------------------
+
+const { loadServerEnv } = require('../scripts/apiRoutes');
+
+function createApiProject(projectDirectory, handlers) {
+  writeFile(path.join(projectDirectory, 'index.html'), DOCUMENT_SHELL);
+  fs.mkdirSync(path.join(projectDirectory, 'src'), { recursive: true });
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main><h1>Home</h1></main>');
+  for (const [handlerPath, contents] of Object.entries(handlers)) {
+    writeFile(path.join(projectDirectory, 'src', handlerPath), contents);
+  }
+}
+
+const ECHO_HANDLER = `export default async function handler(request) {
+  return {
+    method: request.method,
+    path: request.path,
+    query: Object.fromEntries(request.query),
+    body: request.body
+  };
+};
+`;
+
+test('serves server API routes from src/server/api inside the dev server', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  createApiProject(projectDirectory, {
+    ['server/api/health.js']: 'export default async function handler() { return { ok: true }; };\n',
+    ['server/api/echo.js']: ECHO_HANDLER
+  });
+
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger: createLogger() });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  const health = await fetch(`${url}/api/health`);
+  assert.equal(health.status, 200);
+  assert.match(health.headers.get('content-type'), /^application\/json/);
+  assert.equal(await health.text(), '{"ok":true}');
+
+  const echoed = await fetch(`${url}/api/echo?x=1&x=2`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ hello: 'world' })
+  });
+  assert.equal(echoed.status, 200);
+  assert.deepEqual(await echoed.json(), {
+    method: 'POST',
+    path: '/api/echo',
+    query: { x: '2' },
+    body: '{"hello":"world"}'
+  });
+
+  const unnamed = await fetch(`${url}/api/echo?x=1&x=2`, { method: 'GET' });
+  assert.deepEqual(await unnamed.json(), { method: 'GET', path: '/api/echo', query: { x: '2' }, body: null });
+});
+
+test('nested and index api routes resolve, private modules stay unroutable', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  createApiProject(projectDirectory, {
+    ['server/api/index.js']: 'export default async function handler(request) { return request.path; };\n',
+    ['server/api/v1/users.js']: 'export default async function handler() { return "users"; };\n',
+    ['server/api/_shared.js']: 'export const shared = true;\n'
+  });
+
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger: createLogger() });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  assert.equal(await (await fetch(`${url}/api`)).text(), '/api');
+  assert.equal(await (await fetch(`${url}/api/v1/users`)).text(), 'users');
+  assert.equal((await fetch(`${url}/api/_shared`)).status, 404);
+});
+
+test('an api handler edit takes effect on the next request without a rebuild', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  const handlerPath = path.join(projectDirectory, 'src', 'server', 'api', 'version.js');
+  createApiProject(projectDirectory, {
+    ['server/api/version.js']: 'export default async function handler() { return { version: 1 }; };\n'
+  });
+
+  const logger = createLogger();
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  assert.equal(await (await fetch(`${url}/api/version`)).text(), '{"version":1}');
+
+  writeFile(handlerPath, 'export default async function handler() { return { version: 2 }; };\n');
+  // mtime cache-busting needs a distinct timestamp; force one on filesystems
+  // with coarse mtime resolution.
+  const later = new Date(Date.now() + 2000);
+  fs.utimesSync(handlerPath, later, later);
+
+  assert.equal(await (await fetch(`${url}/api/version`)).text(), '{"version":2}');
+});
+
+test('.env.server secrets reach handlers but never the served output', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  const envKey = 'WIZZ_DEV_TEST_SECRET';
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  t.after(() => { delete process.env[envKey]; });
+  writeFile(path.join(projectDirectory, '.env.server'), `${envKey}=sk-e2e-12345\n`);
+  createApiProject(projectDirectory, {
+    ['server/api/secret.js']: `export default async function handler() { return { secret: process.env.${envKey} ?? null }; };\n`
+  });
+
+  const developmentServer = startDevelopmentServer({
+    projectDirectory,
+    port: 0,
+    logger: createLogger(),
+    // The real wiring: the dev server calls options.loadEnv(projectDirectory),
+    // and the default reads .env.server into process.env.
+    loadEnv: (directory) => loadServerEnv(directory, process.env)
+  });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  assert.equal(await (await fetch(`${url}/api/secret`)).text(), `{"secret":"sk-e2e-12345"}`);
+
+  // The secret must not appear in any file under the served output — handler
+  // copies, manifests, compiled modules, or the shell.
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  const walk = (directory) => fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = path.join(directory, entry.name);
+    return entry.isDirectory() ? walk(entryPath) : [entryPath];
+  });
+  for (const outputPath of walk(outputDirectory)) {
+    assert.equal(fs.readFileSync(outputPath, 'utf8').includes('sk-e2e-12345'), false, `secret leaked into ${outputPath}`);
+  }
+});
+
+test('handler source, production output paths, and unmatched api paths are unreachable', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  createApiProject(projectDirectory, { ['server/api/echo.js']: ECHO_HANDLER });
+
+  const logger = createLogger();
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  // The build copied the handler to dist/server/api/echo.js, but the /server/
+  // guard refuses it as a static file: source code is never web-served.
+  assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'server', 'api', 'echo.js')), true);
+  const guarded = await fetch(`${url}/server/api/echo.js`);
+  assert.equal(guarded.status, 404);
+
+  // A .js suffix never resolves to the handler — routes are exact table hits.
+  const sourcePath = await fetch(`${url}/api/echo.js`);
+  assert.equal(sourcePath.status, 404);
+
+  // Unmatched API paths answer 404 JSON, never the SPA shell.
+  const missing = await fetch(`${url}/api/absent`);
+  assert.equal(missing.status, 404);
+  assert.match(missing.headers.get('content-type'), /^application\/json/);
+  assert.equal(await missing.text(), '{"error":"Not found"}');
+
+  // The same miss on a page path still falls back to the shell.
+  const shell = await fetch(`${url}/somewhere`);
+  assert.equal(shell.status, 200);
+  assert.match(shell.headers.get('content-type'), /^text\/html/);
+});
+
+test('a handler throw answers a generic 500 and logs the detail server-side', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  createApiProject(projectDirectory, {
+    ['server/api/explode.js']: 'export default async function handler() { throw new Error("Bearer sk-boom leaked"); };\n'
+  });
+
+  const logger = createLogger();
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  const response = await fetch(`${url}/api/explode`);
+  assert.equal(response.status, 500);
+  assert.equal(await response.text(), '{"error":"Internal server error"}');
+
+  assert.equal(logger.errors.length, 1);
+  assert.match(logger.errors[0], /sk-boom leaked/);
+});
+
+test('a module without a default function export answers 500', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  createApiProject(projectDirectory, {
+    ['server/api/notahandler.js']: 'export const answer = 42;\n'
+  });
+
+  const logger = createLogger();
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  const response = await fetch(`${url}/api/notahandler`);
+  assert.equal(response.status, 500);
+  assert.equal(await response.text(), '{"error":"Internal server error"}');
+  assert.match(logger.errors[0], /no default export function/);
+});
+
+test('malformed JSON bodies answer 400 and oversized bodies answer 413', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  createApiProject(projectDirectory, {
+    ['server/api/json.js']: 'export default async function handler(request) { return request.json(); };\n'
+  });
+
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger: createLogger() });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  const malformed = await fetch(`${url}/api/json`, { method: 'POST', body: '{not json' });
+  assert.equal(malformed.status, 400);
+  assert.equal(await malformed.text(), '{"error":"Bad request"}');
+
+  const oversized = await fetch(`${url}/api/json`, {
+    method: 'POST',
+    body: 'x'.repeat(1024 * 1024 + 1)
+  });
+  assert.equal(oversized.status, 413);
+
+  const exactlyAtTheLimit = await fetch(`${url}/api/json`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fill: 'y'.repeat(1024 * 1024 - 20) })
+  });
+  assert.equal(exactlyAtTheLimit.status, 200);
+});
+
+test('colliding api routes disable serving and log the collision', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  createApiProject(projectDirectory, {
+    ['server/api/Health.js']: 'export default async function handler() { return "upper"; };\n',
+    ['server/api/health.js']: 'export default async function handler() { return "lower"; };\n'
+  });
+
+  const logger = createLogger();
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  const response = await fetch(`${url}/api/health`);
+  assert.equal(response.status, 404);
+  assert.equal(await response.text(), '{"error":"Not found"}');
+  // The build failure, the startup copy failure, and the per-request refusal
+  // all log; the collision detail must appear in the server log.
+  assert.equal(logger.errors.some((message) => /Ambiguous API route '\/api\/health'/.test(message)), true);
+});
+
+test('an api handler with a syntax error answers 500 instead of crashing the server', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  createApiProject(projectDirectory, {
+    ['server/api/broken.js']: 'export default async function handler( { return 1;\n'
+  });
+
+  const logger = createLogger();
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  const response = await fetch(`${url}/api/broken`);
+  assert.equal(response.status, 500);
+  assert.equal(await response.text(), '{"error":"Internal server error"}');
+
+  // The server survives: page routes keep working after the failed import.
+  const page = await fetch(`${url}/`);
+  assert.equal(page.status, 200);
+});

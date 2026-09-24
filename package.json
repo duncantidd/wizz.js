@@ -39,6 +39,7 @@
     "scripts/initTemplates.js",
     "scripts/cli.js",
     "scripts/dev.js",
+    "scripts/apiRoutes.js",
     "scripts/releaseAssets.js",
     "scripts/update.js",
     "scripts/installVscodeExtension.js",

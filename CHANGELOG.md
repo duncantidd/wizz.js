@@ -11,6 +11,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Milestone 21 — Server API Routes
+
+#### Added
+
+- Server API routes: zero-dependency ESM handlers in `src/server/api/<name>.js` run inside the development server at `/api/*` routes, so third-party API calls and their secrets stay server-side — a `.wizz` form now calls same-origin `/api/...` and the key never appears in the browser's network tab. The default export receives a frozen, platform-plain context (`{ method, path, query, headers, body, json() }` — no Node `req`/`res`, keeping handlers runtime-portable) and returns a plain value (200 JSON), a string (200 text), `undefined` (204), or `{ status, headers, body }` for full control. Route mapping mirrors pages: lowercase, `index.js` names the directory, nested directories nest, `_`-prefixed entries importable but never routable, duplicate routes failing discovery with both claimants named (`scripts/apiRoutes.js`, `scripts/apiRoutes.test.js`).
+- Server-side secrets via a gitignored `.env.server` at the project root: `KEY=VALUE` lines with `#` comments, no interpolation, surrounding quotes stripped, loaded into `process.env` once before the first request without overriding variables the real environment already provides. The file is never copied into build output and no served artifact ever contains its values — handlers read keys through `process.env` at request time.
+- Dev-server wiring (`scripts/dev.js`): `/api/**` resolves through the discovered route table (a Map lookup, never a filesystem join, so traversal has nothing to resolve against) and imports handlers cache-busted by file mtime — a handler edit applies on the next request without a rebuild. Unmatched `/api/**` answers 404 JSON instead of the SPA shell; `/server/**` (production handler output) is refused as static files in both dev and prod dists; handler throws, missing default exports, and syntax-error modules answer a fixed `500 {"error":"Internal server error"}` with detail logged server-side only; malformed `request.json()` answers 400; request bodies cap at 1 MB with a `Connection: close` 413; an undecodable pathname answers 400 instead of crashing the handler; and an ambiguous route collision logs and 404s while the server keeps serving. `options.loadEnv` and `options.apiDirectory` keep the wiring injectable for tests.
+- Build support (`build.js`): `copyApiHandlers` copies handlers verbatim to `dist/server/api/` and emits a generated `dist/runtime/apiRoutes.js` manifest (routePath -> modulePath, same JSON-literal idiom as the page manifest) for external Node hosts following the same recipe as SSR delivery. A route collision fails the build (non-zero exit, JSON envelope record) while still writing an empty manifest, so no stale routing table from an earlier build can survive; no handler copies land. `/api` and `/api/**` join `/runtime` as reserved page namespaces in `validateRouteEntries` — a page named `src/pages/Api.wizz` fails the build with a located error rather than silently shadowing the API surface.
+- `wizz init` scaffolds `src/server/api/health.js` — a working `/api/health` handler documenting the request context and the secrets rule (keys in `.env.server`, read through `process.env`, never in a `.wizz` file) — and its README gains a Server API routes section and layout entry (`scripts/initTemplates.js`, `scripts/initTemplates.test.js`, `scripts/init.test.js`).
+
+#### Changed
+
+- The milestone reverses one clause of the Development Server Decision, deliberately and narrowly: the dev server gains an API layer for author-authored handlers, but no sessions, persistence, ORM, or middleware — handlers are plain functions, production application hosting stays external to the framework, and page-delivery eligibility remains a compilation artifact (`ROADMAP.md`, amended paragraph).
+- `scripts/apiRoutes.js` joins the shipped surface in all four places that list CLI scripts: `package.json` `files`, `packaging.test.js` `EXPECTED_FILES`, the installer's `--local` copy list, and the installer test's fake tarball.
+- No compiler/syntax/output version bump: no compiler source, parser, or generated-module contract changes — same reasoning as milestones 13 and 20.
+
+#### Docs
+
+- README gains a "Server API Routes" section (authoring contract, `.env.server`, routing rules, request context, return shapes, error behavior, freshness, and the deployment recipe); `ROADMAP.md` records milestone 21 as completed with the Development Server Decision amendment; `STRUCTURE.md` lists `scripts/apiRoutes.js` and extends the dev-server prose; this file records the milestone.
+
 ### Post-M19 — CLI Self-Update and Extension Install
 
 #### Added
