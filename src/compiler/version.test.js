@@ -59,9 +59,13 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // (self-update of the managed installation) and `wizz install-vscode-extension`
   // (one-command extension install), plus the scaffolded project README —
   // CLI-layer additions with no compiler contract movement, so syntax and
-  // output hold.
+  // output hold. compiler 1.12.0: the release cut carrying server API routes
+  // (milestone 21) — handlers authored in src/server/api run inside the
+  // development server at /api/* and read secrets from .env.server, with
+  // build support for external Node hosts; no accepted component syntax or
+  // generated-module contract changed, so syntax and output hold.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.11.0',
+    compiler: '1.12.0',
     syntax: '1.4.1',
     output: '1.8.2'
   });

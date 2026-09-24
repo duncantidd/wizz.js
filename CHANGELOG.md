@@ -23,6 +23,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 
+- Package and compiler version 1.11.0 → 1.12.0 for the release cut carrying server API routes: additive only, so the syntax and output contracts hold (`src/compiler/version.js`, `package.json`).
 - The milestone reverses one clause of the Development Server Decision, deliberately and narrowly: the dev server gains an API layer for author-authored handlers, but no sessions, persistence, ORM, or middleware — handlers are plain functions, production application hosting stays external to the framework, and page-delivery eligibility remains a compilation artifact (`ROADMAP.md`, amended paragraph).
 - `scripts/apiRoutes.js` joins the shipped surface in all four places that list CLI scripts: `package.json` `files`, `packaging.test.js` `EXPECTED_FILES`, the installer's `--local` copy list, and the installer test's fake tarball.
 - No compiler/syntax/output version bump: no compiler source, parser, or generated-module contract changes — same reasoning as milestones 13 and 20.
