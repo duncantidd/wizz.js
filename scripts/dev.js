@@ -8,6 +8,7 @@ const {
   createApiRequestContext,
   discoverApiRoutes,
   isServerOutputPath,
+  listJavaScriptFiles,
   loadServerEnv,
   readRequestBody,
   resolveApiRoute,
@@ -142,10 +143,56 @@ async function renderServerRoute(routeEntry, indexPath, response) {
 // Milestone 21: `/api/**` requests resolve against `src/server/api/**`
 // through the discovered route table (a Map lookup, never a filesystem join,
 // so traversal has nothing to resolve against) and run inside the dev server
-// process. Handlers are imported straight from source, cache-busted by file
-// mtime exactly like the SSR server modules — a handler edit takes effect on
-// the next request without a rebuild.
-async function handleApiRequest(request, response, url, requestPath, apiDirectory, logger) {
+// process. Handlers execute from their `dist/server/**` copies, never from
+// source: the build pins `dist/package.json` to `{"type":"module"}`, and
+// Node 18/20 have no module-syntax detection, so importing the authored
+// `src/.../*.js` directly would parse as CommonJS and fail on `export` in
+// any project without its own type declaration. Dev therefore runs the same
+// ESM-typed artifacts production runs.
+//
+// The watcher only rebuilds on `.wizz` changes, so handler edits would leave
+// the dist copies stale; each API request re-copies any source module newer
+// than its copy (source mtimes are preserved on copies, so the comparison is
+// stable) and imports the copy cache-busted by the source mtime — a handler
+// edit takes effect on the next request without a rebuild. A relative edit
+// to a private module refreshes its copy on disk, but the importing
+// handler's module URL only changes when the handler file itself changes
+// (Node's ESM cache keys on it): touch the handler too, or restart, to pick
+// up shared-module edits.
+function syncServerModules(serverSourceDirectory, outputDirectory) {
+  if (!fs.existsSync(serverSourceDirectory) || !fs.statSync(serverSourceDirectory).isDirectory()) {
+    return;
+  }
+
+  for (const sourcePath of listJavaScriptFiles(serverSourceDirectory)) {
+    const targetPath = path.join(outputDirectory, 'server', path.relative(serverSourceDirectory, sourcePath));
+    let stale = true;
+    try {
+      stale = fs.statSync(targetPath).mtimeMs < fs.statSync(sourcePath).mtimeMs;
+    } catch {
+      stale = true;
+    }
+    if (!stale) continue;
+
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.copyFileSync(sourcePath, targetPath);
+    // utimesSync accepts Dates (it would read raw numbers as seconds, which
+    // the *Ms fields are not) — preserving the source mtime keeps the
+    // staleness comparison stable across repeated requests.
+    const { atime, mtime } = fs.statSync(sourcePath);
+    fs.utimesSync(targetPath, atime, mtime);
+  }
+
+  // The module-type marker the build writes beside its output: a dev server
+  // serving a dist that predates it (or a direct createRequestHandler caller
+  // that never built) still needs the pin for Node 18/20 ESM parsing.
+  const moduleTypeMarkerPath = path.join(outputDirectory, 'package.json');
+  if (!fs.existsSync(moduleTypeMarkerPath)) {
+    fs.writeFileSync(moduleTypeMarkerPath, '{"type":"module"}\n', 'utf8');
+  }
+}
+
+async function handleApiRequest(request, response, url, requestPath, apiDirectory, outputDirectory, logger) {
   // A handler created without an API source directory (older direct
   // createRequestHandler callers) simply has no API surface.
   if (!apiDirectory) {
@@ -169,8 +216,14 @@ async function handleApiRequest(request, response, url, requestPath, apiDirector
   }
 
   try {
+    const serverSourceDirectory = path.dirname(apiDirectory);
+    syncServerModules(serverSourceDirectory, outputDirectory);
+    const relativeModulePath = path.relative(serverSourceDirectory, routeEntry.modulePath);
+    const moduleCopyPath = path.join(outputDirectory, 'server', relativeModulePath);
+    // Cache-bust by the SOURCE mtime: sync preserves it on the copy, so an
+    // edit forms a fresh module URL even though the copy is rewritten.
     const { mtimeMs } = fs.statSync(routeEntry.modulePath);
-    const handlerModule = await import(`${pathToFileURL(routeEntry.modulePath).href}?v=${mtimeMs}`);
+    const handlerModule = await import(`${pathToFileURL(moduleCopyPath).href}?v=${mtimeMs}`);
     const handler = handlerModule.default;
     if (typeof handler !== 'function') {
       throw new Error(`API module has no default export function: ${routeEntry.modulePath}`);
@@ -238,7 +291,7 @@ function createRequestHandler(outputDirectory, options = {}) {
     // inside this process. An unmatched API path answers 404 JSON — never the
     // SPA shell, which would make an API miss look like a 200 HTML page.
     if (requestPath === API_ROUTE_PREFIX || requestPath.startsWith(`${API_ROUTE_PREFIX}/`)) {
-      handleApiRequest(request, response, url, requestPath, apiDirectory, logger).catch((error) => {
+      handleApiRequest(request, response, url, requestPath, apiDirectory, resolvedOutputDirectory, logger).catch((error) => {
         logger.error(`API request failed for ${requestPath}: ${error.message}`);
         if (!response.headersSent) {
           sendApiErrorResponse(response, 500, logger);

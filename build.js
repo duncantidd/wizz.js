@@ -5,7 +5,7 @@ const path = require('node:path');
 // Single public compiler entry point: parsing, analysis, ID assignment, generation.
 const { compile, compileServer } = require('./src/compiler');
 const { scopeCss } = require('./src/compiler/analyzer/cssScanner');
-const { discoverApiRoutes } = require('./scripts/apiRoutes');
+const { discoverApiRoutes, listJavaScriptFiles } = require('./scripts/apiRoutes');
 
 const STYLESHEET_FILENAME = 'app.css';
 const STYLESHEET_HREF_PATTERN = /href\s*=\s*(["'])\/app\.css\1/;
@@ -399,18 +399,24 @@ function emitRouteManifest(inputDirectory, outputDirectory, inputFiles, serverRe
 }
 
 // Milestone 21: server API handlers ship for external Node hosts. The
-// authored modules in `<input>/server/api/**` are copied verbatim — they are
+// authored modules under `<input>/server/**` are copied verbatim — they are
 // hand-written zero-dependency ESM, not compiler output — and the manifest
-// (`dist/runtime/apiRoutes.js`) advertises routePath -> modulePath the same
-// way the page manifest does. Discovery rejects duplicate routes; a secret
-// file like `.env.server` lives in the project root and is never touched.
+// (`dist/runtime/apiRoutes.js`) advertises routePath -> modulePath for the
+// routable `server/api` subset the same way the page manifest does. Private
+// `_`-prefixed modules copy too (handlers import them) but never appear in
+// the manifest; a relative import reaching outside `src/server` has no copy
+// and fails the import with a clear module-not-found. Source mtimes are
+// preserved on the copies so the dev server's per-request staleness
+// comparison stays stable. Discovery rejects duplicate routes; a secret file
+// like `.env.server` lives in the project root and is never touched.
 //
 // A route collision does not throw: the caller receives `{ error }` and the
 // manifest is still written (empty), so neither the dev server nor an
 // external host can route an ambiguous handler — and no stale manifest from
-// an earlier build can survive. The build counts the failure; nothing copies.
+// an earlier build can survive. The build counts the failure; nothing routes.
 function copyApiHandlers(inputDirectory, outputDirectory) {
-  const apiSourceDirectory = path.join(inputDirectory, 'server', 'api');
+  const serverSourceDirectory = path.join(inputDirectory, 'server');
+  const apiSourceDirectory = path.join(serverSourceDirectory, 'api');
   const manifestPath = path.join(outputDirectory, 'runtime', 'apiRoutes.js');
   const writeManifest = (entries) => {
     fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
@@ -429,10 +435,20 @@ function copyApiHandlers(inputDirectory, outputDirectory) {
     return { error: firstErrorLine(error), entries: [] };
   }
 
-  const entries = [...routes.values()].map(({ routePath, modulePath }) => {
-    const outputPath = path.join(outputDirectory, 'server', 'api', path.relative(apiSourceDirectory, modulePath));
+  for (const modulePath of listJavaScriptFiles(serverSourceDirectory)) {
+    const outputPath = path.join(outputDirectory, 'server', path.relative(serverSourceDirectory, modulePath));
     fs.mkdirSync(path.dirname(outputPath), { recursive: true });
     fs.copyFileSync(modulePath, outputPath);
+    // Preserve the source mtime: the dev server compares these timestamps
+    // per request to re-copy edited handlers without a rebuild. utimesSync
+    // accepts Dates (raw numbers would read as seconds — the *Ms fields are
+    // not).
+    const { atime, mtime } = fs.statSync(modulePath);
+    fs.utimesSync(outputPath, atime, mtime);
+  }
+
+  const entries = [...routes.values()].map(({ routePath, modulePath }) => {
+    const outputPath = path.join(outputDirectory, 'server', path.relative(serverSourceDirectory, modulePath));
     return {
       filePath: path.relative(inputDirectory, modulePath).split(path.sep).join('/'),
       routePath,

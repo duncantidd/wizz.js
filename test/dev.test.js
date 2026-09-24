@@ -1115,3 +1115,29 @@ test('an api handler with a syntax error answers 500 instead of crashing the ser
   const page = await fetch(`${url}/`);
   assert.equal(page.status, 200);
 });
+
+test('handlers run as ESM from their dist copies, with relative imports resolving', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  // Deliberately NO package.json anywhere in the project: on Node 18/20 (no
+  // module-syntax detection) a direct src import would parse the handler as
+  // CommonJS and fail on `export`. The dist copies — pinned type: module by
+  // the build — are what actually executes.
+  createApiProject(projectDirectory, {
+    ['server/api/echo.js']: 'import { prefix } from "./_shared.js";\n\nexport default async function handler(request) { return `${prefix}:${request.method}`; };\n',
+    ['server/api/_shared.js']: 'export const prefix = "echo";\n'
+  });
+
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger: createLogger() });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  assert.equal(await (await fetch(`${url}/api/echo`)).text(), 'echo:GET');
+
+  // The execution copy carries the module-type pin; the author's src tree
+  // gains nothing.
+  assert.equal(fs.readFileSync(path.join(projectDirectory, 'dist', 'package.json'), 'utf8'), '{"type":"module"}\n');
+  assert.equal(fs.existsSync(path.join(projectDirectory, 'src', 'package.json')), false);
+  // The private module copied beside its importer, outside the manifest.
+  assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'server', 'api', '_shared.js')), true);
+});

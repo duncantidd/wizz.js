@@ -1105,9 +1105,13 @@ test('api handlers copy verbatim with a manifest advertising their routes', (t) 
   );
   assert.equal(fs.existsSync(path.join(outputDirectory, 'server', 'api', 'v1', 'users.js')), false,
     'lowercasing is route-level only: file copies keep authored names');
+  // Private modules copy too (handlers import them) but stay out of the
+  // manifest — they are not routable.
+  assert.equal(fs.readFileSync(path.join(outputDirectory, 'server', 'api', '_shared.js'), 'utf8'), 'export const helper = 1;\n');
 
   const manifestPath = path.join(outputDirectory, 'runtime', 'apiRoutes.js');
   const manifest = fs.readFileSync(manifestPath, 'utf8');
+  assert.equal(manifest.includes('_shared'), false);
   assert.match(manifest, /"routePath": "\/api"/);
   assert.match(manifest, /"routePath": "\/api\/v1\/users"/);
   assert.match(manifest, /"filePath": "server\/api\/index\.js"/);

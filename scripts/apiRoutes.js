@@ -34,6 +34,27 @@ function getApiRoutePath(apiDirectory, filePath) {
   return `${API_ROUTE_PREFIX}/${pageSegments.join('/').toLowerCase()}`.replace(/\/$/, '') || API_ROUTE_PREFIX;
 }
 
+// Lists every .js file under `directory` (recursively, sorted for byte-stable
+// manifests). Private `_`-prefixed modules are included: they are never
+// routable, but handlers import them, so build/dev copies must carry them.
+function listJavaScriptFiles(directory) {
+  const files = [];
+  if (!fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) return files;
+
+  const walk = (current) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : 1)) {
+      const entryPath = path.join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(entryPath);
+        continue;
+      }
+      if (entry.isFile() && path.extname(entry.name) === '.js') files.push(entryPath);
+    }
+  };
+  walk(directory);
+  return files;
+}
+
 // Walks the API source directory and returns a Map of routePath -> entry
 // { routePath, modulePath (absolute) }. Duplicate routes (an `index.js` next
 // to a same-named file, or case-folded collisions) throw, mirroring
@@ -42,30 +63,17 @@ function getApiRoutePath(apiDirectory, filePath) {
 function discoverApiRoutes(apiDirectory) {
   const routes = new Map();
 
-  const walk = (directory) => {
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name < b.name ? -1 : 1)) {
-      const entryPath = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
-        walk(entryPath);
-        continue;
-      }
-      if (!entry.isFile() || path.extname(entry.name) !== '.js') continue;
+  for (const modulePath of listJavaScriptFiles(apiDirectory)) {
+    const routePath = getApiRoutePath(apiDirectory, modulePath);
+    if (!routePath) continue;
 
-      const routePath = getApiRoutePath(apiDirectory, entryPath);
-      if (!routePath) continue;
-
-      const existing = routes.get(routePath);
-      if (existing) {
-        throw new Error(
-          `Ambiguous API route '${routePath}' is claimed by ${path.relative(apiDirectory, existing.modulePath)} and ${path.relative(apiDirectory, entryPath)}`
-        );
-      }
-      routes.set(routePath, { routePath, modulePath: entryPath });
+    const existing = routes.get(routePath);
+    if (existing) {
+      throw new Error(
+        `Ambiguous API route '${routePath}' is claimed by ${path.relative(apiDirectory, existing.modulePath)} and ${path.relative(apiDirectory, modulePath)}`
+      );
     }
-  };
-
-  if (fs.existsSync(apiDirectory) && fs.statSync(apiDirectory).isDirectory()) {
-    walk(apiDirectory);
+    routes.set(routePath, { routePath, modulePath });
   }
   return routes;
 }
@@ -239,6 +247,7 @@ module.exports = {
   discoverApiRoutes,
   getApiRoutePath,
   isServerOutputPath,
+  listJavaScriptFiles,
   loadServerEnv,
   readRequestBody,
   resolveApiRoute,
