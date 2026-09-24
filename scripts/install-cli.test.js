@@ -40,6 +40,7 @@ function createReleaseTarball(destination) {
   fs.cpSync(path.join(root, 'src'), path.join(packageDirectory, 'src'), { recursive: true });
   fs.copyFileSync(path.join(root, 'scripts', 'cli.js'), path.join(packageDirectory, 'scripts', 'cli.js'));
   fs.copyFileSync(path.join(root, 'scripts', 'dev.js'), path.join(packageDirectory, 'scripts', 'dev.js'));
+  fs.copyFileSync(path.join(root, 'scripts', 'apiRoutes.js'), path.join(packageDirectory, 'scripts', 'apiRoutes.js'));
   fs.copyFileSync(path.join(root, 'scripts', 'init.js'), path.join(packageDirectory, 'scripts', 'init.js'));
   fs.copyFileSync(path.join(root, 'scripts', 'initTemplates.js'), path.join(packageDirectory, 'scripts', 'initTemplates.js'));
   // Required by cli.js at top level: the installed launcher test below

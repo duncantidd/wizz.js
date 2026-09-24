@@ -613,6 +613,19 @@ Writes the production build to dist/: compiled component modules, the copied run
     src/pages/Home.wizz          Routed page (served at /home)
     src/components/Counter.wizz  Imported component with persistent state
     src/components/Card.wizz     Imported component
+    src/server/api/health.js     Server API handler (served at /api/health)
+
+## Server API routes
+
+Scripts inside .wizz files compile to browser modules — anything they use,
+including an API key, is visible to everyone. Code that must stay
+server-side lives in src/server/api/*.js: each file's default export runs
+inside the development server at its /api/* route and can call third-party
+APIs with the global fetch.
+
+Keep secrets in a gitignored .env.server file at the project root; the
+development server loads it into process.env before the first request, and
+handlers read keys at request time. Add .env.server to your .gitignore.
 
 ## Editor setup (VS Code)
 
@@ -629,6 +642,37 @@ or from VS Code: Extensions view -> "Views and More Actions" (...) -> Install fr
 The extension drives the installed wizz CLI, so keep the launcher on your PATH (or point the wizz.compilerPath setting at it).
 `;
 
+// The canonical starter server API handler `wizz init` scaffolds.
+//
+// Server API handlers live in src/server/api: each is a zero-dependency ESM
+// module whose default export runs inside the development server when a
+// request hits its route (`src/server/api/health.js` serves `/api/health`).
+// Unlike .wizz scripts — which compile to browser modules — handler code and
+// anything it reads through process.env never reach the browser, so this is
+// where third-party API keys live (via a gitignored .env.server at the
+// project root, loaded by the dev server before the first request).
+const HEALTH_JS = `// Served at /api/health. Handler edits apply on the next request — no
+// rebuild needed.
+//
+// \`request\` is a frozen plain object:
+//   method  - 'GET' | 'POST' | ...
+//   path    - '/api/health'
+//   query   - URLSearchParams (request.query.get('name'))
+//   headers - lowercased header map
+//   body    - raw body text (null when empty); await request.json() parses it
+//
+// Secrets never belong in a .wizz file (that would ship them to the
+// browser). Keep them in a gitignored .env.server at the project root and
+// read them here through process.env. Call third-party APIs with the global
+// fetch — the key stays server-side.
+export default async function handler(request) {
+  return {
+    ok: true,
+    method: request.method
+  };
+}
+`;
+
 // Insertion order is the scaffold order init reports.
 module.exports = {
   'README.md': README_MD,
@@ -637,5 +681,6 @@ module.exports = {
   'src/App.wizz': APP_WIZZ,
   'src/pages/Home.wizz': HOME_WIZZ,
   'src/components/Counter.wizz': COUNTER_WIZZ,
-  'src/components/Card.wizz': CARD_WIZZ
+  'src/components/Card.wizz': CARD_WIZZ,
+  'src/server/api/health.js': HEALTH_JS
 };

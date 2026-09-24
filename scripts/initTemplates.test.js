@@ -11,7 +11,8 @@ test('the template set covers exactly the canonical starter files', () => {
     'src/App.wizz',
     'src/pages/Home.wizz',
     'src/components/Counter.wizz',
-    'src/components/Card.wizz'
+    'src/components/Card.wizz',
+    'src/server/api/health.js'
   ]);
 });
 
@@ -114,4 +115,31 @@ test('the starter Card demonstrates the animated terminal and token-driven scope
   assert.match(card, /@keyframes inputs/);
   assert.match(card, /var\(--wizz-border\)/);
   assert.match(card, /<wizz:style>/);
+});
+
+test('the starter API handler demonstrates the request context and the secrets rule', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const { pathToFileURL } = require('node:url');
+  const health = TEMPLATES['src/server/api/health.js'];
+  assert.match(health, /export default async function handler\(request\)/);
+  assert.match(health, /request\.method/);
+  // The template must teach where keys live and where they must never go.
+  assert.match(health, /\.env\.server/);
+  assert.match(health, /process\.env/);
+
+  // It must run: a syntax error here would break every scaffolded project.
+  // ESM only imports as a module with type: module pinned beside it — the
+  // same marker the build writes beside dist output.
+  const tempDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-template-health-'));
+  try {
+    fs.writeFileSync(path.join(tempDirectory, 'package.json'), '{"type":"module"}\n', 'utf8');
+    const handlerPath = path.join(tempDirectory, 'health.js');
+    fs.writeFileSync(handlerPath, health, 'utf8');
+    const handlerModule = await import(pathToFileURL(handlerPath).href);
+    assert.equal(typeof handlerModule.default, 'function');
+  } finally {
+    fs.rmSync(tempDirectory, { recursive: true, force: true });
+  }
 });

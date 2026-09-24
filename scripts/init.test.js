@@ -13,7 +13,8 @@ const EXPECTED_PATHS = [
   'src/App.wizz',
   'src/pages/Home.wizz',
   'src/components/Counter.wizz',
-  'src/components/Card.wizz'
+  'src/components/Card.wizz',
+  'src/server/api/health.js'
 ];
 
 function createTemporaryDirectory() {
@@ -147,6 +148,16 @@ test('the scaffolded project serves / and /home with SSR state and builds cleanl
     assert.match(homeHtml, /The Home page/);
     assert.match(homeHtml, /Back to the start page/);
     assert.match(homeHtml, /application\/wizz-state/);
+
+    // The scaffolded server API handler runs inside the dev server, and its
+    // source stays unreachable as a static file.
+    const healthResponse = await fetch(`${url}/api/health`);
+    assert.equal(healthResponse.status, 200);
+    assert.match(healthResponse.headers.get('content-type') || '', /application\/json/);
+    assert.match(await healthResponse.text(), /^\{"ok":true,"method":"GET"\}$/);
+    const handlerSourceResponse = await fetch(`${url}/api/health.js`);
+    assert.equal(handlerSourceResponse.status, 404);
+    assert.equal((await fetch(`${url}/server/api/health.js`)).status, 404);
   } finally {
     await developmentServer.close();
   }
