@@ -24,7 +24,9 @@ test('parses build and dev commands', () => {
     argumentsList: ['components', 'output'],
     json: false
   });
-  assert.deepEqual(parseCommand(['dev']), { command: 'dev', argumentsList: [], json: false });
+  assert.deepEqual(parseCommand(['dev']), { command: 'dev', argumentsList: [], json: false, force: false, port: 3000 });
+  assert.deepEqual(parseCommand(['dev', '--port', '4321']), { command: 'dev', argumentsList: [], json: false, force: false, port: 4321 });
+  assert.deepEqual(parseCommand(['dev', '--port=4321']), { command: 'dev', argumentsList: [], json: false, force: false, port: 4321 });
 });
 
 test('strips the build --json flag from any argument position', () => {
@@ -42,7 +44,11 @@ test('rejects unknown commands and incomplete command arguments', () => {
   assert.throws(() => parseCommand([]), /wizz build/);
   assert.throws(() => parseCommand(['preview']), /wizz dev/);
   assert.throws(() => parseCommand(['build', 'src']), /both <input-directory> and <output-directory>/);
-  assert.throws(() => parseCommand(['dev', '--port', '3001']), /Dev does not accept arguments/);
+  assert.throws(() => parseCommand(['dev', 'extra']), /Dev does not accept arguments/);
+  assert.throws(() => parseCommand(['dev', '--port']), /Dev --port requires a valid port number/);
+  assert.throws(() => parseCommand(['dev', '--port', 'invalid']), /Dev --port requires a valid port number/);
+  assert.throws(() => parseCommand(['dev', '--port', '-1']), /Dev --port requires a valid port number/);
+  assert.throws(() => parseCommand(['dev', '--port', '70000']), /Dev --port requires a valid port number/);
   assert.throws(() => parseCommand(['init', 'a', 'b']), /Init accepts at most one \[directory\]/);
   assert.throws(() => parseCommand(['--version', 'extra']), /Version does not accept arguments/);
 });
@@ -103,18 +109,19 @@ test('passes explicit build directories through unchanged', () => {
   assert.deepEqual(calls, [['components', 'public']]);
 });
 
-test('starts the existing development server through the dev command', () => {
+test('starts the existing development server through the dev command', async () => {
   const calls = [];
   const logger = { log() {}, error() {} };
 
-  assert.equal(runCli(['dev'], {
+  const result = runCli(['dev'], {
     logger,
     startDev(options) {
       calls.push(options);
       return { listen() { calls.push('listen'); return Promise.resolve(); } };
     }
-  }), 0);
-  assert.deepEqual(calls, [{ projectDirectory: process.cwd(), logger }, 'listen']);
+  });
+  assert.equal(await result, 0);
+  assert.deepEqual(calls, [{ projectDirectory: process.cwd(), port: 3000, logger }, 'listen']);
 });
 
 test('the update command resolves through the async command path', async () => {

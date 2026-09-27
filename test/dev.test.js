@@ -7,6 +7,7 @@ const { pathToFileURL } = require('node:url');
 const {
   createRequestHandler,
   createSourceSnapshot,
+  injectReloadScript,
   readRouteTable,
   startDevelopmentServer,
   watchSourceFiles
@@ -226,7 +227,7 @@ test('builds before serving generated output and supplies SPA fallback', async (
 
   const shell = await fetch(`${url}/Home`);
   assert.equal(shell.status, 200);
-  assert.equal(await shell.text(), '<div id="app"></div>');
+  assert.equal(await shell.text(), injectReloadScript('<div id="app"></div>'));
 
   const component = await fetch(`${url}/App.js`);
   assert.equal(component.status, 200);
@@ -711,7 +712,7 @@ test('an eligibility flip stops server rendering despite stale build artifacts',
 
   const response = await fetch(`${url}/`);
   assert.equal(response.status, 200);
-  assert.equal(await response.text(), DOCUMENT_SHELL);
+  assert.equal(await response.text(), injectReloadScript(DOCUMENT_SHELL));
 });
 
 test('a render failure falls back to streaming the plain document shell', async (t) => {
@@ -730,7 +731,7 @@ test('a render failure falls back to streaming the plain document shell', async 
 
   const response = await fetch(`${url}/`);
   assert.equal(response.status, 200);
-  assert.equal(await response.text(), '<div id="root"></div>');
+  assert.equal(await response.text(), injectReloadScript('<div id="root"></div>'));
   assert.equal(logger.errors.length, 1);
   assert.match(logger.errors[0], /^Server rendering failed for \/:/u);
 });
@@ -1078,8 +1079,8 @@ test('colliding api routes disable serving and log the collision', async (t) => 
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
   createApiProject(projectDirectory, {
-    ['server/api/Health.js']: 'export default async function handler() { return "upper"; };\n',
-    ['server/api/health.js']: 'export default async function handler() { return "lower"; };\n'
+    ['server/api/health/index.js']: 'export default async function handler() { return "index"; };\n',
+    ['server/api/health.js']: 'export default async function handler() { return "direct"; };\n'
   });
 
   const logger = createLogger();
@@ -1140,4 +1141,112 @@ test('handlers run as ESM from their dist copies, with relative imports resolvin
   assert.equal(fs.existsSync(path.join(projectDirectory, 'src', 'package.json')), false);
   // The private module copied beside its importer, outside the manifest.
   assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'server', 'api', '_shared.js')), true);
+});
+
+test('listens on a specified custom port', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), '<div id="app"></div>');
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main>Port test</main>');
+
+  const developmentServer = startDevelopmentServer({
+    projectDirectory,
+    port: 4321,
+    logger: createLogger()
+  });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+  assert.equal(url, 'http://localhost:4321');
+});
+
+test('rejects invalid port values in startDevelopmentServer', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), '<div id="app"></div>');
+
+  assert.throws(
+    () => startDevelopmentServer({ projectDirectory, port: -1 }),
+    /Invalid port/
+  );
+  assert.throws(
+    () => startDevelopmentServer({ projectDirectory, port: 70000 }),
+    /Invalid port/
+  );
+  assert.throws(
+    () => startDevelopmentServer({ projectDirectory, port: '3000' }),
+    /Invalid port/
+  );
+});
+
+test('returns an actionable error message when the port is already in use (EADDRINUSE)', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), '<div id="app"></div>');
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main>Occupied</main>');
+
+  const server1 = startDevelopmentServer({ projectDirectory, port: 0, logger: createLogger() });
+  t.after(() => server1.close());
+  const url = await server1.listen();
+  const busyPort = Number(new URL(url).port);
+
+  const server2 = startDevelopmentServer({ projectDirectory, port: busyPort, logger: createLogger() });
+  t.after(() => server2.close());
+
+  await assert.rejects(
+    server2.listen(),
+    new RegExp(`Port ${busyPort} is already in use\\. Specify a different port with --port <n>\\.`)
+  );
+});
+
+test('serves injected dev reload script in HTML responses and exposes /_wizz/reload SSE endpoint', async (t) => {
+  const http = require('node:http');
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), '<!DOCTYPE html><html><body><div id="app"></div></body></html>');
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main>Reload test</main>');
+
+  const watchListeners = [];
+  const developmentServer = startDevelopmentServer({
+    projectDirectory,
+    port: 0,
+    logger: createLogger(),
+    watch(directory, options, listener) {
+      watchListeners.push(listener);
+      return { close() {} };
+    }
+  });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  // HTML response contains the injected reload script.
+  const response = await fetch(`${url}/`);
+  const html = await response.text();
+  assert.match(html, /<script>\(function\(\)\{if\(typeof EventSource!=="undefined"\)/);
+  assert.match(html, /EventSource\("\/_wizz\/reload"\)/);
+
+  // Method check for reload endpoint.
+  const postRes = await fetch(`${url}/_wizz/reload`, { method: 'POST' });
+  assert.equal(postRes.status, 405);
+
+  // Connect to SSE stream via HTTP.
+  const sseData = [];
+  const sseReq = http.get(`${url}/_wizz/reload`, (sseRes) => {
+    assert.equal(sseRes.statusCode, 200);
+    assert.match(sseRes.headers['content-type'], /^text\/event-stream/);
+
+    sseRes.on('data', (chunk) => {
+      sseData.push(chunk.toString());
+    });
+  });
+  t.after(() => sseReq.destroy());
+
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(sseData.length > 0, true);
+  assert.match(sseData.join(''), /retry: 1000/);
+
+  // Trigger rebuild and check SSE reload notification.
+  watchListeners[0]('change', 'App.wizz');
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.match(sseData.join(''), /data: reload/);
 });

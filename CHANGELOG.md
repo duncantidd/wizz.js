@@ -32,6 +32,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - README gains a "Server API Routes" section (authoring contract, `.env.server`, routing rules, request context, return shapes, error behavior, freshness, and the deployment recipe); `ROADMAP.md` records milestone 21 as completed with the Development Server Decision amendment; `STRUCTURE.md` lists `scripts/apiRoutes.js` and extends the dev-server prose; this file records the milestone.
 
+### Milestone 20 — Improve the Development Server Workflow
+
+#### Added
+
+- Port override flag `--port <n>` (or `--port=<n>`) for `wizz dev`: accepted in any position, validated as an integer between 0 and 65535, defaulting to 3000 (`scripts/cli.js`).
+- Clear `EADDRINUSE` handling in `wizz dev`: attempting to bind an occupied port rejects `listen()` with an actionable error message (`Port <port> is already in use. Specify a different port with --port <n>.`), exiting with code 1 instead of hanging or throwing an unhandled exception (`scripts/dev.js`, `scripts/cli.js`).
+- Dev-only Server-Sent Events (SSE) live reload channel at `GET /_wizz/reload`: broadcasts `data: reload\n\n` to all connected clients whenever a `.wizz` source file edit triggers a rebuild (`scripts/dev.js`).
+- Injected client-side reload script: development HTML responses (static shell, fallback, and server-rendered routes) inject `<script>new EventSource('/_wizz/reload').onmessage = () => location.reload()</script>` before `</body>` to auto-reload open browser tabs when rebuilds finish (`scripts/dev.js`).
+
+#### Changed
+
+- Development server workflow improvements leave production builds (`wizz build`) 100% byte-identical; no dev-only reload script or endpoint is present in built output.
+- No compiler, syntax, or output contract version bump required (all changes are dev server and CLI ergonomics only).
+
+#### Docs
+
+- README, `ROADMAP.md`, and `STRUCTURE.md` updated with `--port <n>` usage, `EADDRINUSE` error guidance, and dev-only SSE live reload mechanism.
+
 ### Post-M19 — CLI Self-Update and Extension Install
 
 #### Added

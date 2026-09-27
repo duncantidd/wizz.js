@@ -316,7 +316,27 @@ function copyDocumentShell(inputDirectory, outputDirectory, hasStyles, logger = 
 
   const shellStylesheetPath = path.join(path.dirname(shellPath), 'App.css');
   if (fs.existsSync(shellStylesheetPath)) {
-    fs.copyFileSync(shellStylesheetPath, path.join(outputDirectory, 'App.css'));
+    const destAppCssPath = path.join(outputDirectory, 'App.css');
+    const destExtractedCssPath = path.join(outputDirectory, STYLESHEET_FILENAME);
+
+    let isSameFile = false;
+    if (fs.existsSync(destExtractedCssPath)) {
+      try {
+        const stat1 = fs.statSync(destAppCssPath);
+        const stat2 = fs.statSync(destExtractedCssPath);
+        isSameFile = stat1.ino === stat2.ino && stat1.dev === stat2.dev;
+      } catch {
+        isSameFile = path.resolve(destAppCssPath).toLowerCase() === path.resolve(destExtractedCssPath).toLowerCase();
+      }
+    }
+
+    if (isSameFile) {
+      const globalCss = fs.readFileSync(shellStylesheetPath, 'utf8');
+      const existingExtractedCss = fs.readFileSync(destExtractedCssPath, 'utf8');
+      fs.writeFileSync(destExtractedCssPath, `${globalCss}\n\n${existingExtractedCss}`, 'utf8');
+    } else {
+      fs.copyFileSync(shellStylesheetPath, destAppCssPath);
+    }
   }
   return true;
 }

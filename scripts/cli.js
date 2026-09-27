@@ -12,7 +12,7 @@ const { VERSIONS } = require('../src/compiler');
 const USAGE = `Usage:
   wizz init [directory] [--force]   Scaffold a starter project
   wizz build [input-directory] [output-directory] [--json]
-  wizz dev                          Start the development server
+  wizz dev [--port <n>]             Start the development server
   wizz update                       Update the managed installation to the latest release
   wizz install-vscode-extension     Install the latest VS Code extension from a release
   wizz --version                    Print the compiler and contract versions`;
@@ -57,8 +57,37 @@ function parseCommand(argv) {
     throw new Error('Build accepts either no directories or both <input-directory> and <output-directory>.\n\n' + USAGE);
   }
 
-  if (command === 'dev' && argumentsList.length !== 0) {
-    throw new Error('Dev does not accept arguments.\n\n' + USAGE);
+  if (command === 'dev') {
+    let port = 3000;
+    const remainingArgs = [];
+    for (let i = 0; i < positional.length; i++) {
+      const arg = positional[i];
+      if (arg === '--port') {
+        if (i + 1 >= positional.length) {
+          throw new Error('Dev --port requires a valid port number.\n\n' + USAGE);
+        }
+        const portStr = positional[i + 1];
+        i++;
+        const parsedPort = Number(portStr);
+        if (!/^\d+$/.test(portStr) || !Number.isInteger(parsedPort) || parsedPort < 0 || parsedPort > 65535) {
+          throw new Error('Dev --port requires a valid port number.\n\n' + USAGE);
+        }
+        port = parsedPort;
+      } else if (arg.startsWith('--port=')) {
+        const portStr = arg.slice(7);
+        const parsedPort = Number(portStr);
+        if (portStr === '' || !/^\d+$/.test(portStr) || !Number.isInteger(parsedPort) || parsedPort < 0 || parsedPort > 65535) {
+          throw new Error('Dev --port requires a valid port number.\n\n' + USAGE);
+        }
+        port = parsedPort;
+      } else {
+        remainingArgs.push(arg);
+      }
+    }
+    if (remainingArgs.length > 0) {
+      throw new Error('Dev does not accept arguments.\n\n' + USAGE);
+    }
+    return { command: 'dev', argumentsList: [], json: false, force: false, port };
   }
 
   if (command === 'init') {
@@ -76,7 +105,7 @@ function parseCommand(argv) {
 }
 
 function runCli(argv, dependencies = {}) {
-  const { command, argumentsList, json, force } = parseCommand(argv);
+  const { command, argumentsList, json, force, port } = parseCommand(argv);
   const build = dependencies.build || buildProject;
   const startDev = dependencies.startDev || startDevelopmentServer;
   const init = dependencies.init || initProject;
@@ -134,9 +163,14 @@ function runCli(argv, dependencies = {}) {
     });
   }
 
-  const developmentServer = startDev({ projectDirectory: process.cwd(), logger });
-  void developmentServer.listen();
-  return 0;
+  const developmentServer = startDev({ projectDirectory: process.cwd(), port, logger });
+  return developmentServer.listen().then(
+    () => 0,
+    (error) => {
+      logger.error(error.message);
+      return 1;
+    }
+  );
 }
 
 if (require.main === module) {
