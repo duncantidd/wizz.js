@@ -326,7 +326,16 @@ function copyDocumentShell(inputDirectory, outputDirectory, hasStyles, logger = 
         const stat2 = fs.statSync(destExtractedCssPath);
         isSameFile = stat1.ino === stat2.ino && stat1.dev === stat2.dev;
       } catch {
-        isSameFile = path.resolve(destAppCssPath).toLowerCase() === path.resolve(destExtractedCssPath).toLowerCase();
+        // A failed stat means one of the two paths does not exist, and a
+        // missing file cannot be the same file as an existing one — so the
+        // copy must proceed. Case-insensitive path comparison would be wrong
+        // here: on a case-sensitive filesystem `dist/App.css` and
+        // `dist/app.css` are distinct files (the stat fails precisely because
+        // `App.css` is not written yet), and merging would drop the shell
+        // stylesheet entirely. On case-insensitive filesystems the statSync
+        // above resolves the lookup itself, so the ino comparison already
+        // answered the same-file question.
+        isSameFile = false;
       }
     }
 

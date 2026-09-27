@@ -49,9 +49,14 @@ function parseCommand(argv) {
   // `--json` is a build flag, not a directory: it may appear in any position
   // and is stripped before the positional count check. The build layer
   // re-parses it from argv, so it is re-appended here rather than threaded
-  // as an option.
-  const json = argumentsList.includes('--json');
-  const positional = argumentsList.filter((argument) => argument !== '--json');
+  // as an option. Init keeps the strip from the historical contract; every
+  // other command sees the flag in its positional list, so the strict
+  // argument checks reject it instead of silently ignoring it.
+  const stripJson = command === 'build' || command === 'init';
+  const json = stripJson && argumentsList.includes('--json');
+  const positional = stripJson
+    ? argumentsList.filter((argument) => argument !== '--json')
+    : argumentsList;
 
   if (command === 'build' && positional.length !== 0 && positional.length !== 2) {
     throw new Error('Build accepts either no directories or both <input-directory> and <output-directory>.\n\n' + USAGE);
@@ -59,6 +64,7 @@ function parseCommand(argv) {
 
   if (command === 'dev') {
     let port = 3000;
+    let portSeen = false;
     const remainingArgs = [];
     for (let i = 0; i < positional.length; i++) {
       const arg = positional[i];
@@ -66,6 +72,10 @@ function parseCommand(argv) {
         if (i + 1 >= positional.length) {
           throw new Error('Dev --port requires a valid port number.\n\n' + USAGE);
         }
+        if (portSeen) {
+          throw new Error('Dev accepts at most one --port flag.\n\n' + USAGE);
+        }
+        portSeen = true;
         const portStr = positional[i + 1];
         i++;
         const parsedPort = Number(portStr);
@@ -74,6 +84,10 @@ function parseCommand(argv) {
         }
         port = parsedPort;
       } else if (arg.startsWith('--port=')) {
+        if (portSeen) {
+          throw new Error('Dev accepts at most one --port flag.\n\n' + USAGE);
+        }
+        portSeen = true;
         const portStr = arg.slice(7);
         const parsedPort = Number(portStr);
         if (portStr === '' || !/^\d+$/.test(portStr) || !Number.isInteger(parsedPort) || parsedPort < 0 || parsedPort > 65535) {
@@ -167,6 +181,10 @@ function runCli(argv, dependencies = {}) {
   return developmentServer.listen().then(
     () => 0,
     (error) => {
+      // Release the watcher's fs.watch handle and polling interval before
+      // reporting: without this they keep the event loop alive and the
+      // process hangs forever instead of exiting with the code below.
+      developmentServer.close();
       logger.error(error.message);
       return 1;
     }

@@ -20,6 +20,20 @@ function createTemporaryDirectory() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-build-test-'));
 }
 
+// Whether the filesystem holding `directory` folds case: probe with a file
+// name that only differs from an existing one by case. Tests whose outcomes
+// legitimately branch on same-file semantics (App.css vs app.css) assert
+// each branch explicitly instead of loosening the assertion to fit both.
+function isCaseInsensitiveFilesystem(directory) {
+  const probePath = path.join(directory, 'wizz-case-probe');
+  fs.writeFileSync(probePath, '');
+  try {
+    return fs.existsSync(path.join(directory, 'WIZZ-CASE-PROBE'));
+  } finally {
+    fs.rmSync(probePath, { force: true });
+  }
+}
+
 function writeFile(filePath, contents = '') {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, contents, 'utf8');
@@ -718,8 +732,21 @@ test('copies a shell-side App.css into the output for the root layout', (t) => {
   buildProject(inputDirectory, outputDirectory, createLogger());
 
   // The global stylesheet is part of the document set: the shell links it as
-  // ./App.css, so the build must ship it or the link 404s.
-  assert.ok(fs.readFileSync(path.join(outputDirectory, 'App.css'), 'utf8').startsWith(appCss));
+  // ./App.css, so the build must ship it or the link 404s. Where the two
+  // output names resolve to one file (case-insensitive filesystems), the
+  // shell stylesheet merges into the extracted one instead of clobbering it;
+  // where they are distinct, each is written verbatim.
+  const builtAppCss = fs.readFileSync(path.join(outputDirectory, 'App.css'), 'utf8');
+  const builtExtractedCss = fs.readFileSync(path.join(outputDirectory, 'app.css'), 'utf8');
+  if (isCaseInsensitiveFilesystem(projectDirectory)) {
+    assert.ok(builtAppCss.startsWith(appCss), 'the merged output keeps the global stylesheet first');
+    assert.ok(builtAppCss.includes('color: red'), 'the merge preserves the extracted styles');
+    assert.equal(builtExtractedCss, builtAppCss, 'both spellings resolve to the single merged file');
+  } else {
+    assert.equal(builtAppCss, appCss, 'the shell stylesheet copies verbatim beside the extracted one');
+    assert.equal(builtExtractedCss.includes('color: red'), true, 'the extracted styles are never clobbered by the copy');
+    assert.equal(builtExtractedCss.includes(appCss.trim()), false, 'the global stylesheet does not leak into the extracted file');
+  }
   // The relative author link does not suppress the extracted app.css
   // injection: the pattern is slash-anchored and case-sensitive, so the
   // built shell links both stylesheets exactly once each.

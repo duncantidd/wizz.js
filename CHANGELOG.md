@@ -36,15 +36,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Added
 
-- Port override flag `--port <n>` (or `--port=<n>`) for `wizz dev`: accepted in any position, validated as an integer between 0 and 65535, defaulting to 3000 (`scripts/cli.js`).
-- Clear `EADDRINUSE` handling in `wizz dev`: attempting to bind an occupied port rejects `listen()` with an actionable error message (`Port <port> is already in use. Specify a different port with --port <n>.`), exiting with code 1 instead of hanging or throwing an unhandled exception (`scripts/dev.js`, `scripts/cli.js`).
+- Port override flag `--port <n>` (or `--port=<n>`) for `wizz dev`: accepted in any position, validated as an integer between 0 and 65535 (0 requests an ephemeral port), defaulting to 3000; at most one `--port` flag may appear — a repeated flag is rejected rather than silently letting the last one win (`scripts/cli.js`).
+- `wizz dev` argument strictness preserved: every non-`--port` argument is rejected, including the build-only `--json` flag (the flag is now stripped only for `build` and `init`, so `wizz dev --json` errors instead of silently starting the server) (`scripts/cli.js`).
+- Clear `EADDRINUSE` handling in `wizz dev`: attempting to bind an occupied port rejects `listen()` with an actionable error message (`Port <port> is already in use. Specify a different port with --port <n>.`); both the CLI and the direct `node scripts/dev.js` entry release the watcher handles (`close()`) before reporting, so the process exits with code 1 instead of hanging or throwing an unhandled exception (`scripts/dev.js`, `scripts/cli.js`).
 - Dev-only Server-Sent Events (SSE) live reload channel at `GET /_wizz/reload`: broadcasts `data: reload\n\n` to all connected clients whenever a `.wizz` source file edit triggers a rebuild (`scripts/dev.js`).
-- Injected client-side reload script: development HTML responses (static shell, fallback, and server-rendered routes) inject `<script>new EventSource('/_wizz/reload').onmessage = () => location.reload()</script>` before `</body>` to auto-reload open browser tabs when rebuilds finish (`scripts/dev.js`).
+- Injected client-side reload script: development HTML responses (static shell, fallback, and server-rendered routes) inject the reload script before the closing body tag to auto-reload open browser tabs when rebuilds finish; the injection anchors on the last, case-insensitive `</body>` occurrence so a literal `</body>` inside an inline script string (or a `</BODY>` spelling) cannot corrupt the page or push the script outside the document (`scripts/dev.js`).
 
 #### Changed
 
-- Development server workflow improvements leave production builds (`wizz build`) 100% byte-identical; no dev-only reload script or endpoint is present in built output.
-- No compiler, syntax, or output contract version bump required (all changes are dev server and CLI ergonomics only).
+- Production builds (`wizz build`) change in one place only, and only where the filesystem demands it: when a shell-side `App.css` and the extracted `app.css` resolve to the same output file (case-insensitive filesystems such as Windows and macOS defaults), `copyDocumentShell` now merges the shell stylesheet into the extracted file instead of overwriting the extracted component styles; on case-sensitive filesystems the shell stylesheet is copied verbatim, exactly as before. No dev-only reload script or endpoint is present in built output.
+- No compiler, syntax, or output contract version bump required (all changes are dev server, CLI ergonomics, and build-time shell-copy behavior only).
 
 #### Docs
 

@@ -1,5 +1,6 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
@@ -29,6 +30,21 @@ function createLogger() {
     error(message) { this.errors.push(message); },
     log(message) { this.messages.push(message); }
   };
+}
+
+// Reserve a genuinely free port by binding an ephemeral listener and
+// releasing it: a hardcoded port fails spuriously on any machine or CI
+// runner where something already listens on it. (The released port can be
+// snatched in the gap in theory, but the window is negligible in practice.)
+function reserveFreePort() {
+  return new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(port));
+    });
+  });
 }
 
 async function flushUpdates() {
@@ -1149,14 +1165,17 @@ test('listens on a specified custom port', async (t) => {
   writeFile(path.join(projectDirectory, 'index.html'), '<div id="app"></div>');
   writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main>Port test</main>');
 
+  // Never a hardcoded port: anything already listening on it (developer
+  // machine, shared CI runner) would fail the test spuriously.
+  const port = await reserveFreePort();
   const developmentServer = startDevelopmentServer({
     projectDirectory,
-    port: 4321,
+    port,
     logger: createLogger()
   });
   t.after(() => developmentServer.close());
   const url = await developmentServer.listen();
-  assert.equal(url, 'http://localhost:4321');
+  assert.equal(url, `http://localhost:${port}`);
 });
 
 test('rejects invalid port values in startDevelopmentServer', (t) => {
@@ -1196,6 +1215,41 @@ test('returns an actionable error message when the port is already in use (EADDR
     server2.listen(),
     new RegExp(`Port ${busyPort} is already in use\\. Specify a different port with --port <n>\\.`)
   );
+});
+
+test('injectReloadScript anchors on the last closing body tag, case-insensitively', () => {
+  // A literal '</body>' inside an inline script string is not a real closer:
+  // first-occurrence matching would splice the reload script into the page's
+  // JavaScript, so the injection must land before the genuine tag instead.
+  const htmlWithEarlierLiteral = '<html><script>const t = "</body>";</script><body><div id="app"></div></body></html>';
+  const injected = injectReloadScript(htmlWithEarlierLiteral);
+  const reloadAnchor = injected.indexOf('/_wizz/reload');
+  assert.notEqual(reloadAnchor, -1);
+  // After the inline script's closing tag (i.e. not inside the string), and
+  // before the genuine closing tag, which the document still ends with.
+  assert.ok(reloadAnchor > injected.indexOf('</script>'));
+  assert.ok(injected.trimEnd().endsWith('</body></html>'));
+
+  // A differently-cased closing tag is still a closing tag — not a reason to
+  // append the reload script after the document element.
+  const upperCase = injectReloadScript('<html><body><div id="app"></div></BODY></html>');
+  assert.ok(upperCase.includes('/_wizz/reload'));
+  assert.ok(upperCase.trimEnd().endsWith('</BODY></html>'));
+
+  // Whitespace inside the closer is tolerated.
+  const spaced = injectReloadScript('<html><body></body ></html>');
+  assert.ok(spaced.includes('/_wizz/reload'));
+  assert.ok(spaced.trimEnd().endsWith('</body ></html>'));
+
+  // No closing tag at all: append after the document, as before.
+  const bodyless = injectReloadScript('<div id="app"></div>');
+  assert.ok(bodyless.includes('/_wizz/reload'));
+  assert.ok(bodyless.startsWith('<div id="app"></div>'));
+  assert.ok(bodyless.trimEnd().endsWith('</script>'));
+
+  // Non-string input passes through untouched.
+  assert.equal(injectReloadScript(null), null);
+  assert.equal(injectReloadScript(undefined), undefined);
 });
 
 test('serves injected dev reload script in HTML responses and exposes /_wizz/reload SSE endpoint', async (t) => {

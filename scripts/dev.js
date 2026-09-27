@@ -105,8 +105,22 @@ const RELOAD_SCRIPT = '<script>(function(){if(typeof EventSource!=="undefined"){
 
 function injectReloadScript(html) {
   if (typeof html !== 'string') return html;
-  if (html.includes('</body>')) {
-    return html.replace('</body>', () => `${RELOAD_SCRIPT}\n</body>`);
+  // Anchor on the LAST closing body tag, case-insensitively: an earlier
+  // literal '</body>' can appear inside inline script text or a comment, and
+  // first-occurrence matching would splice the reload script into it and
+  // corrupt the page's JavaScript. A `</BODY>` spelling must be treated as a
+  // real closer too, not fall through to the append branch. Remaining
+  // limitation (accepted for a dev server): a '</body>' sequence inside an
+  // inline string with no genuine closing tag anywhere still matches — real
+  // HTML parsing is out of scope here.
+  const closingBodyTag = /<\/body\s*>/gi;
+  let match;
+  let lastCloseIndex = -1;
+  while ((match = closingBodyTag.exec(html)) !== null) {
+    lastCloseIndex = match.index;
+  }
+  if (lastCloseIndex !== -1) {
+    return html.slice(0, lastCloseIndex) + RELOAD_SCRIPT + '\n' + html.slice(lastCloseIndex);
   }
   return html + RELOAD_SCRIPT;
 }
@@ -506,7 +520,17 @@ function startDevelopmentServer(options = {}) {
 if (require.main === module) {
   try {
     const developmentServer = startDevelopmentServer();
-    void developmentServer.listen();
+    developmentServer.listen().then(
+      () => {},
+      (error) => {
+        // Same contract as the CLI path: release the watcher handles so the
+        // process exits cleanly instead of hanging or dumping an unhandled
+        // rejection stack trace.
+        developmentServer.close();
+        console.error(error.message);
+        process.exitCode = 1;
+      }
+    );
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;
