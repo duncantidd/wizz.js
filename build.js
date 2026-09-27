@@ -316,7 +316,36 @@ function copyDocumentShell(inputDirectory, outputDirectory, hasStyles, logger = 
 
   const shellStylesheetPath = path.join(path.dirname(shellPath), 'App.css');
   if (fs.existsSync(shellStylesheetPath)) {
-    fs.copyFileSync(shellStylesheetPath, path.join(outputDirectory, 'App.css'));
+    const destAppCssPath = path.join(outputDirectory, 'App.css');
+    const destExtractedCssPath = path.join(outputDirectory, STYLESHEET_FILENAME);
+
+    let isSameFile = false;
+    if (fs.existsSync(destExtractedCssPath)) {
+      try {
+        const stat1 = fs.statSync(destAppCssPath);
+        const stat2 = fs.statSync(destExtractedCssPath);
+        isSameFile = stat1.ino === stat2.ino && stat1.dev === stat2.dev;
+      } catch {
+        // A failed stat means one of the two paths does not exist, and a
+        // missing file cannot be the same file as an existing one — so the
+        // copy must proceed. Case-insensitive path comparison would be wrong
+        // here: on a case-sensitive filesystem `dist/App.css` and
+        // `dist/app.css` are distinct files (the stat fails precisely because
+        // `App.css` is not written yet), and merging would drop the shell
+        // stylesheet entirely. On case-insensitive filesystems the statSync
+        // above resolves the lookup itself, so the ino comparison already
+        // answered the same-file question.
+        isSameFile = false;
+      }
+    }
+
+    if (isSameFile) {
+      const globalCss = fs.readFileSync(shellStylesheetPath, 'utf8');
+      const existingExtractedCss = fs.readFileSync(destExtractedCssPath, 'utf8');
+      fs.writeFileSync(destExtractedCssPath, `${globalCss}\n\n${existingExtractedCss}`, 'utf8');
+    } else {
+      fs.copyFileSync(shellStylesheetPath, destAppCssPath);
+    }
   }
   return true;
 }

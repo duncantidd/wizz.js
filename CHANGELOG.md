@@ -24,6 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### Changed
 
 - Package and compiler version 1.11.0 → 1.12.0 for the release cut carrying server API routes: additive only, so the syntax and output contracts hold (`src/compiler/version.js`, `package.json`).
+- Release cut v1.13.0: package and compiler version 1.12.0 → 1.13.0 for the release cut carrying milestone 20 (development server workflow): CLI/dev-layer additions and the case-insensitive App.css merge only, so the syntax and output contracts hold (`src/compiler/version.js`, `package.json`).
 - The milestone reverses one clause of the Development Server Decision, deliberately and narrowly: the dev server gains an API layer for author-authored handlers, but no sessions, persistence, ORM, or middleware — handlers are plain functions, production application hosting stays external to the framework, and page-delivery eligibility remains a compilation artifact (`ROADMAP.md`, amended paragraph).
 - `scripts/apiRoutes.js` joins the shipped surface in all four places that list CLI scripts: `package.json` `files`, `packaging.test.js` `EXPECTED_FILES`, the installer's `--local` copy list, and the installer test's fake tarball.
 - No compiler/syntax/output version bump: no compiler source, parser, or generated-module contract changes — same reasoning as milestones 13 and 20.
@@ -31,6 +32,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 #### Docs
 
 - README gains a "Server API Routes" section (authoring contract, `.env.server`, routing rules, request context, return shapes, error behavior, freshness, and the deployment recipe); `ROADMAP.md` records milestone 21 as completed with the Development Server Decision amendment; `STRUCTURE.md` lists `scripts/apiRoutes.js` and extends the dev-server prose; this file records the milestone.
+
+### Milestone 20 — Improve the Development Server Workflow
+
+#### Added
+
+- Port override flag `--port <n>` (or `--port=<n>`) for `wizz dev`: accepted in any position, validated as an integer between 0 and 65535 (0 requests an ephemeral port), defaulting to 3000; at most one `--port` flag may appear — a repeated flag is rejected rather than silently letting the last one win (`scripts/cli.js`).
+- `wizz dev` argument strictness preserved: every non-`--port` argument is rejected, including the build-only `--json` flag (the flag is now stripped only for `build` and `init`, so `wizz dev --json` errors instead of silently starting the server) (`scripts/cli.js`).
+- Clear `EADDRINUSE` handling in `wizz dev`: attempting to bind an occupied port rejects `listen()` with an actionable error message (`Port <port> is already in use. Specify a different port with --port <n>.`); both the CLI and the direct `node scripts/dev.js` entry release the watcher handles (`close()`) before reporting, so the process exits with code 1 instead of hanging or throwing an unhandled exception (`scripts/dev.js`, `scripts/cli.js`).
+- Dev-only Server-Sent Events (SSE) live reload channel at `GET /_wizz/reload`: broadcasts `data: reload\n\n` to all connected clients whenever a `.wizz` source file edit triggers a rebuild (`scripts/dev.js`).
+- Injected client-side reload script: development HTML responses (static shell, fallback, and server-rendered routes) inject the reload script before the closing body tag to auto-reload open browser tabs when rebuilds finish; the injection anchors on the last, case-insensitive `</body>` occurrence so a literal `</body>` inside an inline script string (or a `</BODY>` spelling) cannot corrupt the page or push the script outside the document (`scripts/dev.js`).
+
+#### Changed
+
+- Production builds (`wizz build`) change in one place only, and only where the filesystem demands it: when a shell-side `App.css` and the extracted `app.css` resolve to the same output file (case-insensitive filesystems such as Windows and macOS defaults), `copyDocumentShell` now merges the shell stylesheet into the extracted file instead of overwriting the extracted component styles; on case-sensitive filesystems the shell stylesheet is copied verbatim, exactly as before. No dev-only reload script or endpoint is present in built output.
+- No compiler, syntax, or output contract version bump required (all changes are dev server, CLI ergonomics, and build-time shell-copy behavior only).
+
+#### Docs
+
+- README, `ROADMAP.md`, and `STRUCTURE.md` updated with `--port <n>` usage, `EADDRINUSE` error guidance, and dev-only SSE live reload mechanism.
 
 ### Post-M19 — CLI Self-Update and Extension Install
 

@@ -64,8 +64,15 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // development server at /api/* and read secrets from .env.server, with
   // build support for external Node hosts; no accepted component syntax or
   // generated-module contract changed, so syntax and output hold.
+  // compiler 1.13.0: the release cut carrying the development server
+  // workflow milestone — `wizz dev --port <n>` port override with
+  // actionable EADDRINUSE failure, dev-only SSE live reload (/_wizz/reload
+  // with an injected client script), and the shell-side App.css merge in
+  // copyDocumentShell for case-insensitive filesystems. All CLI/dev-layer
+  // additions; no accepted component syntax or generated-module contract
+  // changed, so syntax and output hold.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.12.0',
+    compiler: '1.13.0',
     syntax: '1.4.1',
     output: '1.8.2'
   });

@@ -117,10 +117,10 @@ Every compiler diagnostic carries a stable code (`WIZZ-P###` for parse-stage fai
 Start the development server with:
 
 ```bash
-wizz dev
+wizz dev [--port <n>]
 ```
 
-`wizz dev` uses the directory where you run the command as the application project: it builds that directory's `src` into `dist`, serves the result, and watches `.wizz` source files. It uses native file events with a 250 ms polling fallback, so changes on mounted filesystems such as WSL's `/mnt/c` still rebuild when an event is missed. Rebuilds update `dist`; refresh the browser to load the new module because live reload is not implemented yet.
+`wizz dev` uses the directory where you run the command as the application project: it builds that directory's `src` into `dist`, serves the result at `http://localhost:3000` (or the specified `--port`), and watches `.wizz` source files. It uses native file events with a 250 ms polling fallback, so changes on mounted filesystems such as WSL's `/mnt/c` still rebuild when an event is missed. Rebuilds update `dist` and automatically trigger live reloading in connected browser tabs via a dev-only Server-Sent Events (SSE) channel (`/_wizz/reload`). If the requested port is already in use, `wizz dev` fails cleanly with an error message naming the port and the `--port` flag.
 
 Print what you have installed with:
 
@@ -128,7 +128,7 @@ Print what you have installed with:
 wizz --version
 ```
 
-which prints the compiler and contract version triple, for example `wizz 1.12.0 (compiler 1.12.0, syntax 1.4.1, output 1.8.2)`. The public CLI accepts `init`, `build`, `dev`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory.
+which prints the compiler and contract version triple, for example `wizz 1.13.0 (compiler 1.13.0, syntax 1.4.1, output 1.8.2)`. The public CLI accepts `init`, `build`, `dev`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, and `dev` accepts optional `--port <n>`.
 
 `wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
 
@@ -356,10 +356,10 @@ When `clicks` changes, the parent delivers the new value through the child insta
 Serve the directory over HTTP when loading browser ES modules, for example:
 
 ```bash
-node scripts/dev.js
+wizz dev --port 4321
 ```
 
-The development command builds `src` into `dist`, copies `index.html` and `App.css` into the output directory, serves it at `http://localhost:3000`, and watches `.wizz` files for changes. It reports compiler errors while keeping the server available for subsequent fixes.
+The development command builds `src` into `dist`, copies `index.html` and `App.css` into the output directory, serves it at `http://localhost:3000` (or the specified `--port`), and watches `.wizz` files for changes. It reports compiler errors while keeping the server available for subsequent fixes, and automatically reloads open browser tabs when a rebuild completes.
 
 Requests for browser routes such as `http://localhost:3000/Home` receive the document shell, allowing the client router to select the matching component. Server-renderable routes (see below) instead receive the shell with the rendered markup already inside the mount point plus the serialized state script, and the router hydrates it on first load. Existing output files such as `/runtime/main.js` and `/pages/Home.js` are served directly; missing asset paths return HTTP 404.
 

@@ -88,7 +88,7 @@ test('a missing or non-directory api location yields an empty table', () => {
 
 test('duplicate route paths throw naming both claimants', () => {
   const directory = createTemporaryDirectory();
-  writeFile(path.join(directory, 'Health.js'));
+  writeFile(path.join(directory, 'health', 'index.js'));
   writeFile(path.join(directory, 'health.js'));
 
   assert.throws(() => discoverApiRoutes(directory), /Ambiguous API route '\/api\/health'/);
