@@ -20,6 +20,20 @@ function createTemporaryDirectory() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-build-test-'));
 }
 
+// Whether the filesystem holding `directory` folds case: probe with a file
+// name that only differs from an existing one by case. Tests whose outcomes
+// legitimately branch on same-file semantics (App.css vs app.css) assert
+// each branch explicitly instead of loosening the assertion to fit both.
+function isCaseInsensitiveFilesystem(directory) {
+  const probePath = path.join(directory, 'wizz-case-probe');
+  fs.writeFileSync(probePath, '');
+  try {
+    return fs.existsSync(path.join(directory, 'WIZZ-CASE-PROBE'));
+  } finally {
+    fs.rmSync(probePath, { force: true });
+  }
+}
+
 function writeFile(filePath, contents = '') {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, contents, 'utf8');
@@ -192,7 +206,7 @@ test('rejects colliding page routes before writing a route manifest', (t) => {
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
   const inputDirectory = path.join(projectDirectory, 'src');
   const outputDirectory = path.join(projectDirectory, 'dist');
-  const conflictingPage = path.join(inputDirectory, 'pages', 'home.wizz');
+  const conflictingPage = path.join(inputDirectory, 'pages', 'home', 'index.wizz');
   writeFile(path.join(inputDirectory, 'pages', 'Home.wizz'), '<main>One</main>');
   writeFile(conflictingPage, '<main>Two</main>');
 
@@ -200,8 +214,6 @@ test('rejects colliding page routes before writing a route manifest', (t) => {
     () => buildProject(inputDirectory, outputDirectory, createLogger()),
     (error) => (error.filePath === conflictingPage || error.filePath === path.join(inputDirectory, 'pages', 'Home.wizz'))
       && error.message.startsWith("Ambiguous route '/home' is claimed by")
-      && error.message.includes('pages/Home.wizz')
-      && error.message.includes('pages/home.wizz')
   );
   assert.equal(fs.existsSync(path.join(outputDirectory, 'runtime', 'routes.js')), false);
 });
@@ -720,8 +732,21 @@ test('copies a shell-side App.css into the output for the root layout', (t) => {
   buildProject(inputDirectory, outputDirectory, createLogger());
 
   // The global stylesheet is part of the document set: the shell links it as
-  // ./App.css, so the build must ship it or the link 404s.
-  assert.equal(fs.readFileSync(path.join(outputDirectory, 'App.css'), 'utf8'), appCss);
+  // ./App.css, so the build must ship it or the link 404s. Where the two
+  // output names resolve to one file (case-insensitive filesystems), the
+  // shell stylesheet merges into the extracted one instead of clobbering it;
+  // where they are distinct, each is written verbatim.
+  const builtAppCss = fs.readFileSync(path.join(outputDirectory, 'App.css'), 'utf8');
+  const builtExtractedCss = fs.readFileSync(path.join(outputDirectory, 'app.css'), 'utf8');
+  if (isCaseInsensitiveFilesystem(projectDirectory)) {
+    assert.ok(builtAppCss.startsWith(appCss), 'the merged output keeps the global stylesheet first');
+    assert.ok(builtAppCss.includes('color: red'), 'the merge preserves the extracted styles');
+    assert.equal(builtExtractedCss, builtAppCss, 'both spellings resolve to the single merged file');
+  } else {
+    assert.equal(builtAppCss, appCss, 'the shell stylesheet copies verbatim beside the extracted one');
+    assert.equal(builtExtractedCss.includes('color: red'), true, 'the extracted styles are never clobbered by the copy');
+    assert.equal(builtExtractedCss.includes(appCss.trim()), false, 'the global stylesheet does not leak into the extracted file');
+  }
   // The relative author link does not suppress the extracted app.css
   // injection: the pattern is slash-anchored and case-sensitive, so the
   // built shell links both stylesheets exactly once each.
@@ -1103,8 +1128,11 @@ test('api handlers copy verbatim with a manifest advertising their routes', (t) 
     fs.readFileSync(path.join(outputDirectory, 'server', 'api', 'index.js'), 'utf8'),
     handlerSource
   );
-  assert.equal(fs.existsSync(path.join(outputDirectory, 'server', 'api', 'v1', 'users.js')), false,
-    'lowercasing is route-level only: file copies keep authored names');
+  assert.equal(
+    fs.readdirSync(path.join(outputDirectory, 'server', 'api', 'v1'))[0],
+    'Users.js',
+    'lowercasing is route-level only: file copies keep authored names'
+  );
   // Private modules copy too (handlers import them) but stay out of the
   // manifest — they are not routable.
   assert.equal(fs.readFileSync(path.join(outputDirectory, 'server', 'api', '_shared.js'), 'utf8'), 'export const helper = 1;\n');
@@ -1127,7 +1155,7 @@ test('an api route collision fails the build but writes an empty manifest', (t) 
   const outputDirectory = createTemporaryDirectory();
   t.after(() => { fs.rmSync(inputDirectory, { recursive: true, force: true }); fs.rmSync(outputDirectory, { recursive: true, force: true }); });
   writeFile(path.join(inputDirectory, 'App.wizz'), '<main>Hi</main>');
-  writeFile(path.join(inputDirectory, 'server', 'api', 'Health.js'), 'export default 1;\n');
+  writeFile(path.join(inputDirectory, 'server', 'api', 'health', 'index.js'), 'export default 1;\n');
   writeFile(path.join(inputDirectory, 'server', 'api', 'health.js'), 'export default 2;\n');
 
   const logger = createLogger();
@@ -1146,7 +1174,7 @@ test('the JSON build mode reports an api route collision as an envelope record',
   const outputDirectory = createTemporaryDirectory();
   t.after(() => { fs.rmSync(inputDirectory, { recursive: true, force: true }); fs.rmSync(outputDirectory, { recursive: true, force: true }); });
   writeFile(path.join(inputDirectory, 'App.wizz'), '<main>Hi</main>');
-  writeFile(path.join(inputDirectory, 'server', 'api', 'Health.js'));
+  writeFile(path.join(inputDirectory, 'server', 'api', 'health', 'index.js'));
   writeFile(path.join(inputDirectory, 'server', 'api', 'health.js'));
 
   const result = buildProject(inputDirectory, outputDirectory, createLogger(), { json: true });

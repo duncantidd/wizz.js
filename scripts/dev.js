@@ -100,9 +100,35 @@ function readRouteTable(outputDirectory) {
   }
 }
 
+const RELOAD_ROUTE_PREFIX = '/_wizz/reload';
+const RELOAD_SCRIPT = '<script>(function(){if(typeof EventSource!=="undefined"){new EventSource("/_wizz/reload").onmessage=function(){location.reload();};}})();</script>';
+
+function injectReloadScript(html) {
+  if (typeof html !== 'string') return html;
+  // Anchor on the LAST closing body tag, case-insensitively: an earlier
+  // literal '</body>' can appear inside inline script text or a comment, and
+  // first-occurrence matching would splice the reload script into it and
+  // corrupt the page's JavaScript. A `</BODY>` spelling must be treated as a
+  // real closer too, not fall through to the append branch. Remaining
+  // limitation (accepted for a dev server): a '</body>' sequence inside an
+  // inline string with no genuine closing tag anywhere still matches — real
+  // HTML parsing is out of scope here.
+  const closingBodyTag = /<\/body\s*>/gi;
+  let match;
+  let lastCloseIndex = -1;
+  while ((match = closingBodyTag.exec(html)) !== null) {
+    lastCloseIndex = match.index;
+  }
+  if (lastCloseIndex !== -1) {
+    return html.slice(0, lastCloseIndex) + RELOAD_SCRIPT + '\n' + html.slice(lastCloseIndex);
+  }
+  return html + RELOAD_SCRIPT;
+}
+
 function sendDocumentShell(indexPath, response) {
+  const shell = fs.readFileSync(indexPath, 'utf8');
   response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-  fs.createReadStream(indexPath).pipe(response);
+  response.end(injectReloadScript(shell));
 }
 
 async function renderServerRoute(routeEntry, indexPath, response) {
@@ -137,7 +163,7 @@ async function renderServerRoute(routeEntry, indexPath, response) {
     .replace('</head>', () => `${headRun}</head>`);
 
   response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-  response.end(document);
+  response.end(injectReloadScript(document));
 }
 
 // Milestone 21: `/api/**` requests resolve against `src/server/api/**`
@@ -247,6 +273,7 @@ function createRequestHandler(outputDirectory, options = {}) {
   const getRouteTable = options.getRouteTable || (() => readRouteTable(resolvedOutputDirectory));
   const logger = options.logger || console;
   const apiDirectory = options.apiDirectory || null;
+  const reloadClients = options.reloadClients || null;
 
   return (request, response) => {
     let requestPath;
@@ -258,6 +285,29 @@ function createRequestHandler(outputDirectory, options = {}) {
       // An undecodable pathname is a malformed request, not a crash.
       response.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
       response.end('Bad request');
+      return;
+    }
+
+    // Dev-only Server-Sent Events (SSE) reload endpoint: broadcast updates to open tabs.
+    if (requestPath === RELOAD_ROUTE_PREFIX) {
+      if (request.method === 'GET') {
+        response.writeHead(200, {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache, no-transform',
+          'Connection': 'keep-alive',
+          'Access-Control-Allow-Origin': '*'
+        });
+        response.write('retry: 1000\n\n');
+        if (reloadClients) {
+          reloadClients.add(response);
+          request.on('close', () => {
+            reloadClients.delete(response);
+          });
+        }
+      } else {
+        response.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8' });
+        response.end('Method not allowed');
+      }
       return;
     }
 
@@ -276,6 +326,12 @@ function createRequestHandler(outputDirectory, options = {}) {
     const isFile = isInsideOutput && fs.existsSync(filePath) && fs.statSync(filePath).isFile();
 
     if (isFile) {
+      if (path.extname(filePath) === '.html') {
+        const content = fs.readFileSync(filePath, 'utf8');
+        response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        response.end(injectReloadScript(content));
+        return;
+      }
       response.writeHead(200, { 'Content-Type': MIME_TYPES[path.extname(filePath)] || 'application/octet-stream' });
       fs.createReadStream(filePath).pipe(response);
       return;
@@ -380,6 +436,9 @@ function startDevelopmentServer(options = {}) {
   const inputDirectory = path.resolve(options.inputDirectory || path.join(projectDirectory, 'src'));
   const outputDirectory = path.resolve(options.outputDirectory || path.join(projectDirectory, 'dist'));
   const port = options.port ?? 3000;
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new TypeError('Invalid port: must be an integer between 0 and 65535.');
+  }
   const logger = options.logger || console;
   const build = options.build || buildProject;
   const loadEnv = options.loadEnv || loadServerEnv;
@@ -394,13 +453,22 @@ function startDevelopmentServer(options = {}) {
 
   buildApplication(inputDirectory, outputDirectory, projectDirectory, logger, build);
   assertDocumentShell(outputDirectory);
+  const reloadClients = new Set();
   const server = http.createServer(createRequestHandler(outputDirectory, {
     logger,
-    apiDirectory: path.join(inputDirectory, 'server', 'api')
+    apiDirectory: path.join(inputDirectory, 'server', 'api'),
+    reloadClients
   }));
   const watcher = watchSourceFiles(inputDirectory, (eventType, fileName) => {
     logger.log(`Rebuilding after ${eventType}: ${fileName}`);
     buildApplication(inputDirectory, outputDirectory, projectDirectory, logger, build);
+    for (const clientResponse of reloadClients) {
+      try {
+        clientResponse.write('data: reload\n\n');
+      } catch {
+        reloadClients.delete(clientResponse);
+      }
+    }
   }, {
     watch: options.watch,
     setInterval: options.setInterval,
@@ -412,21 +480,38 @@ function startDevelopmentServer(options = {}) {
 
   return {
     server,
+    reloadClients,
     close() {
       watcher.close();
+      for (const clientResponse of reloadClients) {
+        try { clientResponse.end(); } catch {}
+      }
+      reloadClients.clear();
       if (!server.listening) {
         return Promise.resolve();
       }
       return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     },
     listen() {
-      return new Promise((resolve) => {
-        server.listen(port, () => {
+      return new Promise((resolve, reject) => {
+        const onError = (error) => {
+          server.removeListener('listening', onListening);
+          if (error && error.code === 'EADDRINUSE') {
+            reject(new Error(`Port ${port} is already in use. Specify a different port with --port <n>.`));
+          } else {
+            reject(error);
+          }
+        };
+        const onListening = () => {
+          server.removeListener('error', onError);
           const address = server.address();
           const url = `http://localhost:${address.port}`;
           logger.log(`Wizz development server running at ${url}`);
           resolve(url);
-        });
+        };
+        server.once('error', onError);
+        server.once('listening', onListening);
+        server.listen(port);
       });
     }
   };
@@ -435,7 +520,17 @@ function startDevelopmentServer(options = {}) {
 if (require.main === module) {
   try {
     const developmentServer = startDevelopmentServer();
-    void developmentServer.listen();
+    developmentServer.listen().then(
+      () => {},
+      (error) => {
+        // Same contract as the CLI path: release the watcher handles so the
+        // process exits cleanly instead of hanging or dumping an unhandled
+        // rejection stack trace.
+        developmentServer.close();
+        console.error(error.message);
+        process.exitCode = 1;
+      }
+    );
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;
@@ -443,11 +538,14 @@ if (require.main === module) {
 }
 
 module.exports = {
+  RELOAD_ROUTE_PREFIX,
+  RELOAD_SCRIPT,
   assertDocumentShell,
   buildApplication,
   copyDocumentShell,
   createRequestHandler,
   createSourceSnapshot,
+  injectReloadScript,
   readRouteTable,
   startDevelopmentServer,
   watchSourceFiles

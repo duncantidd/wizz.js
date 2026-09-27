@@ -12,7 +12,7 @@ const { VERSIONS } = require('../src/compiler');
 const USAGE = `Usage:
   wizz init [directory] [--force]   Scaffold a starter project
   wizz build [input-directory] [output-directory] [--json]
-  wizz dev                          Start the development server
+  wizz dev [--port <n>]             Start the development server
   wizz update                       Update the managed installation to the latest release
   wizz install-vscode-extension     Install the latest VS Code extension from a release
   wizz --version                    Print the compiler and contract versions`;
@@ -49,16 +49,59 @@ function parseCommand(argv) {
   // `--json` is a build flag, not a directory: it may appear in any position
   // and is stripped before the positional count check. The build layer
   // re-parses it from argv, so it is re-appended here rather than threaded
-  // as an option.
-  const json = argumentsList.includes('--json');
-  const positional = argumentsList.filter((argument) => argument !== '--json');
+  // as an option. Init keeps the strip from the historical contract; every
+  // other command sees the flag in its positional list, so the strict
+  // argument checks reject it instead of silently ignoring it.
+  const stripJson = command === 'build' || command === 'init';
+  const json = stripJson && argumentsList.includes('--json');
+  const positional = stripJson
+    ? argumentsList.filter((argument) => argument !== '--json')
+    : argumentsList;
 
   if (command === 'build' && positional.length !== 0 && positional.length !== 2) {
     throw new Error('Build accepts either no directories or both <input-directory> and <output-directory>.\n\n' + USAGE);
   }
 
-  if (command === 'dev' && argumentsList.length !== 0) {
-    throw new Error('Dev does not accept arguments.\n\n' + USAGE);
+  if (command === 'dev') {
+    let port = 3000;
+    let portSeen = false;
+    const remainingArgs = [];
+    for (let i = 0; i < positional.length; i++) {
+      const arg = positional[i];
+      if (arg === '--port') {
+        if (i + 1 >= positional.length) {
+          throw new Error('Dev --port requires a valid port number.\n\n' + USAGE);
+        }
+        if (portSeen) {
+          throw new Error('Dev accepts at most one --port flag.\n\n' + USAGE);
+        }
+        portSeen = true;
+        const portStr = positional[i + 1];
+        i++;
+        const parsedPort = Number(portStr);
+        if (!/^\d+$/.test(portStr) || !Number.isInteger(parsedPort) || parsedPort < 0 || parsedPort > 65535) {
+          throw new Error('Dev --port requires a valid port number.\n\n' + USAGE);
+        }
+        port = parsedPort;
+      } else if (arg.startsWith('--port=')) {
+        if (portSeen) {
+          throw new Error('Dev accepts at most one --port flag.\n\n' + USAGE);
+        }
+        portSeen = true;
+        const portStr = arg.slice(7);
+        const parsedPort = Number(portStr);
+        if (portStr === '' || !/^\d+$/.test(portStr) || !Number.isInteger(parsedPort) || parsedPort < 0 || parsedPort > 65535) {
+          throw new Error('Dev --port requires a valid port number.\n\n' + USAGE);
+        }
+        port = parsedPort;
+      } else {
+        remainingArgs.push(arg);
+      }
+    }
+    if (remainingArgs.length > 0) {
+      throw new Error('Dev does not accept arguments.\n\n' + USAGE);
+    }
+    return { command: 'dev', argumentsList: [], json: false, force: false, port };
   }
 
   if (command === 'init') {
@@ -76,7 +119,7 @@ function parseCommand(argv) {
 }
 
 function runCli(argv, dependencies = {}) {
-  const { command, argumentsList, json, force } = parseCommand(argv);
+  const { command, argumentsList, json, force, port } = parseCommand(argv);
   const build = dependencies.build || buildProject;
   const startDev = dependencies.startDev || startDevelopmentServer;
   const init = dependencies.init || initProject;
@@ -134,9 +177,18 @@ function runCli(argv, dependencies = {}) {
     });
   }
 
-  const developmentServer = startDev({ projectDirectory: process.cwd(), logger });
-  void developmentServer.listen();
-  return 0;
+  const developmentServer = startDev({ projectDirectory: process.cwd(), port, logger });
+  return developmentServer.listen().then(
+    () => 0,
+    (error) => {
+      // Release the watcher's fs.watch handle and polling interval before
+      // reporting: without this they keep the event loop alive and the
+      // process hangs forever instead of exiting with the code below.
+      developmentServer.close();
+      logger.error(error.message);
+      return 1;
+    }
+  );
 }
 
 if (require.main === module) {
