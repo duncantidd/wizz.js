@@ -286,3 +286,133 @@ test('leaves plain declarations byte-shaped exactly as before', () => {
 		}
 	]);
 });
+
+test('ignores declaration-shaped text inside string literals', () => {
+	// A docs-style component whose script carries code samples as strings:
+	// the sample's `let` declarations must not become phantom reactive state
+	// (the generators would emit machinery referencing a variable that only
+	// exists inside a quote, dying with a ReferenceError on first execution).
+	const script = [
+		'const sample = "let clicks = 0; let other = 2;";',
+		"const template = 'let theme = persist(\\'theme\\', \\'light\\');';",
+		'let real = 1;'
+	].join('\n');
+
+	assert.deepEqual(scanState(script), [
+		{
+			type: 'VariableDeclaration',
+			kind: 'const',
+			name: 'sample',
+			initialValue: '"let clicks = 0; let other = 2;"',
+			isReactive: false
+		},
+		{
+			type: 'VariableDeclaration',
+			kind: 'const',
+			name: 'template',
+			initialValue: "'let theme = persist(\\'theme\\', \\'light\\');'",
+			isReactive: false
+		},
+		{
+			type: 'VariableDeclaration',
+			kind: 'let',
+			name: 'real',
+			initialValue: '1',
+			isReactive: true
+		}
+	]);
+});
+
+test('ignores declaration-shaped text inside comments, template literals, and regex patterns', () => {
+	const script = [
+		'// let commented = 1;',
+		'/* let blocked = 2; */',
+		'const doc = `use let faked = 3; carefully`;',
+		'const matcher = /let patterned = 4;/;',
+		'let real = 5;'
+	].join('\n');
+
+	const names = scanState(script).map(declaration => declaration.name);
+	assert.deepEqual(names, ['doc', 'matcher', 'real']);
+	const real = scanState(script).find(declaration => declaration.name === 'real');
+	assert.equal(real.isReactive, true);
+});
+
+test('ignores function declarations shaped as text inside strings', () => {
+	const script = [
+		'const sample = "function fake() { return 1; }";',
+		'function real() {}'
+	].join('\n');
+
+	assert.deepEqual(scanState(script), [
+		{
+			type: 'VariableDeclaration',
+			kind: 'const',
+			name: 'sample',
+			initialValue: '"function fake() { return 1; }"',
+			isReactive: false
+		},
+		{
+			type: 'FunctionDeclaration',
+			name: 'real'
+		}
+	]);
+});
+
+test('a persist marker inside a string is not recognized as state', () => {
+	const script = [
+		'const sample = "let theme = persist(\'theme\', \'light\');";',
+		'let count = 0;'
+	].join('\n');
+
+	const declarations = scanState(script);
+	assert.equal(declarations.length, 2);
+	assert.equal(declarations[0].isPersistent, undefined);
+	assert.equal(declarations[1].isPersistent, undefined);
+});
+
+test('an author-defined persist binding shaped as text does not disable marker recognition', () => {
+	const script = [
+		'const docs = "function persist(key, value) { return value; }";',
+		"let theme = persist('theme', 'light');"
+	].join('\n');
+
+	const [docs, theme] = scanState(script);
+	assert.equal(docs.isPersistent, undefined);
+	assert.equal(theme.isPersistent, true);
+	assert.equal(theme.storageKey, 'theme');
+});
+
+test('initializer values containing semicolons inside strings keep their full value', () => {
+	// The plain-text scan stopped at the FIRST semicolon, truncating the
+	// initializer mid-string; the lexical walk finds the statement's true end.
+	const script = 'let greeting = "hello; world";';
+	const [declaration] = scanState(script);
+	assert.equal(declaration.initialValue, '"hello; world"');
+});
+
+test('a persist() default containing a semicolon inside its string parses', () => {
+	const script = "let theme = persist('theme', 'a; b');";
+	const [declaration] = scanState(script);
+	assert.equal(declaration.isPersistent, true);
+	assert.equal(declaration.storageKey, 'theme');
+	assert.equal(declaration.defaultValue, "'a; b'");
+	const span = script.slice(declaration.initialValueStart, declaration.initialValueEnd);
+	assert.equal(span, "persist('theme', 'a; b')");
+});
+
+test('for-header declarations keep their historical scan shape', () => {
+	// A for-loop's `let i = 0` sits in code context (inside the header's
+	// brackets) and has always been scanned; the lexical walk ends its
+	// initializer at the header's own semicolon, as the plain-text scan did.
+	const script = 'for (let i = 0; i < items.length; i += 1) { total += i; }';
+	const [declaration] = scanState(script);
+	assert.equal(declaration.name, 'i');
+	assert.equal(declaration.initialValue, '0');
+});
+
+test('a regex initializer containing a semicolon keeps its full value', () => {
+	const script = "const pattern = /a;b/;";
+	const [declaration] = scanState(script);
+	assert.equal(declaration.initialValue, '/a;b/');
+});

@@ -380,6 +380,17 @@ function validateRouteEntries(routeEntries) {
       throw error;
     }
 
+    // Handler copies land in `dist/server/` for external Node hosts, and the
+    // dev server refuses `/server/**` requests rather than ever serving those
+    // copies as static files — so a page routed here would be silently
+    // unreachable in development SSR. Fail the build with the page named,
+    // like the /api reservation.
+    if (routeEntry.routePath === '/server' || routeEntry.routePath.startsWith('/server/')) {
+      const error = new Error(`Route '${routeEntry.routePath}' is reserved for server handler output: ${routeEntry.filePath}`);
+      error.filePath = routeEntry.inputPath;
+      throw error;
+    }
+
     const existingEntry = routes.get(routeEntry.routePath);
     if (existingEntry) {
       const error = new Error(

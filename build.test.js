@@ -201,6 +201,26 @@ test('rejects runtime-reserved routes with the claiming component path', () => {
   );
 });
 
+test('rejects server-output-reserved routes with the claiming component path', () => {
+  // A page routed at /server/** would be silently unreachable in development
+  // SSR: the dev server refuses /server/** requests so handler copies in
+  // dist/server/ are never served as static files. The build must name the
+  // page instead of letting the route shadow into a 404.
+  assert.throws(
+    () => validateRouteEntries([
+      { inputPath: '/project/src/pages/Server.wizz', filePath: 'pages/Server.wizz', routePath: '/server' }
+    ]),
+    (error) => error.filePath === '/project/src/pages/Server.wizz'
+      && error.message === "Route '/server' is reserved for server handler output: pages/Server.wizz"
+  );
+  assert.throws(
+    () => validateRouteEntries([
+      { inputPath: '/project/src/pages/server/Data.wizz', filePath: 'pages/server/Data.wizz', routePath: '/server/data' }
+    ]),
+    /reserved for server handler output/
+  );
+});
+
 test('rejects colliding page routes before writing a route manifest', (t) => {
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
