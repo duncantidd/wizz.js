@@ -11,6 +11,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed — State Scanner String Awareness
+
+#### Fixed
+
+- The state scanner (`src/compiler/parser/stateScanner.js`) ran its declaration regexes over raw script text with no lexical awareness, so declaration-shaped text inside string literals, template literals, comments, or regex patterns was read as real reactive state. A component carrying a code sample as a string constant (`const sample = "let clicks = 0; ..."`) compiled with a phantom `clicks` state entry, and the generated module died with `ReferenceError: clicks is not defined` on first execution — on the server and in the browser alike. Function-declaration-shaped text was equally hallucinated. The scanner now filters every candidate match through a lexical-context check (`isInsideTextualSpan`) that tracks string, template, line-comment, block-comment, and regex modes; regex literals are now tracked as first-class modes in `lexicalModesBefore` (previously skip-ahead, so a regex containing quote- or comment-like text left phantom modes open and misjudged later persist markers as nested).
+- Initializers terminated at the *first* semicolon in the raw text, so a declaration whose value contained a semicolon inside a string (`let greeting = "hello; world"`) or a regex (`const pattern = /a;b/`) was truncated mid-value, and a `persist()` default like `persist('theme', 'a; b')` failed to parse its default. The scanner now walks forward lexically (`findInitializerEnd`) through strings, template literals (including `${ … }` nesting), comments, and bracket nesting to the true statement-terminating semicolon; for-header declarations keep their historical shape (the header's own semicolon ends the initializer). When no top-level terminator exists, the match falls back to the plain-text scan's truncated span so an unclosed `persist()` marker still reports its diagnostic instead of silently vanishing.
+
+#### Changed
+
+- Package and compiler version 1.13.0 → 1.13.1: parser-only fix, so the syntax and output contracts hold (`src/compiler/version.js`, `package.json`).
+
 ### Milestone 21 — Server API Routes
 
 #### Added
