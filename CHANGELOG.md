@@ -20,6 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 #### Changed
 
+- The `/server` namespace is now reserved against page names at build time, mirroring `/api`: handler copies land in `dist/server/` for external Node hosts, and the dev server refuses `/server/**` requests so those copies are never served as static files — which made a page named `src/pages/Server.wizz` compile cleanly yet answer only the SPA-fallback shell in development SSR, with no diagnostic anywhere. The build now fails with a located error naming the claiming page (`build.js`, `build.test.js`; documented in `README.md`).
 - Package and compiler version 1.13.0 → 1.13.1: parser-only fix, so the syntax and output contracts hold (`src/compiler/version.js`, `package.json`).
 
 ### Milestone 21 — Server API Routes

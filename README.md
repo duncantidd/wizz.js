@@ -303,7 +303,7 @@ src/pages/Admin/Users.wizz   -> /admin/users
 src/pages/Docs/index.wizz    -> /docs
 ```
 
-Route paths are lowercased. `App.wizz` and `pages/index.wizz` both claim `/`, so a project may contain only one of them. A build also rejects duplicate normalized paths and any page path beginning with `/runtime`, which is reserved for Wizz runtime files. Errors identify the conflicting component paths.
+Route paths are lowercased. `App.wizz` and `pages/index.wizz` both claim `/`, so a project may contain only one of them. A build also rejects duplicate normalized paths and any page path beginning with `/runtime` or `/server` — reserved for Wizz runtime files and for server handler output (a page routed there would be silently unreachable in development SSR). Errors identify the conflicting component paths.
 
 The router loads only the component matching `window.location.pathname`, destroys the previously mounted component before each replacement, and renders `Not found` for unmatched paths. Adding, renaming, nesting, or removing a page takes effect after the next `wizz build` or rebuild from `wizz dev`; a removed page is no longer present in the generated route manifest even if an older compiled module remains in `dist`.
 
@@ -429,7 +429,7 @@ export default async function handler(request) {
 
 The browser (or any client) calls the same-origin `/api/submit-form`; the key lives in a **gitignored `.env.server`** file at the project root (`KEY=VALUE` lines, `#` comments allowed — add it to your `.gitignore`), which the development server loads into `process.env` before the first request. Real environment variables win over file entries. The file is never copied into build output and never appears in any served artifact — the handler reads keys at request time, server-side.
 
-**Routes** mirror pages: `src/server/api/health.js` serves `/api/health`, `index.js` names the directory itself, nested directories nest the path, and everything lowercases. Files and directories starting with `_` are importable helpers, never routable. Duplicate routes fail the build naming both claimants, and the `/api` namespace is reserved — a page named `src/pages/Api.wizz` fails the build.
+**Routes** mirror pages: `src/server/api/health.js` serves `/api/health`, `index.js` names the directory itself, nested directories nest the path, and everything lowercases. Files and directories starting with `_` are importable helpers, never routable. Duplicate routes fail the build naming both claimants, and the `/api` and `/server` namespaces are reserved — a page named `src/pages/Api.wizz` or `src/pages/Server.wizz` fails the build.
 
 **The request context** is a frozen plain object, so handler code stays runtime-portable (no Node `req`/`res`):
 
