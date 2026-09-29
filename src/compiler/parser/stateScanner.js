@@ -25,8 +25,19 @@ function scanState(scriptContent) {
   const variableMatches = [];
   const functionMatches = [];
   let match;
-  while ((match = variableRegex.exec(scriptContent)) !== null) variableMatches.push(match);
-  while ((match = functionRegex.exec(scriptContent)) !== null) functionMatches.push(match);
+  while ((match = variableRegex.exec(scriptContent)) !== null) {
+    // The regexes run over raw text, so a declaration-shaped string inside a
+    // string literal, template literal, comment, or regex pattern would be
+    // read as real state — and the generators would then emit machinery that
+    // references a variable that only exists inside a quote, dying with a
+    // ReferenceError on first execution. Only code-context matches are state.
+    if (isInsideTextualSpan(scriptContent, match.index)) continue;
+    variableMatches.push(match);
+  }
+  while ((match = functionRegex.exec(scriptContent)) !== null) {
+    if (isInsideTextualSpan(scriptContent, match.index)) continue;
+    functionMatches.push(match);
+  }
 
   // The author's own `persist` binding outranks the compile-time marker: when
   // the script declares a function or a let/const of that name, every
@@ -38,20 +49,32 @@ function scanState(scriptContent) {
 
   // 1. Scan for Variables (State and Constants)
   for (match of variableMatches) {
-    // The raw initializer text ends immediately before the terminating ';'
-    // and starts right after the '=' (the regex consumed the whitespace), so
-    // its exact span in scriptContent is computable without re-searching —
-    // look-alike text in comments or strings elsewhere cannot be mistaken
-    // for the initializer. The generators splice persistent markers out by
-    // this span, so it is recorded only when one is present; declaration
-    // nodes for plain state stay exactly as they were.
+    // The match regex stops at the FIRST semicolon after '=', which for a
+    // value containing one inside a string (let x = "a; b";) truncates the
+    // initializer — and a persist marker whose default holds a semicolon
+    // would be rejected as unparseable. The true statement-terminating
+    // semicolon comes from a lexical walk instead. The initializer's START
+    // is still the regex's: it begins right after '=' (whose trailing
+    // whitespace the regex consumed), so its exact span in scriptContent is
+    // computable without re-searching. The generators splice persistent
+    // markers out by this span, so it is recorded only when one is present;
+    // declaration nodes for plain state stay exactly as they were.
     const initializerStart = match.index + match[0].length - match[3].length - 1;
+    let initializerEnd = findInitializerEnd(scriptContent, initializerStart);
+    if (initializerEnd === -1) {
+      // No statement-terminating semicolon exists in code context (the
+      // only semicolon sits inside unbalanced brackets, or the script ends
+      // mid-string). Fall back to the plain-text scan's truncated end so
+      // downstream validation still reports its diagnostic — an unclosed
+      // persist() marker must be rejected, not silently dropped.
+      initializerEnd = match.index + match[0].length - 1;
+    }
 
     const declaration = {
       type: 'VariableDeclaration',
       kind: match[1], // 'let' or 'const'
       name: match[2], // e.g., 'count'
-      initialValue: match[3].trim(), // e.g., '0' or '{ active: true }'
+      initialValue: scriptContent.slice(initializerStart, initializerEnd).trim(), // e.g., '0' or '{ active: true }'
       isReactive: match[1] === 'let' // Only 'let' variables trigger DOM updates
     };
 
@@ -80,7 +103,7 @@ function scanState(scriptContent) {
       declaration.storageKey = persist.key;
       declaration.defaultValue = persist.defaultValue;
       declaration.initialValueStart = initializerStart;
-      declaration.initialValueEnd = initializerStart + match[3].length;
+      declaration.initialValueEnd = initializerEnd;
     }
 
     declarations.push(declaration);
@@ -278,11 +301,26 @@ function walkPersistArguments(source) {
 }
 
 /**
+ * Decides whether an offset sits inside quoted text rather than code: a
+ * string literal, template literal, line or block comment, or regex literal.
+ * Look-alike declarations in those spans are not state.
+ *
+ * @param {string} source - The script text.
+ * @param {number} index - The offset to test.
+ * @returns {boolean} True when the offset is inside a textual span.
+ */
+function isInsideTextualSpan(source, index) {
+  return lexicalModesBefore(source, index).some(mode =>
+    mode === '\'' || mode === '"' || mode === '`' || mode === 'line' || mode === 'block' || mode === 'regex'
+  );
+}
+
+/**
  * Returns the offset of the first `persist(` call in code context — not
- * inside a string, template literal, or comment — or -1. Bracket modes are
- * irrelevant (a call inside a block is still a call); look-alike text inside
- * quotes or comments never matches. Walks the whole source, so callers pass
- * the exact span they care about.
+ * inside a string, template literal, comment, or regex literal — or -1.
+ * Bracket modes are irrelevant (a call inside a block is still a call);
+ * look-alike text inside quotes or comments never matches. Walks the whole
+ * source, so callers pass the exact span they care about.
  *
  * @param {string} source - The text to scan (a script, or one persist argument).
  * @returns {number} Offset of the call's first character, or -1.
@@ -291,9 +329,7 @@ function findPersistCallInCode(source) {
   const callRegex = /\bpersist\s*\(/g;
   let match;
   while ((match = callRegex.exec(source)) !== null) {
-    const modes = lexicalModesBefore(source, match.index);
-    const textual = modes.some(mode => mode === '\'' || mode === '"' || mode === '`' || mode === 'line' || mode === 'block');
-    if (!textual) return match.index;
+    if (!isInsideTextualSpan(source, match.index)) return match.index;
   }
   return -1;
 }
@@ -312,6 +348,9 @@ function findPersistCallInCode(source) {
  * expression (identifier character, closing bracket, quote, dot, or another
  * operator's tail). Without this, a regex literal containing quotes or
  * comment starters would corrupt the mode stack for everything after it.
+ * While a literal is open it is tracked as a 'regex' mode, so indexes inside
+ * the pattern are reported as textual and a declaration look-alike in a
+ * pattern is never state.
  * Division after prefix operators (`x++ /2/`) is the accepted residual
  * ambiguity — real lexers face the same choice, and a script that writes it
  * while also declaring a persist() marker is not a realistic component.
@@ -323,6 +362,7 @@ function findPersistCallInCode(source) {
 function lexicalModesBefore(source, index) {
   const modes = [];
   let previous = ''; // Last significant code-context character seen.
+  let regexInClass = false; // Inside `[...]` of the innermost open regex.
   let i = 0;
   while (i < index) {
     const character = source[i];
@@ -337,6 +377,20 @@ function lexicalModesBefore(source, index) {
         modes.pop();
         i += 2;
         continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (mode === 'regex') {
+      if (character === '\\') {
+        i += 2;
+        continue;
+      }
+      if (character === '[') regexInClass = true;
+      else if (character === ']') regexInClass = false;
+      else if (character === '/' && !regexInClass) {
+        modes.pop();
+        previous = 'x'; // A regex literal reads like an expression operand.
       }
       i += 1;
       continue;
@@ -386,23 +440,13 @@ function lexicalModesBefore(source, index) {
     if (character === '/') {
       const continuesExpression = /[A-Za-z0-9_$)\]}'"`./]/.test(previous);
       if (!continuesExpression) {
-        // A regex literal: skip to the closing slash, honouring backslash
-        // escapes and character classes (where `/` needs no escape).
+        // A regex literal: track it as an open mode instead of skipping past
+        // it, so an index landing inside the literal (a declaration-shaped
+        // look-alike in a pattern) is reported as textual. Character classes
+        // are tracked because `/` inside `[...]` needs no escape.
+        modes.push('regex');
+        regexInClass = false;
         i += 1;
-        let inClass = false;
-        while (i < index) {
-          const literalCharacter = source[i];
-          if (literalCharacter === '\\') {
-            i += 2;
-            continue;
-          }
-          if (literalCharacter === '[') inClass = true;
-          else if (literalCharacter === ']') inClass = false;
-          else if (literalCharacter === '/' && !inClass) break;
-          i += 1;
-        }
-        i += 1; // Past the closing slash (or past index).
-        previous = 'x'; // A regex literal reads like an expression operand.
         continue;
       }
       previous = '/';
@@ -430,6 +474,140 @@ function lexicalModesBefore(source, index) {
     i += 1;
   }
   return modes;
+}
+
+/**
+ * Finds a variable initializer's statement-terminating semicolon with a
+ * single forward lexical walk from its first character. String, template
+ * (interpolation braces included), comment, and regex-literal states are
+ * tracked, so a semicolon inside any of them is never the terminator; a
+ * semicolon inside brackets is likewise skipped (a `for (let i = 0; …)`
+ * header ends its first declaration at the header's own semicolon, exactly
+ * as the plain-text scan always did).
+ *
+ * The walk starts at the initializer, so its `/`-vs-division decision uses
+ * the same previous-significant-character heuristic as lexicalModesBefore —
+ * the caller passes a start whose preceding token is '=', so a leading `/`
+ * opens a regex literal.
+ *
+ * @param {string} source - The full script text.
+ * @param {number} start - Offset of the initializer's first character.
+ * @returns {number} Offset of the terminating semicolon, or -1 when the
+ *   script ends without one (parity with the plain-text scan, which also
+ *   required a semicolon).
+ */
+function findInitializerEnd(source, start) {
+  const modes = [];
+  let regexInClass = false;
+  let previous = '='; // An initializer follows '=', so a leading '/' is a regex.
+  let i = start;
+  while (i < source.length) {
+    const character = source[i];
+    const mode = modes.length > 0 ? modes[modes.length - 1] : null;
+    if (mode === 'line') {
+      if (character === '\n') modes.pop();
+      i += 1;
+      continue;
+    }
+    if (mode === 'block') {
+      if (character === '*' && source[i + 1] === '/') {
+        modes.pop();
+        i += 2;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (mode === '\'' || mode === '"') {
+      if (character === '\\') {
+        i += 2;
+        continue;
+      }
+      if (character === mode) {
+        modes.pop();
+        previous = mode; // A closed string reads like an expression operand.
+      }
+      i += 1;
+      continue;
+    }
+    if (mode === '`') {
+      if (character === '\\') {
+        i += 2;
+        continue;
+      }
+      if (character === '`') {
+        modes.pop();
+        previous = '`'; // A closed template reads like an expression operand.
+        i += 1;
+        continue;
+      }
+      if (character === '$' && source[i + 1] === '{') {
+        modes.push('brace');
+        i += 2;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (mode === 'regex') {
+      if (character === '\\') {
+        i += 2;
+        continue;
+      }
+      if (character === '[') regexInClass = true;
+      else if (character === ']') regexInClass = false;
+      else if (character === '/' && !regexInClass) {
+        modes.pop();
+        previous = 'x'; // A regex literal reads like an expression operand.
+      }
+      i += 1;
+      continue;
+    }
+    // Code context.
+    if (character === '/' && source[i + 1] === '/') {
+      modes.push('line');
+      i += 2;
+      continue;
+    }
+    if (character === '/' && source[i + 1] === '*') {
+      modes.push('block');
+      i += 2;
+      continue;
+    }
+    if (character === '/') {
+      const continuesExpression = /[A-Za-z0-9_$)\]}'"`./]/.test(previous);
+      if (!continuesExpression) {
+        modes.push('regex');
+        regexInClass = false;
+        i += 1;
+        continue;
+      }
+      previous = '/';
+      i += 1;
+      continue;
+    }
+    if (character === '\'' || character === '"' || character === '`') {
+      modes.push(character);
+      i += 1;
+      continue;
+    }
+    if (character === '(' || character === '[' || character === '{') {
+      modes.push(character === '(' ? 'round' : character === '[' ? 'square' : 'brace');
+      previous = character;
+      i += 1;
+      continue;
+    }
+    if (character === ')' || character === ']' || character === '}') {
+      modes.pop();
+      previous = character;
+      i += 1;
+      continue;
+    }
+    if (character === ';' && modes.length === 0) return i;
+    if (!/\s/.test(character)) previous = character;
+    i += 1;
+  }
+  return -1;
 }
 
 const ESCAPE_MAP = new Map([
