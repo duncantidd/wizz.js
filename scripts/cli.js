@@ -3,6 +3,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { main: buildProject, KNOWN_ADAPTERS } = require('../build');
 const { startDevelopmentServer } = require('./dev');
+const { startMcpServer } = require('./mcp');
 const { initProject } = require('./init');
 const { update: updateInstallation } = require('./update');
 const { installVscodeExtension } = require('./installVscodeExtension');
@@ -13,6 +14,8 @@ const USAGE = `Usage:
   wizz init [directory] [--force]   Scaffold a starter project
   wizz build [input-directory] [output-directory] [--json] [--adapter <name>]
   wizz dev [--port <n>]             Start the development server
+  wizz mcp [--root <dir>] [--allow-write]
+                                    Serve Wizz tooling to AI agents over MCP (stdio)
   wizz update                       Update the managed installation to the latest release
   wizz install-vscode-extension     Install the latest VS Code extension from a release
   wizz --version                    Print the compiler and contract versions`;
@@ -31,7 +34,7 @@ function parseCommand(argv) {
     return { command: 'version', argumentsList: [], json: false, force: false, adapter: null };
   }
 
-  if (command !== 'build' && command !== 'dev' && command !== 'init' &&
+  if (command !== 'build' && command !== 'dev' && command !== 'init' && command !== 'mcp' &&
       command !== 'update' && command !== 'install-vscode-extension') {
     throw new Error(USAGE);
   }
@@ -138,6 +141,46 @@ function parseCommand(argv) {
     return { command: 'dev', argumentsList: [], json: false, force: false, port, adapter: null };
   }
 
+  if (command === 'mcp') {
+    // `--root <dir>` / `--root=<dir>` overrides the project root (default:
+    // the working directory); `--allow-write` opts the session into
+    // component writes. Both are startup configuration — the agent can
+    // never change them over the wire — so they live here, not in the
+    // protocol or the tool layer.
+    let root = null;
+    let rootSeen = false;
+    let allowWrite = false;
+    let allowWriteSeen = false;
+    const remainingArgs = [];
+    for (let i = 0; i < positional.length; i++) {
+      const arg = positional[i];
+      if (arg === '--root' || arg.startsWith('--root=')) {
+        if (rootSeen) {
+          throw new Error('Mcp accepts at most one --root flag.\n\n' + USAGE);
+        }
+        const value = arg === '--root' ? positional[i + 1] : arg.slice('--root='.length);
+        if (value === undefined || value === '') {
+          throw new Error('Mcp --root requires a directory.\n\n' + USAGE);
+        }
+        rootSeen = true;
+        root = value;
+        if (arg === '--root') i++;
+      } else if (arg === '--allow-write') {
+        if (allowWriteSeen) {
+          throw new Error('Mcp accepts at most one --allow-write flag.\n\n' + USAGE);
+        }
+        allowWriteSeen = true;
+        allowWrite = true;
+      } else {
+        remainingArgs.push(arg);
+      }
+    }
+    if (remainingArgs.length > 0) {
+      throw new Error('Mcp does not accept arguments.\n\n' + USAGE);
+    }
+    return { command, argumentsList: [], json: false, force: false, port: null, adapter: null, root, allowWrite };
+  }
+
   if (command === 'init') {
     // `--force` relaxes only the non-empty-directory check; existing files
     // still refuse the scaffold, with or without it.
@@ -153,9 +196,10 @@ function parseCommand(argv) {
 }
 
 function runCli(argv, dependencies = {}) {
-  const { command, argumentsList, json, force, port, adapter } = parseCommand(argv);
+  const { command, argumentsList, json, force, port, adapter, root, allowWrite } = parseCommand(argv);
   const build = dependencies.build || buildProject;
   const startDev = dependencies.startDev || startDevelopmentServer;
+  const startMcp = dependencies.startMcp || startMcpServer;
   const init = dependencies.init || initProject;
   const updateCommand = dependencies.update || updateInstallation;
   const installExtension = dependencies.installVscodeExtension || installVscodeExtension;
@@ -214,6 +258,19 @@ function runCli(argv, dependencies = {}) {
       logger.log(`Installed the Wizz VS Code extension ${result.version} via code.`);
       return 0;
     });
+  }
+
+  if (command === 'mcp') {
+    // The root is fixed for the server's lifetime and resolved here so the
+    // protocol layer and the tools never see a relative path.
+    const projectRoot = path.resolve(root === null ? process.cwd() : root);
+    return startMcp({ projectRoot, allowWrite, logger }).then(
+      () => 0,
+      (error) => {
+        logger.error(error.message);
+        return 1;
+      }
+    );
   }
 
   const developmentServer = startDev({ projectDirectory: process.cwd(), port, logger });

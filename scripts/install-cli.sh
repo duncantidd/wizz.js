@@ -69,6 +69,8 @@ if [ "$install_mode" = "local" ]; then
   mkdir -p "$staging_directory/scripts"
   cp "$source_directory/scripts/cli.js" "$source_directory/scripts/dev.js" \
      "$source_directory/scripts/apiRoutes.js" \
+     "$source_directory/scripts/mcp.js" "$source_directory/scripts/mcpProtocol.js" \
+     "$source_directory/scripts/mcpTools.js" \
      "$source_directory/scripts/init.js" "$source_directory/scripts/initTemplates.js" \
      "$source_directory/scripts/releaseAssets.js" "$source_directory/scripts/update.js" \
      "$source_directory/scripts/installVscodeExtension.js" \

@@ -64,12 +64,19 @@
 // instead of throwing. None of this changes accepted component syntax or
 // generated output.
 //
+// compiler 1.15.0: `wizz mcp` exposes the project structure, language
+// contract, compiler diagnostics, build envelope, and dev workflow to AI
+// agents over the Model Context Protocol — an additive CLI/tooling surface
+// built on the existing compile()/compileServer() and build.js contracts,
+// with no compiler source, parser, or generated-module changes, so syntax
+// and output hold.
+//
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.14.0',
+  compiler: '1.15.0',
   syntax: '1.4.1',
   output: '1.8.2'
 });

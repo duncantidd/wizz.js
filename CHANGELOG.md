@@ -11,6 +11,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added — MCP Server (`wizz mcp`)
+
+#### Added
+
+- `wizz mcp [--root <dir>] [--allow-write]` serves Wizz tooling to AI agents over the Model Context Protocol. The wire protocol is hand-rolled to keep the zero-dependency rule intact: newline-delimited JSON-RPC 2.0 on stdio per the 2025-06-18 spec — the `initialize` handshake with version negotiation (a supported `2025-03-26`/`2025-06-18` request is echoed verbatim; anything else gets the latest supported version), `notifications/initialized`, `tools/list`, `tools/call`, `ping`, the `-32002` not-initialized gate, and the standard JSON-RPC error codes. stdout carries protocol messages only — logs go to stderr, `startMcpServer` redirects the global console methods to stderr for the server's lifetime, and a spawned smoke test proves every byte of stdout parses as a JSON-RPC message (`scripts/mcpProtocol.js`, `scripts/mcp.js`, `scripts/mcp.test.js`).
+- Six tools with snake_case names and JSON-Schema `inputSchema`s (`scripts/mcpTools.js`, `scripts/mcpTools.test.js`): `project_overview` surveys components, routes, API routes, document shell, build output, adapters, and the version triple; `component_diagnostics` compiles a project file, inline source (with an optional path label), or every component under the input directory into structured `WIZZ-P###`/`WIZZ-G###` records through the collect-mode contract without ever throwing; `build_project` runs the build in-process with the silent logger and returns the `wizz-build-diagnostics@1` envelope (adapter runs included); `language_contract` and `dev_workflow` carry static documentation of the real syntax and the real commands (inline strings that ship in the tarball by construction); `create_or_update_component` is the guarded write tool.
+- The write tool's security posture: the project root is fixed at startup (`--root <dir>`, default the working directory) and never agent-controlled; component writes require the explicit `--allow-write` startup opt-in and are refused otherwise; every path is refused if it escapes the root lexically and through the real filesystem, so symlink targets, symlinked ancestor directories, and dangling symlinks cannot smuggle a write out; targets must be `.wizz` files outside the managed trees (`dist/`, `node_modules/`, `.git/`, `release/`, `vscode-extension/`); sources cap at 256 KiB; and a hard compile gate refuses non-compiling source with the diagnostic records echoed and the file byte-identical — there is no bypass or elicitation channel; the gate plus the opt-in is the trust model.
+- Agent input is treated as untrusted: parsing strips `__proto__` keys (prototype pollution), handlers read only declared schema keys and never merge argument objects, and message lines cap at 2 MiB. A failed `tools/call` handler surfaces as an `isError: true` result (expected refusals via `ToolExecutionError`) or a `-32603` internal error with detail logged to stderr only; unknown methods answer `-32601` and notifications are never answered.
+- The three scripts join the shipped surface in every place that lists CLI scripts: `package.json` `files`, `packaging.test.js` `EXPECTED_FILES`, the managed installer's `--local` copy list, and the installer test's fake tarball.
+
+#### Changed
+
+- Package and compiler version 1.14.0 → 1.15.0 for the release cut carrying the MCP server: additive CLI/tooling surface only, so the syntax (1.4.1) and output (1.8.2) contracts hold (`src/compiler/version.js`, `package.json`). No compiler source, parser, or generated-module changes — the server builds entirely on the existing `compile()`/`compileServer()` collect-mode contract and the build envelope, with the dependency one-directional (tooling → compiler).
+- The `language_contract` test pins the literal version triple in its text, a deliberate drift-guard: a future version bump fails that test until the contract text is reviewed against the compiler (`scripts/mcpTools.test.js`).
+
+#### Docs
+
+- README gains an "MCP Server" section (client registration recipe, the tool table, and the security posture) and the CLI enumeration, `wizz --version` example, and CLI Stability list move with the new command; `ROADMAP.md` records the MCP item as completed milestone 22 and retires the bullet from Later Ecosystem Work; `STRUCTURE.md` entries the three new scripts; the wizz-docs site follows with its own MCP section in a separate docs commit.
+
 ### Added — Node Adapter Host (`wizz build --adapter node`)
 
 #### Added
