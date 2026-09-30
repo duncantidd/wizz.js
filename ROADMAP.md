@@ -360,6 +360,12 @@ Milestones 17, 18, and 19 were the runway for this work: milestone 17 gave compo
 
 - **ORM:** Keep it separate from the core renderer/compiler so application persistence choices do not define component semantics.
 
+## Framework Feedback
+
+Findings from actually building things with wizz — primarily the documentation site, which is itself a wizz project so every authoring friction it hits is evidence, not speculation. These are language-boundary candidates, not bugs: each entry records what was hit, the working pattern, and what implementing it would mean for the contracts. Nothing here is scheduled; an entry graduates to a milestone only when a real use keeps demanding it.
+
+1. **Conditional classes and the expression grammar (found 2026-09-30, building the docs site's tabbed Engineering page).** A tabbed panel needs the active tab's class to change on click, and the natural wizz authoring patterns both dead-end: the template expression grammar has no conditional operator (no ternary), so `class={active === 'parser' ? 'a' : 'b'}` cannot compile; and a reactive boolean attribute cannot un-set — `hidden={x}` updates through `setAttribute`, whose presence semantics keep the attribute applied whatever value it receives, so a falsy value never unhides. The working pattern (used on the Engineering page) is one reactive class-suffix string per element, rewritten in full-JS handlers and concatenated in the template: `class={'tabpanel' + pParser}` with `pParser = tab === 'parser' ? ' open' : ''` in the handler — correct but mechanical, and it multiplies one state variable per conditional element. Candidate work, if it graduates: a conditional operator in the template expression grammar (a `syntax` minor) and/or generator support for removing dynamic attributes when their value is falsy (an `output` minor) so `hidden={x}` and `class={...}` can express presence honestly. The boolean-attribute half is also worth a docs note even without either change: wizz's dynamic-attribute contract (property assignment for `value`/`checked`/`disabled`, attributes otherwise) is easy to misread when an author first meets a boolean attribute.
+
 ## Development Server Decision
 
 ~~Keep using Python's `python3 -m http.server` for the current single-example demo. It is dependency-free, adequate for ES module loading, and avoids building tooling before the build output structure exists.~~
