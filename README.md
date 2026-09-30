@@ -141,13 +141,37 @@ Print what you have installed with:
 wizz --version
 ```
 
-which prints the compiler and contract version triple, for example `wizz 1.14.0 (compiler 1.14.0, syntax 1.4.1, output 1.8.2)`. The public CLI accepts `init`, `build`, `dev`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, and `dev` accepts optional `--port <n>`.
+which prints the compiler and contract version triple, for example `wizz 1.15.0 (compiler 1.15.0, syntax 1.4.1, output 1.8.2)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, `dev` accepts optional `--port <n>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
 
 `wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
 
+### MCP Server
+
+`wizz mcp` exposes Wizz tooling to AI agents over the Model Context Protocol — a zero-dependency, hand-rolled JSON-RPC 2.0 session on stdio (newline-delimited messages per the 2025-06-18 spec). Register it with any MCP client as a stdio server:
+
+```json
+{
+  "command": "wizz",
+  "args": ["mcp", "--root", "/path/to/project", "--allow-write"]
+}
+```
+
+The server exposes six tools:
+
+| Tool | What it does |
+| --- | --- |
+| `project_overview` | Surveys the application: components and routes, server API routes, document shell, build output, adapters, and the version triple. |
+| `component_diagnostics` | Compiles a component — a project file, inline source, or every component — into structured `WIZZ-P###`/`WIZZ-G###` diagnostic records without writing anything. |
+| `build_project` | Runs the build in-process and returns the machine-readable `wizz-build-diagnostics@1` envelope. |
+| `language_contract` | The `.wizz` component language contract: file structure, reactive state and props, directives, imports, the version triple, and the diagnostic-code catalog. |
+| `dev_workflow` | The development and deployment workflow: `wizz dev`, `wizz build`, the node adapter deploy recipe, API routes, and `.env.server`. |
+| `create_or_update_component` | Creates or updates a `.wizz` component inside the project, compile-gated. |
+
+The security posture is deliberate. The project root is fixed at startup — `--root <dir>`, default the directory where the server was started — and an agent can never change it over the wire: every path a tool touches is refused if it escapes the root, lexically and through the real filesystem, so symlinks cannot smuggle a read or write out. Component writes require the explicit `--allow-write` startup opt-in; without it, the write tool refuses with guidance. With it, writes still pass a hard gate before anything touches the disk: targets must be `.wizz` files outside the managed trees (`dist/`, `node_modules/`, `.git/`, `release/`, `vscode-extension/`), sources cap at 256 KiB, and the proposed source is compiled first — a source that does not compile is refused with the diagnostic records echoed and the target left byte-identical. Agent input is treated as untrusted end to end: `__proto__` keys are stripped at parse time, message lines cap at 2 MiB, and stdout carries protocol messages only (logs go to stderr), so nothing an agent does can corrupt its own stream or reach outside the project.
+
 ### CLI Stability
 
-The installed `wizz` command is Wizz's public command-line interface. Its supported commands are `wizz init [directory] [--force]`, `wizz build`, `wizz build <input-directory> <output-directory>`, `wizz build --json`, `wizz build --adapter node`, `wizz dev`, `wizz update`, `wizz install-vscode-extension`, and `wizz --version`; their documented defaults, generated output paths, and non-zero failure behavior are stable within a CLI major version.
+The installed `wizz` command is Wizz's public command-line interface. Its supported commands are `wizz init [directory] [--force]`, `wizz build`, `wizz build <input-directory> <output-directory>`, `wizz build --json`, `wizz build --adapter node`, `wizz dev`, `wizz mcp [--root <dir>] [--allow-write]`, `wizz update`, `wizz install-vscode-extension`, and `wizz --version`; their documented defaults, generated output paths, and non-zero failure behavior are stable within a CLI major version.
 
 `build.js`, `scripts/cli.js`, and `scripts/dev.js` are implementation entry points used by the repository and may change as the CLI evolves. Use `wizz` for application automation and development workflows.
 
