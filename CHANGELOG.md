@@ -11,6 +11,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added — Node Adapter Host (`wizz build --adapter node`)
+
+#### Added
+
+- `wizz build --adapter node` (`--adapter <name>`, also `--adapter=<name>`, in any argument position alongside `--json`) generates a standalone SSR + API host at `dist/server.mjs` so a build deploys on an external Node host (VPS/EC2/Docker) without hand-copying the SSR recipe. The host is self-contained — it imports only Node builtins and the build's own artifacts (`dist/runtime/routes.js`, `dist/runtime/apiRoutes.js`, the `.server.js` modules) — preserving the "dist/ is self-contained" deployment contract (`build.js`, `build.test.js`).
+- The generated host mirrors the development server's serving protocol: traversal-guarded static file serving, exact-pathname route rendering (mirroring the client router) with the state script delivered as a sibling of the mount point and the head wrapped in `<!--wizz:head-start-->…<!--wizz:head-end-->`, `/api/**` handlers behind the same frozen request context and return shapes, 404 JSON for unmatched API paths (never the SPA shell), a 1 MB body cap (`413`), fixed-body 500s with detail only in the server log, and the document shell as the SPA fallback. `/server/**` is never served as a static file, so handler source and private `_` modules stay unreachable. Known divergences from dev, all deliberate: no module cache-busting (a production host is not rebuilt while running), no live-reload endpoint, and `.env.server` loads from the invocation CWD with real environment values never overridden.
+- `parseBuildArguments` validates the adapter name against a known-adapters list (`node` only today; the list is the extension surface for future platform adapters) — unknown, missing, empty, and repeated values fail with usage guidance naming the known adapters. `scripts/cli.js` strips and re-appends the flag for the build layer to re-parse (the established `--json` contract) and rejects a stray `--adapter` on every other command. The `wizz-build-diagnostics@1` envelope gains an additive top-level `adapter` field, present only when an adapter ran, so static-build consumers parse an unchanged envelope.
+
+#### Changed
+
+- Package and compiler version 1.13.1 → 1.14.0 for the release carrying the node adapter host: additive CLI/build surface only, so the syntax (1.4.1) and output (1.8.2) contracts hold (`src/compiler/version.js`, `package.json`).
+- No compiler source, parser, or generated-module changes: the adapter is build-layer emission, so the compiler, syntax, and output versions move only via the package lockstep pin (`packaging.test.js` pins `pkg.version` to `VERSIONS.compiler`).
+
+#### Docs
+
+- README gains a "Deploying with the node adapter" section (flag surface, generated-file contract, serving behavior, security posture) and the `wizz --version` example and CLI enumeration move with the version bump and flag; `ROADMAP.md` records the node adapter as a completed amendment to the milestone 21 external-host story with a Development Server Decision clarification; `STRUCTURE.md` extends the build-script prose; the wizz-docs GettingStarted deploy section now leads with the adapter command.
+
 ### Fixed — State Scanner String Awareness
 
 #### Fixed

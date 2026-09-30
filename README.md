@@ -112,7 +112,18 @@ Add `--json` (in any argument position) to print a machine-parsable diagnostics 
 }
 ```
 
-Every compiler diagnostic carries a stable code (`WIZZ-P###` for parse-stage failures, `WIZZ-G###` for generate-stage failures) that tooling can switch on without parsing prose; the envelope's `format` field is versioned, so fields may be added within format version 1 but existing fields keep their meaning until it changes.
+Every compiler diagnostic carries a stable code (`WIZZ-P###` for parse-stage failures, `WIZZ-G###` for generate-stage failures) that tooling can switch on without parsing prose; the envelope's `format` field is versioned, so fields may be added within format version 1 but existing fields keep their meaning until it changes. When an adapter runs, the envelope additionally carries `adapter: "node"` — the field is absent for static builds, so existing consumers parse an unchanged envelope.
+
+### Deploying with the node adapter
+
+`wizz build --adapter node` (in any argument position, `--adapter node` or `--adapter=node`) generates a standalone SSR + API host at `dist/server.mjs` — build-only, opt-in; a plain `wizz build` emits nothing extra, and `wizz dev` gains nothing (it implements the same protocol itself). The host is self-contained: it imports only Node builtins and the build's own artifacts, so the deployment contract stays "dist/ is self-contained". Deploy the `dist/` directory and run:
+
+```bash
+node server.mjs              # serves http://localhost:8080
+PORT=3000 node server.mjs    # or any port via PORT (0-65535, validated)
+```
+
+The host serves traversal-guarded static files from `dist/`, server-renders the routes listed in `dist/runtime/routes.js` (exact pathname match, mirroring the client router, with the state script delivered as a sibling of the mount point and the head wrapped in `<!--wizz:head-start-->…<!--wizz:head-end-->`), runs the API handlers listed in `dist/runtime/apiRoutes.js` at `/api/**` behind the same frozen request context and return shapes as `wizz dev`, answers unmatched API paths with 404 JSON (never the SPA shell), falls back to the document shell for every other extensionless path, and never serves `/server/**` as static files — handler source and private `_` modules are unreachable. Secrets load from a `.env.server` in the directory the host is started in (real environment values are never overridden); deployment platforms normally provide environment variables directly. This is still not an application server: no sessions, persistence, or middleware — production application hosting remains external to the framework. Platform-specific adapters (Vercel, Cloudflare Workers, Lambda) are not part of the framework; each would reshape the same platform-neutral `dist/` artifact for one host, and none ship today.
 
 Start the development server with:
 
@@ -128,13 +139,13 @@ Print what you have installed with:
 wizz --version
 ```
 
-which prints the compiler and contract version triple, for example `wizz 1.13.1 (compiler 1.13.1, syntax 1.4.1, output 1.8.2)`. The public CLI accepts `init`, `build`, `dev`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, and `dev` accepts optional `--port <n>`.
+which prints the compiler and contract version triple, for example `wizz 1.14.0 (compiler 1.14.0, syntax 1.4.1, output 1.8.2)`. The public CLI accepts `init`, `build`, `dev`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, and `dev` accepts optional `--port <n>`.
 
 `wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
 
 ### CLI Stability
 
-The installed `wizz` command is Wizz's public command-line interface. Its supported commands are `wizz init [directory] [--force]`, `wizz build`, `wizz build <input-directory> <output-directory>`, `wizz build --json`, `wizz dev`, `wizz update`, `wizz install-vscode-extension`, and `wizz --version`; their documented defaults, generated output paths, and non-zero failure behavior are stable within a CLI major version.
+The installed `wizz` command is Wizz's public command-line interface. Its supported commands are `wizz init [directory] [--force]`, `wizz build`, `wizz build <input-directory> <output-directory>`, `wizz build --json`, `wizz build --adapter node`, `wizz dev`, `wizz update`, `wizz install-vscode-extension`, and `wizz --version`; their documented defaults, generated output paths, and non-zero failure behavior are stable within a CLI major version.
 
 `build.js`, `scripts/cli.js`, and `scripts/dev.js` are implementation entry points used by the repository and may change as the CLI evolves. Use `wizz` for application automation and development workflows.
 
