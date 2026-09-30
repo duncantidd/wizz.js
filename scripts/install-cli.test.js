@@ -41,6 +41,10 @@ function createReleaseTarball(destination) {
   fs.copyFileSync(path.join(root, 'scripts', 'cli.js'), path.join(packageDirectory, 'scripts', 'cli.js'));
   fs.copyFileSync(path.join(root, 'scripts', 'dev.js'), path.join(packageDirectory, 'scripts', 'dev.js'));
   fs.copyFileSync(path.join(root, 'scripts', 'apiRoutes.js'), path.join(packageDirectory, 'scripts', 'apiRoutes.js'));
+  // Required by cli.js at top level: the MCP server and its two layers.
+  fs.copyFileSync(path.join(root, 'scripts', 'mcp.js'), path.join(packageDirectory, 'scripts', 'mcp.js'));
+  fs.copyFileSync(path.join(root, 'scripts', 'mcpProtocol.js'), path.join(packageDirectory, 'scripts', 'mcpProtocol.js'));
+  fs.copyFileSync(path.join(root, 'scripts', 'mcpTools.js'), path.join(packageDirectory, 'scripts', 'mcpTools.js'));
   fs.copyFileSync(path.join(root, 'scripts', 'init.js'), path.join(packageDirectory, 'scripts', 'init.js'));
   fs.copyFileSync(path.join(root, 'scripts', 'initTemplates.js'), path.join(packageDirectory, 'scripts', 'initTemplates.js'));
   // Required by cli.js at top level: the installed launcher test below

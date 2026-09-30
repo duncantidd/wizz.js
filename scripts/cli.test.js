@@ -471,3 +471,48 @@ test('e2e: init scaffolds, serves the version triple, refuses re-init, and build
   assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'App.js')), true);
   assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'pages', 'Home.js')), true);
 });
+
+test('parses the mcp command with its root and allow-write flags', () => {
+  assert.deepEqual(parseCommand(['mcp']), { command: 'mcp', argumentsList: [], json: false, force: false, port: null, adapter: null, root: null, allowWrite: false });
+  assert.deepEqual(parseCommand(['mcp', '--allow-write']), { command: 'mcp', argumentsList: [], json: false, force: false, port: null, adapter: null, root: null, allowWrite: true });
+  assert.deepEqual(parseCommand(['mcp', '--root', 'srv']), { command: 'mcp', argumentsList: [], json: false, force: false, port: null, adapter: null, root: 'srv', allowWrite: false });
+  assert.deepEqual(parseCommand(['mcp', '--root=srv', '--allow-write']), { command: 'mcp', argumentsList: [], json: false, force: false, port: null, adapter: null, root: 'srv', allowWrite: true });
+});
+
+test('mcp rejects duplicate, valueless, and unknown arguments', () => {
+  assert.throws(() => parseCommand(['mcp', '--root', 'a', '--root', 'b']), /at most one --root/);
+  assert.throws(() => parseCommand(['mcp', '--root=a', '--root', 'b']), /at most one --root/);
+  assert.throws(() => parseCommand(['mcp', '--root']), /--root requires a directory/);
+  assert.throws(() => parseCommand(['mcp', '--root=']), /--root requires a directory/);
+  assert.throws(() => parseCommand(['mcp', '--allow-write', '--allow-write']), /at most one --allow-write/);
+  assert.throws(() => parseCommand(['mcp', 'src']), /Mcp does not accept arguments/);
+  assert.throws(() => parseCommand(['mcp', '--port', '3000']), /Mcp does not accept arguments/);
+});
+
+test('runCli resolves the mcp project root and injects the startup configuration', async () => {
+  const calls = [];
+  const logger = { log() {}, error() {} };
+  const result = await runCli(['mcp', '--allow-write'], {
+    logger,
+    startMcp(options) {
+      calls.push(options);
+      return Promise.resolve();
+    }
+  });
+  assert.equal(result, 0);
+  assert.deepEqual(calls, [{ projectRoot: path.resolve(process.cwd()), allowWrite: true, logger }]);
+
+  const failures = [];
+  const failing = await runCli(['mcp', '--root', 'nowhere'], {
+    logger,
+    startMcp() {
+      return Promise.reject(new Error('Project root does not exist or is not a directory: nowhere'));
+    }
+  });
+  assert.equal(failing, 1);
+  assert.equal(failures.length, 0);
+});
+
+test('the usage line documents the mcp command', () => {
+  assert.match(USAGE, /wizz mcp \[--root <dir>\] \[--allow-write\]/);
+});
