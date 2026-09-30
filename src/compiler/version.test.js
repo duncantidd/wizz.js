@@ -76,9 +76,13 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // read as real reactive state, and initializers terminate at the true
   // statement semicolon rather than the first semicolon in the text.
   // Parsing only; no accepted component syntax or generated-module contract
-  // changed, so syntax and output hold.
+  // changed, so syntax and output hold. compiler 1.14.0: `wizz build
+  // --adapter node` generates a self-contained SSR + API host
+  // (dist/server.mjs) for external Node hosts — a build/CLI-layer addition
+  // with no compiler source, parser, or generated-module changes, so syntax
+  // and output hold.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.13.1',
+    compiler: '1.14.0',
     syntax: '1.4.1',
     output: '1.8.2'
   });
