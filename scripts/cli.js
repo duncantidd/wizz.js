@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 const os = require('node:os');
 const path = require('node:path');
-const { main: buildProject } = require('../build');
+const { main: buildProject, KNOWN_ADAPTERS } = require('../build');
 const { startDevelopmentServer } = require('./dev');
 const { initProject } = require('./init');
 const { update: updateInstallation } = require('./update');
@@ -11,7 +11,7 @@ const { VERSIONS } = require('../src/compiler');
 
 const USAGE = `Usage:
   wizz init [directory] [--force]   Scaffold a starter project
-  wizz build [input-directory] [output-directory] [--json]
+  wizz build [input-directory] [output-directory] [--json] [--adapter <name>]
   wizz dev [--port <n>]             Start the development server
   wizz update                       Update the managed installation to the latest release
   wizz install-vscode-extension     Install the latest VS Code extension from a release
@@ -28,7 +28,7 @@ function parseCommand(argv) {
     if (argumentsList.length !== 0) {
       throw new Error('Version does not accept arguments.\n\n' + USAGE);
     }
-    return { command: 'version', argumentsList: [], json: false, force: false };
+    return { command: 'version', argumentsList: [], json: false, force: false, adapter: null };
   }
 
   if (command !== 'build' && command !== 'dev' && command !== 'init' &&
@@ -43,7 +43,7 @@ function parseCommand(argv) {
     if (argumentsList.length !== 0) {
       throw new Error(`The ${command} command does not accept arguments.\n\n` + USAGE);
     }
-    return { command, argumentsList: [], json: false, force: false };
+    return { command, argumentsList: [], json: false, force: false, adapter: null };
   }
 
   // `--json` is a build flag, not a directory: it may appear in any position
@@ -58,8 +58,42 @@ function parseCommand(argv) {
     ? argumentsList.filter((argument) => argument !== '--json')
     : argumentsList;
 
-  if (command === 'build' && positional.length !== 0 && positional.length !== 2) {
-    throw new Error('Build accepts either no directories or both <input-directory> and <output-directory>.\n\n' + USAGE);
+  if (command === 'build') {
+    // `--adapter <name>` / `--adapter=<name>` is a build flag like `--json`:
+    // any position, stripped before the positional count check, and
+    // re-appended for the build layer to re-parse. The name is validated here
+    // so a typo fails at the CLI boundary with the known-adapter list.
+    let adapter = null;
+    const withoutAdapter = [];
+    for (let index = 0; index < positional.length; index++) {
+      const argument = positional[index];
+      if (argument === '--adapter' || argument.startsWith('--adapter=')) {
+        const value = argument === '--adapter' ? positional[index + 1] : argument.slice('--adapter='.length);
+        if (value === undefined || value === '' || !KNOWN_ADAPTERS.includes(value)) {
+          throw new Error(`Build --adapter requires a known adapter name (${KNOWN_ADAPTERS.join(', ')}).\n\n` + USAGE);
+        }
+        if (adapter !== null) {
+          throw new Error('Build accepts at most one --adapter flag.\n\n' + USAGE);
+        }
+        adapter = value;
+        if (argument === '--adapter') index++;
+        continue;
+      }
+      withoutAdapter.push(argument);
+    }
+    if (withoutAdapter.length !== 0 && withoutAdapter.length !== 2) {
+      throw new Error('Build accepts either no directories or both <input-directory> and <output-directory>.\n\n' + USAGE);
+    }
+    return { command, argumentsList: withoutAdapter, json, force: false, adapter };
+  }
+
+  if (command === 'init') {
+    // A stray --adapter here is a mistake, not a directory: rejected rather
+    // than silently reinterpreted (the same discipline as the strict checks
+    // below), since init's own target check would misreport it.
+    if (positional.some((argument) => argument === '--adapter' || argument.startsWith('--adapter='))) {
+      throw new Error('Init does not accept arguments.\n\n' + USAGE);
+    }
   }
 
   if (command === 'dev') {
@@ -101,7 +135,7 @@ function parseCommand(argv) {
     if (remainingArgs.length > 0) {
       throw new Error('Dev does not accept arguments.\n\n' + USAGE);
     }
-    return { command: 'dev', argumentsList: [], json: false, force: false, port };
+    return { command: 'dev', argumentsList: [], json: false, force: false, port, adapter: null };
   }
 
   if (command === 'init') {
@@ -112,14 +146,14 @@ function parseCommand(argv) {
     if (targets.length > 1) {
       throw new Error('Init accepts at most one [directory].\n\n' + USAGE);
     }
-    return { command: 'init', argumentsList: targets, json: false, force };
+    return { command: 'init', argumentsList: targets, json: false, force, adapter: null };
   }
 
   return { command, argumentsList: positional, json };
 }
 
 function runCli(argv, dependencies = {}) {
-  const { command, argumentsList, json, force, port } = parseCommand(argv);
+  const { command, argumentsList, json, force, port, adapter } = parseCommand(argv);
   const build = dependencies.build || buildProject;
   const startDev = dependencies.startDev || startDevelopmentServer;
   const init = dependencies.init || initProject;
@@ -134,7 +168,12 @@ function runCli(argv, dependencies = {}) {
 
   if (command === 'build') {
     const directories = argumentsList.length === 0 ? ['src', 'dist'] : argumentsList;
-    return build(json ? [...directories, '--json'] : directories, logger);
+    // The build layer re-parses its flags from argv, so both are re-appended
+    // here rather than threaded as options (the established contract).
+    const buildArguments = [...directories];
+    if (json) buildArguments.push('--json');
+    if (adapter) buildArguments.push('--adapter', adapter);
+    return build(buildArguments, logger);
   }
 
   if (command === 'init') {
