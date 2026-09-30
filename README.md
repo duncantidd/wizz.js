@@ -119,9 +119,11 @@ Every compiler diagnostic carries a stable code (`WIZZ-P###` for parse-stage fai
 `wizz build --adapter node` (in any argument position, `--adapter node` or `--adapter=node`) generates a standalone SSR + API host at `dist/server.mjs` — build-only, opt-in; a plain `wizz build` emits nothing extra, and `wizz dev` gains nothing (it implements the same protocol itself). The host is self-contained: it imports only Node builtins and the build's own artifacts, so the deployment contract stays "dist/ is self-contained". Deploy the `dist/` directory and run:
 
 ```bash
-node server.mjs              # serves http://localhost:8080
-PORT=3000 node server.mjs    # or any port via PORT (0-65535, validated)
+node dist/server.mjs             # from the project root; serves http://localhost:8080
+PORT=3000 node dist/server.mjs   # or any port via PORT (0-65535, validated)
 ```
+
+The host resolves `dist` from its own file location, so `node server.mjs` also works when run from inside the `dist/` directory.
 
 The host serves traversal-guarded static files from `dist/`, server-renders the routes listed in `dist/runtime/routes.js` (exact pathname match, mirroring the client router, with the state script delivered as a sibling of the mount point and the head wrapped in `<!--wizz:head-start-->…<!--wizz:head-end-->`), runs the API handlers listed in `dist/runtime/apiRoutes.js` at `/api/**` behind the same frozen request context and return shapes as `wizz dev`, answers unmatched API paths with 404 JSON (never the SPA shell), falls back to the document shell for every other extensionless path, and never serves `/server/**` as static files — handler source and private `_` modules are unreachable. Secrets load from a `.env.server` in the directory the host is started in (real environment values are never overridden); deployment platforms normally provide environment variables directly. This is still not an application server: no sessions, persistence, or middleware — production application hosting remains external to the framework. Platform-specific adapters (Vercel, Cloudflare Workers, Lambda) are not part of the framework; each would reshape the same platform-neutral `dist/` artifact for one host, and none ship today.
 
