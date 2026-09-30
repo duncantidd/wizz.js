@@ -227,7 +227,18 @@ function createProtocolSession({ serverInfo, instructions, toolRegistry, write, 
      * @returns {Promise<void>}
      */
     handleLine(line) {
-      queue = queue.then(() => processLine(line));
+      queue = queue.then(() => processLine(line)).catch((error) => {
+        // A rejection escaping processLine must never poison the queue:
+        // every later message would otherwise be swallowed forever. The
+        // last-resort response is attempted, but a failing transport (a
+        // broken pipe, say) must not throw out of this catch either.
+        log.error(`Internal error while handling an MCP message: ${error && error.stack ? error.stack : error}`);
+        try {
+          respondError(null, ERROR_CODES.INTERNAL, 'Internal error while handling a message.');
+        } catch {
+          // The transport itself is failing; logging is all that is left.
+        }
+      });
       return queue;
     },
     /**
@@ -237,7 +248,15 @@ function createProtocolSession({ serverInfo, instructions, toolRegistry, write, 
      * @returns {Promise<void>}
      */
     handleMessage(message) {
-      queue = queue.then(() => handleMessage(message));
+      queue = queue.then(() => handleMessage(message)).catch((error) => {
+        // Same queue-preservation contract as handleLine above.
+        log.error(`Internal error while handling an MCP message: ${error && error.stack ? error.stack : error}`);
+        try {
+          respondError(null, ERROR_CODES.INTERNAL, 'Internal error while handling a message.');
+        } catch {
+          // The transport itself is failing; logging is all that is left.
+        }
+      });
       return queue;
     },
     isOperational() {

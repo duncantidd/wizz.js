@@ -285,3 +285,31 @@ test('answers concurrent requests in completion order with each response carryin
   assert.equal(writes[1].result.content[0].text, 'slow done');
   assert.equal(writes[2].result.content[0].text, 'fast done');
 });
+test('keeps the queue alive when the transport fails mid-response', async () => {
+  let failures = 1;
+  const writes = [];
+  const errorLogs = [];
+  const session = createProtocolSession({
+    serverInfo: { name: 'wizz', title: 'Wizz', version: '9.9.9' },
+    instructions: 'Start with project_overview.',
+    toolRegistry: defaultRegistry(),
+    write: (message) => {
+      if (failures > 0) {
+        failures -= 1;
+        throw new Error('EPIPE: broken pipe');
+      }
+      writes.push(message);
+    },
+    logger: { error: (line) => errorLogs.push(line) }
+  });
+  await initializeSession(session);
+  // The initialize response fails to write, but the session must not latch
+  // into a broken state: the escaping failure surfaces as one last-resort
+  // id-null internal error (once the transport recovers), and later
+  // requests still get their responses.
+  await session.handleMessage({ jsonrpc: '2.0', id: 2, method: 'ping', params: {} });
+  await session.handleMessage({ jsonrpc: '2.0', id: 3, method: 'ping', params: {} });
+  assert.deepEqual(writes.map((response) => response.id), [null, 2, 3]);
+  assert.equal(writes[0].error.code, ERROR_CODES.INTERNAL);
+  assert.ok(errorLogs.some((line) => line.includes('broken pipe')));
+});
