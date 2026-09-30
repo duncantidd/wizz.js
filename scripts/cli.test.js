@@ -18,23 +18,27 @@ function writeFile(filePath, contents) {
 }
 
 test('parses build and dev commands', () => {
-  assert.deepEqual(parseCommand(['build']), { command: 'build', argumentsList: [], json: false });
+  assert.deepEqual(parseCommand(['build']), { command: 'build', argumentsList: [], json: false, force: false, adapter: null });
   assert.deepEqual(parseCommand(['build', 'components', 'output']), {
     command: 'build',
     argumentsList: ['components', 'output'],
-    json: false
+    json: false,
+    force: false,
+    adapter: null
   });
-  assert.deepEqual(parseCommand(['dev']), { command: 'dev', argumentsList: [], json: false, force: false, port: 3000 });
-  assert.deepEqual(parseCommand(['dev', '--port', '4321']), { command: 'dev', argumentsList: [], json: false, force: false, port: 4321 });
-  assert.deepEqual(parseCommand(['dev', '--port=4321']), { command: 'dev', argumentsList: [], json: false, force: false, port: 4321 });
+  assert.deepEqual(parseCommand(['dev']), { command: 'dev', argumentsList: [], json: false, force: false, port: 3000, adapter: null });
+  assert.deepEqual(parseCommand(['dev', '--port', '4321']), { command: 'dev', argumentsList: [], json: false, force: false, port: 4321, adapter: null });
+  assert.deepEqual(parseCommand(['dev', '--port=4321']), { command: 'dev', argumentsList: [], json: false, force: false, port: 4321, adapter: null });
 });
 
 test('strips the build --json flag from any argument position', () => {
-  assert.deepEqual(parseCommand(['build', '--json']), { command: 'build', argumentsList: [], json: true });
+  assert.deepEqual(parseCommand(['build', '--json']), { command: 'build', argumentsList: [], json: true, force: false, adapter: null });
   assert.deepEqual(parseCommand(['build', 'src', 'dist', '--json']), {
     command: 'build',
     argumentsList: ['src', 'dist'],
-    json: true
+    json: true,
+    force: false,
+    adapter: null
   });
   // A build unknown-flag stays positional and fails the directory count.
   assert.throws(() => parseCommand(['build', '--json', 'src']), /both <input-directory> and <output-directory>/);
@@ -54,14 +58,14 @@ test('rejects unknown commands and incomplete command arguments', () => {
 });
 
 test('parses the init command with its directory and --force flag', () => {
-  assert.deepEqual(parseCommand(['init']), { command: 'init', argumentsList: [], json: false, force: false });
-  assert.deepEqual(parseCommand(['init', 'my-app']), { command: 'init', argumentsList: ['my-app'], json: false, force: false });
-  assert.deepEqual(parseCommand(['init', 'my-app', '--force']), { command: 'init', argumentsList: ['my-app'], json: false, force: true });
-  assert.deepEqual(parseCommand(['init', '--force', 'my-app']), { command: 'init', argumentsList: ['my-app'], json: false, force: true });
+  assert.deepEqual(parseCommand(['init']), { command: 'init', argumentsList: [], json: false, force: false, adapter: null });
+  assert.deepEqual(parseCommand(['init', 'my-app']), { command: 'init', argumentsList: ['my-app'], json: false, force: false, adapter: null });
+  assert.deepEqual(parseCommand(['init', 'my-app', '--force']), { command: 'init', argumentsList: ['my-app'], json: false, force: true, adapter: null });
+  assert.deepEqual(parseCommand(['init', '--force', 'my-app']), { command: 'init', argumentsList: ['my-app'], json: false, force: true, adapter: null });
 });
 
 test('parses the update command and rejects any arguments', () => {
-  assert.deepEqual(parseCommand(['update']), { command: 'update', argumentsList: [], json: false, force: false });
+  assert.deepEqual(parseCommand(['update']), { command: 'update', argumentsList: [], json: false, force: false, adapter: null });
   assert.throws(() => parseCommand(['update', '--force']), /The update command does not accept arguments/);
   // --json is a build flag: here it is a mistake, not a directory.
   assert.throws(() => parseCommand(['update', '--json']), /The update command does not accept arguments/);
@@ -73,7 +77,8 @@ test('parses the install-vscode-extension command and rejects any arguments', ()
     command: 'install-vscode-extension',
     argumentsList: [],
     json: false,
-    force: false
+    force: false,
+    adapter: null
   });
   assert.throws(() => parseCommand(['install-vscode-extension', 'x']), /The install-vscode-extension command does not accept arguments/);
   assert.match(USAGE, /wizz install-vscode-extension/);
@@ -109,6 +114,53 @@ test('passes explicit build directories through unchanged', () => {
   assert.deepEqual(calls, [['components', 'public']]);
 });
 
+test('parses the build --adapter flag from any argument position', () => {
+  assert.deepEqual(parseCommand(['build', '--adapter', 'node']), {
+    command: 'build',
+    argumentsList: [],
+    json: false,
+    force: false,
+    adapter: 'node'
+  });
+  assert.deepEqual(parseCommand(['build', '--adapter=node', 'components', 'output']), {
+    command: 'build',
+    argumentsList: ['components', 'output'],
+    json: false,
+    force: false,
+    adapter: 'node'
+  });
+  assert.deepEqual(parseCommand(['build', 'components', '--adapter', 'node', 'output']), {
+    command: 'build',
+    argumentsList: ['components', 'output'],
+    json: false,
+    force: false,
+    adapter: 'node'
+  });
+});
+
+test('rejects unknown, missing, and repeated build adapter names at the CLI boundary', () => {
+  assert.throws(() => parseCommand(['build', '--adapter', 'vercel']), /known adapter name \(node\)/);
+  assert.throws(() => parseCommand(['build', '--adapter']), /known adapter name \(node\)/);
+  assert.throws(() => parseCommand(['build', '--adapter=']), /known adapter name \(node\)/);
+  assert.throws(() => parseCommand(['build', '--adapter', 'node', '--adapter=node']), /at most one --adapter/);
+  // A stray --adapter on another command is a mistake, not a directory.
+  assert.throws(() => parseCommand(['init', '--adapter', 'node']), /Init does not accept arguments/);
+  assert.throws(() => parseCommand(['init', '--adapter=node']), /Init does not accept arguments/);
+  assert.throws(() => parseCommand(['dev', '--adapter', 'node']), /Dev does not accept arguments/);
+  assert.throws(() => parseCommand(['update', '--adapter', 'node']), /The update command does not accept arguments/);
+  assert.match(USAGE, /--adapter <name>/);
+});
+
+test('re-appends the adapter flag for the build layer to re-parse', () => {
+  const calls = [];
+
+  assert.equal(runCli(['build', '--adapter', 'node'], { build(argv) { calls.push(argv); return 0; } }), 0);
+  assert.deepEqual(calls, [['src', 'dist', '--adapter', 'node']]);
+
+  assert.equal(runCli(['build', 'components', 'public', '--adapter=node', '--json'], { build(argv) { calls.push(argv); return 0; } }), 0);
+  assert.deepEqual(calls[1], ['components', 'public', '--json', '--adapter', 'node']);
+});
+
 test('starts the existing development server through the dev command', async () => {
   const calls = [];
   const logger = { log() {}, error() {} };
@@ -133,8 +185,8 @@ test('dev rejects a repeated --port flag instead of letting the last one win', (
   assert.throws(() => parseCommand(['dev', '--port=3000', '--port', '4321']), /at most one --port/);
   assert.throws(() => parseCommand(['dev', '--port', '3000', '--port=4321']), /at most one --port/);
   // A single flag in each spelling still parses.
-  assert.deepEqual(parseCommand(['dev', '--port', '4321']), { command: 'dev', argumentsList: [], json: false, force: false, port: 4321 });
-  assert.deepEqual(parseCommand(['dev', '--port=0']), { command: 'dev', argumentsList: [], json: false, force: false, port: 0 });
+  assert.deepEqual(parseCommand(['dev', '--port', '4321']), { command: 'dev', argumentsList: [], json: false, force: false, port: 4321, adapter: null });
+  assert.deepEqual(parseCommand(['dev', '--port=0']), { command: 'dev', argumentsList: [], json: false, force: false, port: 0, adapter: null });
 });
 
 test('a failed dev listen releases the server handles and exits with code 1', async () => {
