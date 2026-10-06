@@ -3,13 +3,16 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const test = require('node:test');
 const {
   DEFAULT_REPOSITORY,
   TARBALL_ASSET_PATTERN,
   VSIX_ASSET_PATTERN,
+  MAX_REDIRECTS,
   resolveLatestRelease,
-  downloadToFile
+  downloadToFile,
+  verifyFileDigest
 } = require('./releaseAssets');
 
 // A local HTTP server stands in for the GitHub API so every path — success,
@@ -29,16 +32,26 @@ function respondJson(response, status, payload) {
   response.end(typeof payload === 'string' ? payload : JSON.stringify(payload));
 }
 
-function releasePayload({ serverUrl, tarballName = 'wizz-2.0.0.tgz', vsixName = 'wizz-vscode-0.1.0.vsix', tarballUrl, vsixUrl } = {}) {
+function sha256Of(bytes) {
+  return `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
+}
+
+function releasePayload({ serverUrl, tarballName = 'wizz-2.0.0.tgz', vsixName = 'wizz-vscode-0.1.0.vsix', tarballUrl, vsixUrl, tarballDigest, vsixDigest } = {}) {
   const assets = [{
     name: tarballName || 'wizz-2.0.0.tgz',
     browser_download_url: tarballUrl || `https://objects.example/${tarballName || 'wizz-2.0.0.tgz'}`
   }];
+  if (tarballDigest !== undefined) {
+    assets[0].digest = tarballDigest;
+  }
   if (vsixName !== null) {
     assets.push({
       name: vsixName || 'wizz-vscode-0.1.0.vsix',
       browser_download_url: vsixUrl || `https://objects.example/${vsixName || 'wizz-vscode-0.1.0.vsix'}`
     });
+    if (vsixDigest !== undefined) {
+      assets[1].digest = vsixDigest;
+    }
   }
   return { tag_name: 'v2.0.0', html_url: 'https://github.com/o/r/releases/tag/v2.0.0', assets };
 }
@@ -218,6 +231,178 @@ test('downloadToFile reports an unreachable host through the download error', as
   await assert.rejects(
     downloadToFile('http://127.0.0.1:1/wizz-2.0.0.tgz', destination),
     /Could not download wizz-2\.0\.0\.tgz/
+  );
+});
+
+test('resolveLatestRelease surfaces the sha256 digests the release publishes', async (t) => {
+  const bytes = Buffer.from('tarball-bytes');
+  const vsixBytes = Buffer.from('vsix-bytes');
+  const { server, serverUrl } = await startServer((request, response) => {
+    respondJson(response, 200, releasePayload({ tarballDigest: sha256Of(bytes), vsixDigest: sha256Of(vsixBytes) }));
+  });
+  t.after(() => server.close());
+
+  const release = await resolveLatestRelease({ repository: 'o/r', apiBase: serverUrl });
+  assert.equal(release.tarballDigest, sha256Of(bytes));
+  assert.equal(release.vsixDigest, sha256Of(vsixBytes));
+});
+
+test('resolveLatestRelease tolerates a release with no digest field (callers fail closed)', async (t) => {
+  const { server, serverUrl } = await startServer((request, response) => {
+    respondJson(response, 200, releasePayload({}));
+  });
+  t.after(() => server.close());
+
+  const release = await resolveLatestRelease({ repository: 'o/r', apiBase: serverUrl });
+  assert.equal(release.tarballDigest, null);
+  assert.equal(release.vsixDigest, null);
+});
+
+test('resolveLatestRelease refuses a digest that is not GitHub published shape', async (t) => {
+  for (const bogus of ['md5:abc', 'sha256:not-hex', 'sha256:' + 'g'.repeat(64), 'sha256:' + 'a'.repeat(63), 42]) {
+    const { server, serverUrl } = await startServer((request, response) => {
+      respondJson(response, 200, releasePayload({ tarballDigest: bogus }));
+    });
+    t.after(() => server.close());
+
+    await assert.rejects(
+      resolveLatestRelease({ repository: 'o/r', apiBase: serverUrl }),
+      /unsupported asset digest/
+    );
+  }
+});
+
+test('verifyFileDigest accepts the matching file and refuses tampered bytes', async (t) => {
+  const directory = createSandboxDirectory(t);
+  const bytes = Buffer.from('wizz-release-tarball-bytes-0123456789');
+  const intact = path.join(directory, 'intact.tgz');
+  const tampered = path.join(directory, 'tampered.tgz');
+  fs.writeFileSync(intact, bytes);
+  fs.writeFileSync(tampered, Buffer.concat([bytes, Buffer.from(' and then some')]));
+
+  await verifyFileDigest(intact, sha256Of(bytes));
+  await assert.rejects(
+    verifyFileDigest(tampered, sha256Of(bytes)),
+    /integrity check for tampered\.tgz failed/
+  );
+});
+
+test('verifyFileDigest refuses an unsupported digest before reading the file', async (t) => {
+  const directory = createSandboxDirectory(t);
+  const file = path.join(directory, 'wizz.tgz');
+  fs.writeFileSync(file, 'anything');
+
+  await assert.rejects(verifyFileDigest(file, ''), /unsupported digest/);
+  await assert.rejects(verifyFileDigest(file, 'md5:deadbeef'), /unsupported digest/);
+  await assert.rejects(verifyFileDigest(file, 'sha256:short'), /unsupported digest/);
+});
+
+test('verifyFileDigest streams a large file without loading it whole into memory', async (t) => {
+  const directory = createSandboxDirectory(t);
+  // A few MB of pseudo-random bytes: small enough to build fast, large
+  // enough to prove chunked streaming hashes the whole file.
+  const bytes = crypto.randomBytes(4 * 1024 * 1024);
+  const file = path.join(directory, 'big.tgz');
+  fs.writeFileSync(file, bytes);
+
+  await verifyFileDigest(file, sha256Of(bytes));
+  const flipped = Buffer.from(bytes);
+  flipped[flipped.length - 1] ^= 0xff;
+  fs.writeFileSync(file, flipped);
+  await assert.rejects(verifyFileDigest(file, sha256Of(bytes)), /integrity check/);
+});
+
+test('downloadToFile follows a redirect chain on the allowed hosts', async (t) => {
+  const bytes = Buffer.from('wizz-redirected-tarball-bytes');
+  const { server, serverUrl } = await startServer((request, response) => {
+    if (request.url === '/download/wizz-2.0.0.tgz') {
+      response.writeHead(302, { location: '/objects/wizz-2.0.0.tgz' });
+      response.end();
+      return;
+    }
+    if (request.url === '/objects/wizz-2.0.0.tgz') {
+      // A second hop with a relative location resolves against the current URL.
+      response.writeHead(302, { location: 'final/wizz-2.0.0.tgz' });
+      response.end();
+      return;
+    }
+    response.end(bytes);
+  });
+  t.after(() => server.close());
+  const destination = path.join(createSandboxDirectory(t), 'wizz-2.0.0.tgz');
+
+  const result = await downloadToFile(`${serverUrl}/download/wizz-2.0.0.tgz`, destination);
+  assert.equal(result.bytes, bytes.length);
+  assert.ok(fs.readFileSync(destination).equals(bytes));
+});
+
+test('downloadToFile refuses a redirect that downgrades to http on a foreign host', async (t) => {
+  const { server, serverUrl } = await startServer((request, response) => {
+    // localhost is still loopback, so curl would happily fetch it — the
+    // refusal must come from the host check, not from DNS.
+    response.writeHead(302, { location: `http://localhost:${server.address().port}/evil.tgz` });
+    response.end();
+  });
+  t.after(() => server.close());
+  const destination = path.join(createSandboxDirectory(t), 'wizz-2.0.0.tgz');
+
+  await assert.rejects(
+    downloadToFile(`${serverUrl}/download/wizz-2.0.0.tgz`, destination),
+    /Refusing to follow a redirect to .*: only https:\/\/ URLs are allowed/
+  );
+  assert.equal(fs.existsSync(destination), false);
+});
+
+test('downloadToFile caps the redirect chain', async (t) => {
+  let hops = 0;
+  const { server, serverUrl } = await startServer((request, response) => {
+    hops += 1;
+    response.writeHead(302, { location: `/hop${hops}` });
+    response.end();
+  });
+  t.after(() => server.close());
+  const destination = path.join(createSandboxDirectory(t), 'wizz-2.0.0.tgz');
+
+  await assert.rejects(
+    downloadToFile(`${serverUrl}/download/wizz-2.0.0.tgz`, destination),
+    new RegExp(`more than ${MAX_REDIRECTS} redirects`)
+  );
+  // Exactly MAX_REDIRECTS + 1 requests were made before the refusal.
+  assert.equal(hops, MAX_REDIRECTS + 1);
+});
+
+test('downloadToFile refuses a redirect with no location header', async (t) => {
+  const { server, serverUrl } = await startServer((request, response) => {
+    response.writeHead(302);
+    response.end();
+  });
+  t.after(() => server.close());
+  const destination = path.join(createSandboxDirectory(t), 'wizz-2.0.0.tgz');
+
+  await assert.rejects(
+    downloadToFile(`${serverUrl}/download/wizz-2.0.0.tgz`, destination),
+    /redirected without a location header/
+  );
+});
+
+test('downloadToFile keeps one total-time budget across the redirect chain', async (t) => {
+  // The budget must cover the whole chain, not restart per hop: a fake that
+  // always answers "redirect" with a small delay burns the short budget on
+  // an early hop, and the next hop must find it exhausted (rather than get
+  // a fresh allowance). The per-hop failure would instead surface as the
+  // redirect-cap error, so the message distinguishes the two.
+  const destination = path.join(createSandboxDirectory(t), 'wizz-2.0.0.tgz');
+  const slowFake = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return { status: 302, headers: new Map([['location', '/next']]), body: null };
+  };
+
+  await assert.rejects(
+    downloadToFile('https://objects.example/wizz-2.0.0.tgz', destination, {
+      fetchImpl: slowFake,
+      timeoutMs: 10
+    }),
+    /time budget/
   );
 });
 

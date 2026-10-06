@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const test = require('node:test');
 const { compareVersions, readCompilerVersion, update } = require('./update');
@@ -50,8 +51,10 @@ function createReleaseTarball(workspace, version, files = standardPackageFiles(v
 
 // Serves the latest-release JSON (with download links pointing at itself)
 // plus the given asset bytes, recording every request path so tests can
-// assert exactly which endpoints were touched.
-async function startReleaseServer(assetsByName, { repositoryPath = '/repos/o/r/releases/latest' } = {}) {
+// assert exactly which endpoints were touched. Each asset publishes its
+// sha256 digest like GitHub does; overrideDigestFor swaps in a wrong digest
+// to exercise the integrity gate.
+async function startReleaseServer(assetsByName, { repositoryPath = '/repos/o/r/releases/latest', overrideDigestFor = null } = {}) {
   const requests = [];
   const server = http.createServer((request, response) => {
     requests.push(request.url);
@@ -59,10 +62,21 @@ async function startReleaseServer(assetsByName, { repositoryPath = '/repos/o/r/r
       const release = {
         tag_name: `v${TARBALL_ASSET_PATTERN.exec(Object.keys(assetsByName)[0])[1]}`,
         html_url: 'https://github.com/o/r/releases/tag/latest',
-        assets: Object.keys(assetsByName).map((name) => ({
-          name,
-          browser_download_url: `http://127.0.0.1:${server.address().port}/download/${name}`
-        }))
+        assets: Object.keys(assetsByName).map((name) => {
+          const asset = {
+            name,
+            browser_download_url: `http://127.0.0.1:${server.address().port}/download/${name}`,
+            digest: `sha256:${crypto.createHash('sha256').update(assetsByName[name]).digest('hex')}`
+          };
+          if (overrideDigestFor === name) {
+            // A digest that matches no possible content: the integrity gate
+            // must refuse the download before tar ever runs.
+            asset.digest = `sha256:${'0'.repeat(64)}`;
+          } else if (overrideDigestFor === `${name}:absent`) {
+            delete asset.digest;
+          }
+          return asset;
+        })
       };
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify(release));
@@ -180,6 +194,51 @@ test('update reports a corrupt tarball and leaves the old installation intact', 
     /could not be extracted/
   );
   assert.equal(readCompilerVersion(dataDirectory), '1.9.0');
+  assertNoUpdateLeftovers(workspace);
+});
+
+test('update refuses a tarball whose bytes do not match the published digest', async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-update-test-'));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const dataDirectory = createFakeInstall(workspace, '1.9.0');
+  // The tarball itself is a perfectly good release; the API publishes a
+  // digest that matches different bytes, as a tampered download would.
+  const tarballPath = createReleaseTarball(workspace, '2.0.0');
+  const { server, serverUrl } = await startReleaseServer(
+    { 'wizz-2.0.0.tgz': fs.readFileSync(tarballPath) },
+    { overrideDigestFor: 'wizz-2.0.0.tgz' }
+  );
+  t.after(() => server.close());
+
+  await assert.rejects(
+    update({ dataDirectory, repository: 'o/r', apiBase: serverUrl }),
+    /integrity check for wizz-2\.0\.0\.tgz failed/
+  );
+  // The gate runs before extraction: the old installation is untouched.
+  assert.equal(readCompilerVersion(dataDirectory), '1.9.0');
+  assert.equal(fs.existsSync(path.join(dataDirectory, 'marker-old.txt')), true);
+  assertNoUpdateLeftovers(workspace);
+});
+
+test('update refuses a release that publishes no digest for the tarball', async (t) => {
+  const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-update-test-'));
+  t.after(() => fs.rmSync(workspace, { recursive: true, force: true }));
+  const dataDirectory = createFakeInstall(workspace, '1.9.0');
+  const tarballPath = createReleaseTarball(workspace, '2.0.0');
+  const { server, serverUrl, requests } = await startReleaseServer(
+    { 'wizz-2.0.0.tgz': fs.readFileSync(tarballPath) },
+    { overrideDigestFor: 'wizz-2.0.0.tgz:absent' }
+  );
+  t.after(() => server.close());
+
+  await assert.rejects(
+    update({ dataDirectory, repository: 'o/r', apiBase: serverUrl }),
+    /no sha256 digest for the tarball; refusing to extract unverified code/
+  );
+  assert.equal(readCompilerVersion(dataDirectory), '1.9.0');
+  // The download did happen (the digest is known only after resolution), but
+  // nothing was extracted and the staging directory was cleaned up.
+  assert.equal(requests.length, 2);
   assertNoUpdateLeftovers(workspace);
 });
 

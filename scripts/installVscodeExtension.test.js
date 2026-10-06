@@ -3,13 +3,21 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 const { installVscodeExtension } = require('./installVscodeExtension');
 
+function sha256Of(bytes) {
+  return `sha256:${crypto.createHash('sha256').update(bytes).digest('hex')}`;
+}
+
 // The fake release server carries the extension asset (and optionally the
 // framework tarball, which the extension flow ignores) and counts requests.
-async function startReleaseServer({ withVsix = true, vsixBytes = Buffer.from('vsix-bytes'), withTarball = true } = {}) {
+// The vsix publishes its real sha256 digest unless vsixDigest is given
+// ('absent' drops the field, any other string replaces it) so the integrity
+// gate can be exercised.
+async function startReleaseServer({ withVsix = true, vsixBytes = Buffer.from('vsix-bytes'), withTarball = true, vsixDigest = undefined } = {}) {
   const requests = [];
   const server = http.createServer((request, response) => {
     requests.push(request.url);
@@ -19,7 +27,15 @@ async function startReleaseServer({ withVsix = true, vsixBytes = Buffer.from('vs
         assets.push({ name: 'wizz-2.0.0.tgz', browser_download_url: `http://127.0.0.1:${server.address().port}/download/wizz-2.0.0.tgz` });
       }
       if (withVsix) {
-        assets.push({ name: 'wizz-vscode-0.1.0.vsix', browser_download_url: `http://127.0.0.1:${server.address().port}/download/wizz-vscode-0.1.0.vsix` });
+        const digest = vsixDigest === 'absent' ? null : (vsixDigest === undefined ? sha256Of(vsixBytes) : vsixDigest);
+        const asset = {
+          name: 'wizz-vscode-0.1.0.vsix',
+          browser_download_url: `http://127.0.0.1:${server.address().port}/download/wizz-vscode-0.1.0.vsix`
+        };
+        if (digest !== null) {
+          asset.digest = digest;
+        }
+        assets.push(asset);
       }
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ tag_name: 'v2.0.0', html_url: 'https://github.com/o/r/releases/tag/v2.0.0', assets }));
@@ -199,6 +215,47 @@ test('a release without the extension asset is refused before downloading', asyn
   );
   // Only the API call happened; no asset download was attempted.
   assert.equal(requests.length, 1);
+});
+
+test('a vsix whose bytes do not match the published digest is refused', async (t) => {
+  const { server, serverUrl } = await startReleaseServer({ vsixDigest: sha256Of(Buffer.from('different-bytes')) });
+  t.after(() => server.close());
+
+  const tempDirectories = [];
+  const tempDirectoryFactory = () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-vscode-test-'));
+    tempDirectories.push(directory);
+    return directory;
+  };
+
+  await assert.rejects(
+    installVscodeExtension({
+      repository: 'o/r',
+      apiBase: serverUrl,
+      // The gate must fire before `code --install-extension` would run.
+      spawnImpl: (file, args) => {
+        assert.equal(args.includes('--install-extension'), false, 'no install attempt may follow a failed integrity check');
+        return { status: 0 };
+      },
+      tempDirectoryFactory
+    }),
+    /integrity check for wizz-vscode-0\.1\.0\.vsix failed/
+  );
+  assert.deepEqual(tempDirectories.filter((directory) => fs.existsSync(directory)), []);
+});
+
+test('a release with no digest for the vsix is refused before install', async (t) => {
+  const { server, serverUrl } = await startReleaseServer({ vsixDigest: 'absent' });
+  t.after(() => server.close());
+
+  await assert.rejects(
+    installVscodeExtension({
+      repository: 'o/r',
+      apiBase: serverUrl,
+      spawnImpl: () => ({ status: 0 })
+    }),
+    /no sha256 digest for the extension; refusing to install unverified code/
+  );
 });
 
 test('a failed download removes the temporary directory', async (t) => {
