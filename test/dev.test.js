@@ -1304,3 +1304,92 @@ test('serves injected dev reload script in HTML responses and exposes /_wizz/rel
 
   assert.match(sseData.join(''), /data: reload/);
 });
+
+// The audit-pinned traversal corpus for the dev server's static guard: the
+// lexical resolve+prefix check holds for encoded dots, backslashes, drive
+// letters, double slashes, and NUL bytes, and a symlink planted inside the
+// output tree pointing outside cannot leak a byte through the (lexically
+// blind) prefix check — the realpath re-check answers for it. Every vector
+// must end 400/404 with the server still serving, and a legitimate
+// intra-tree symlink must keep serving.
+test('the dev server blocks traversal vectors and output-tree symlinks', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), DOCUMENT_SHELL);
+  fs.mkdirSync(path.join(projectDirectory, 'src'), { recursive: true });
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), COUNTER_PAGE);
+
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger: createLogger() });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  // A secret the guard must never leak, deliberately extension-bearing so a
+  // blocked path answers the deterministic 404, not the shell fallback. It
+  // sits OUTSIDE dist, in the project root.
+  const secretPath = path.join(projectDirectory, 'secret.txt');
+  fs.writeFileSync(secretPath, 'DEV-TOPSECRET', 'utf8');
+  const distDirectory = path.join(projectDirectory, 'dist');
+
+  // Symlink residual: the prefix check is lexical, so a link inside dist
+  // pointing at the secret (file) and at the project root (directory) must
+  // be caught by the realpath re-check instead. Skipped where symlinks are
+  // unavailable (Windows without privileges).
+  let symlinksAvailable = true;
+  try {
+    fs.symlinkSync(secretPath, path.join(distDirectory, 'leaked.txt'));
+    fs.symlinkSync(projectDirectory, path.join(distDirectory, 'leaked-dir'));
+    // A legitimate intra-dist symlink must keep serving: the re-check only
+    // rejects links whose target leaves the output tree.
+    fs.symlinkSync(path.join(distDirectory, 'index.html'), path.join(distDirectory, 'alias.html'));
+  } catch {
+    symlinksAvailable = false;
+  }
+
+  // Encoded dots and slashes: resolve+relative places the target outside the
+  // output tree, and the extension answers 404 (never the shell fallback).
+  // The slashes are encoded too — with real separators the URL parser itself
+  // consumes the %2e%2e segments (landing on a legitimate in-dist path)
+  // before the server ever decodes.
+  assert.equal((await fetch(`${url}/%2e%2e%2f%2e%2e%2fsecret.txt`)).status, 404);
+  assert.equal((await fetch(`${url}/..%2f..%2fsecret.txt`)).status, 404);
+
+  // Backslashes: a literal filename on POSIX, a caught '..\' prefix on
+  // Windows — either way nothing is served.
+  assert.equal((await fetch(`${url}/..%5c..%5csecret.txt`)).status, 404);
+  assert.equal((await fetch(`${url}/%2e%2e%5c%2e%2e%5csecret.txt`)).status, 404);
+
+  // Drive-letter/absolute forms: '.'+requestPath stays relative on POSIX,
+  // and the startsWith check catches a resolved absolute on Windows.
+  assert.equal((await fetch(`${url}/C:%5cwindows%5cwin.ini`)).status, 404);
+  assert.equal((await fetch(`${url}/%2f%2e%2e%2f%2e%2e%2fsecret.txt`)).status, 404);
+
+  // Leading double slash: parsed as a path, never as a protocol-relative
+  // authority, so resolve('.//..') climbs out lexically and the guard blocks
+  // it; URL normalization cannot smuggle the dots because they are
+  // percent-encoded inside the path.
+  assert.equal((await fetch(`${url}//%2e%2e%2f%2e%2e%2fsecret.txt`)).status, 404);
+  assert.equal((await fetch(`${url}//etc/passwd.txt`)).status, 404);
+
+  // NUL bytes: rejected deterministically as a malformed request. (The URL
+  // parser itself consumes standalone %2e%2e segments before the handler
+  // decodes, so a combined vector keeps the traversal inside one segment.)
+  assert.equal((await fetch(`${url}/foo%00bar.txt`)).status, 400);
+  assert.equal((await fetch(`${url}/a%00b/%2e%2e%2fsecret.txt`)).status, 400);
+
+  // The symlink residual: the lexical guard alone would stream the secret
+  // through the dist-internal link.
+  if (symlinksAvailable) {
+    assert.equal((await fetch(`${url}/leaked.txt`)).status, 404);
+    assert.equal((await fetch(`${url}/leaked-dir/package.json`)).status, 404);
+
+    // Legit intra-tree links still serve.
+    const alias = await fetch(`${url}/alias.html`);
+    assert.equal(alias.status, 200);
+    assert.match(await alias.text(), /<div id="app"><\/div>/);
+  }
+
+  // Nothing leaked, and the server still serves normally after the corpus.
+  const home = await fetch(`${url}/`);
+  assert.equal(home.status, 200);
+  assert.equal((await home.text()).includes('DEV-TOPSECRET'), false);
+});

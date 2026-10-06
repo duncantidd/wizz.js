@@ -25,6 +25,28 @@ const MIME_TYPES = {
 // Monotonic per-process build counter backing each rebuild's module query.
 let moduleQuerySequence = 0;
 
+// Realpath containment for static serving: the path.relative/startsWith
+// prefix checks are lexical, so a symlink inside the output tree pointing
+// outside would pass them. Resolve the candidate's canonical path and
+// re-check it against the canonical root, which is resolved once per root
+// path so a symlinked output ancestor keeps serving. Every failure — a
+// dangling symlink, an unreadable ancestor, a NUL byte — conservatively
+// answers false: the request falls through to the not-a-file paths.
+const canonicalRootCache = new Map();
+function isWithinRealRoot(candidate, root) {
+  try {
+    let canonicalRoot = canonicalRootCache.get(root);
+    if (canonicalRoot === undefined) {
+      canonicalRoot = fs.realpathSync(root);
+      canonicalRootCache.set(root, canonicalRoot);
+    }
+    const realPath = fs.realpathSync(candidate);
+    return realPath === canonicalRoot || realPath.startsWith(`${canonicalRoot}${path.sep}`);
+  } catch {
+    return false;
+  }
+}
+
 function copyDocumentShell(projectDirectory, outputDirectory) {
   for (const fileName of ['index.html', 'App.css']) {
     const sourcePath = path.join(projectDirectory, fileName);
@@ -279,10 +301,25 @@ function createRequestHandler(outputDirectory, options = {}) {
     let requestPath;
     let url;
     try {
-      url = new URL(request.url, 'http://localhost');
+      // Concatenated into a fixed origin rather than parsed against a base:
+      // a base would re-parse an origin-form target starting with '//' as
+      // protocol-relative, silently promoting its first path segment to an
+      // authority (dropping path segments, or throwing on an invalid host).
+      // This server is not a proxy, so an absolute-form target lands in the
+      // same 400 as any other malformed request.
+      url = new URL('http://localhost' + request.url);
       requestPath = decodeURIComponent(url.pathname);
     } catch {
       // An undecodable pathname is a malformed request, not a crash.
+      response.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+      response.end('Bad request');
+      return;
+    }
+
+    // A NUL byte is invalid in any filesystem path (fs throws on it), so
+    // reject it deterministically as a malformed request instead of letting
+    // it fall through to the shell fallback.
+    if (requestPath.includes('\0')) {
       response.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
       response.end('Bad request');
       return;
@@ -323,7 +360,10 @@ function createRequestHandler(outputDirectory, options = {}) {
     const filePath = path.resolve(resolvedOutputDirectory, `.${requestPath}`);
     const isInsideOutput = filePath === resolvedOutputDirectory
       || filePath.startsWith(`${resolvedOutputDirectory}${path.sep}`);
-    const isFile = isInsideOutput && fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+    const isFile = isInsideOutput
+      && fs.existsSync(filePath)
+      && fs.statSync(filePath).isFile()
+      && isWithinRealRoot(filePath, resolvedOutputDirectory);
 
     if (isFile) {
       if (path.extname(filePath) === '.html') {

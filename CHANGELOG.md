@@ -47,6 +47,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - README gains a "Deploying with the node adapter" section (flag surface, generated-file contract, serving behavior, security posture) and the `wizz --version` example and CLI enumeration move with the version bump and flag; `ROADMAP.md` records the node adapter as a completed amendment to the milestone 21 external-host story with a Development Server Decision clarification; `STRUCTURE.md` extends the build-script prose; the wizz-docs GettingStarted deploy section now leads with the adapter command.
 
+### Fixed — Static Serving Traversal Hardening (Dev Server + Node Adapter)
+
+#### Fixed
+
+- The static-serving guards in the development server (`scripts/dev.js`) and the generated node adapter host (`build.js` `NODE_ADAPTER_HOST_SOURCE`) close the symlink residual a security audit noted on top of their already-verified lexical traversal handling (encoded dots, backslashes, drive letters, double slashes — no bypass). `path.relative`/`startsWith` containment is lexical, so a symlink inside the served tree pointing outside would pass the prefix check and stream the target's bytes; both servers now resolve the candidate with `fs.realpathSync` and re-check the canonical path against the canonical root before any read is served. The root itself is canonicalized once (cached per root path), so a symlinked dist ancestor keeps serving; every `realpathSync` failure — dangling symlink, unreadable ancestor, NUL byte — conservatively answers "not a file", and the request falls through to the existing 404/SPA-fallback paths. A legitimate intra-dist symlink still serves.
+- A NUL byte in the decoded pathname is now rejected deterministically with `400 Bad request` ahead of any filesystem access. Previously it fell through `fs.existsSync` (which swallows `ERR_INVALID_ARG_VALUE` and answers false) into the shell fallback, an incidental rather than designed outcome.
+- The request target is parsed by concatenation into a fixed origin (`new URL('http://localhost' + request.url)`) instead of against a base. A base re-parses an origin-form target starting with `//` as protocol-relative, silently promoting its first path segment to an authority — `/etc/passwd` segments were dropped from the path the guard resolves (not exploitable: the authority never reached the filesystem join, but the guard was answering a different path than the one requested). This server is not a proxy, so an absolute-form target (`http://…`) now lands in the same `400 Bad request` as any other malformed target instead of being served by its pathname.
+
+#### Changed
+
+- No version bump: both guards live in build/runtime artifacts (the dev server script and the generated adapter host), so the compiler (1.15.0), syntax (1.4.1), and output (1.8.2) contracts hold. Regression tests pin the full audit corpus against both running servers — encoded dots, backslashes, drive letters, double slashes, NUL bytes, the symlink-in-dist residual, and the legit intra-dist symlink that must keep serving — and assert nothing leaks while each server stays alive afterward (`build.test.js`, `test/dev.test.js`).
+
 ### Fixed — State Scanner String Awareness
 
 #### Fixed

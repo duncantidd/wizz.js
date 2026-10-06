@@ -797,14 +797,47 @@ async function renderDocument(routeEntry) {
     .replace('</head>', () => headRun + '</head>');
 }
 
+// Realpath containment for static serving: the path.relative prefix check
+// is lexical, so a symlink inside dist pointing outside would pass it.
+// Resolve the candidate's canonical path and re-check it against the
+// canonical dist, resolved once on first use so a symlinked dist ancestor
+// keeps serving. Every failure — a dangling symlink, an unreadable
+// ancestor, a NUL byte — conservatively answers false: the request falls
+// through to the not-a-file paths.
+let canonicalDist = null;
+function resolveWithinRealDist(candidate) {
+  try {
+    if (canonicalDist === null) canonicalDist = fs.realpathSync(dist);
+    const realPath = fs.realpathSync(candidate);
+    return realPath === canonicalDist || realPath.startsWith(canonicalDist + path.sep);
+  } catch {
+    return false;
+  }
+}
+
 async function handleRequest(request, response) {
   let requestPath;
   let url;
   try {
-    url = new URL(request.url, 'http://localhost');
+    // Concatenated into a fixed origin rather than parsed against a base:
+    // a base would re-parse an origin-form target starting with '//' as
+    // protocol-relative, silently promoting its first path segment to an
+    // authority (dropping path segments, or throwing on an invalid host).
+    // This host is not a proxy, so an absolute-form target lands in the
+    // same 400 as any other malformed request.
+    url = new URL('http://localhost' + request.url);
     requestPath = decodeURIComponent(url.pathname);
   } catch {
     // An undecodable pathname is a malformed request, not a crash.
+    response.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+    response.end('Bad request');
+    return;
+  }
+
+  // A NUL byte is invalid in any filesystem path (fs throws on it), so
+  // reject it deterministically as a malformed request instead of letting
+  // it fall through to the shell fallback.
+  if (requestPath.includes('\\0')) {
     response.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
     response.end('Bad request');
     return;
@@ -822,7 +855,10 @@ async function handleRequest(request, response) {
   const relative = path.relative(dist, filePath);
   const isInsideDist = relative === ''
     || (!relative.startsWith('..' + path.sep) && relative !== '..' && !path.isAbsolute(relative));
-  const isFile = isInsideDist && fs.existsSync(filePath) && fs.statSync(filePath).isFile();
+  const isFile = isInsideDist
+    && fs.existsSync(filePath)
+    && fs.statSync(filePath).isFile()
+    && resolveWithinRealDist(filePath);
 
   if (isFile) {
     response.writeHead(200, { 'Content-Type': MIME_TYPES[path.extname(filePath)] || 'application/octet-stream' });
