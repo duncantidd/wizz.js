@@ -13,7 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const { resolveLatestRelease, downloadToFile } = require('./releaseAssets');
+const { resolveLatestRelease, downloadToFile, verifyFileDigest } = require('./releaseAssets');
 
 // The current version is read from the installation's version.js source —
 // never with require(), which would cache modules across sandboxes and
@@ -123,6 +123,17 @@ async function update({
 
     const tarballPath = path.join(staging, release.tarballName);
     await downloadToFile(release.tarballUrl, tarballPath, { fetchImpl });
+
+    // Integrity gate, fail closed: the extracted tree is what the launcher
+    // executes on every command, so bytes that do not match the digest the
+    // release API published are never extracted. A release without a digest
+    // cannot be verified at all and is refused outright (an accepted
+    // incompatibility with hypothetical pre-digest releases — installing
+    // unverifiable code is the vulnerability this file exists to prevent).
+    if (!release.tarballDigest) {
+      throw new Error('The latest release carries no sha256 digest for the tarball; refusing to extract unverified code. Download the release manually or install with scripts/install-cli.sh.');
+    }
+    await verifyFileDigest(tarballPath, release.tarballDigest);
 
     const extraction = spawnImpl('tar', ['-xzf', tarballPath, '-C', staging], { encoding: 'utf8' });
     if (extraction.error && extraction.error.code === 'ENOENT') {
