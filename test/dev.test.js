@@ -239,7 +239,7 @@ test('builds before serving generated output and supplies SPA fallback', async (
   });
   t.after(() => developmentServer.close());
   const url = await developmentServer.listen();
-  assert.match(url, /^http:\/\/localhost:\d+$/);
+  assert.match(url, /^http:\/\/127\.0\.0\.1:\d+$/);
   assert.ok(logger.messages.includes(`Wizz development server running at ${url}`));
 
   const shell = await fetch(`${url}/Home`);
@@ -311,7 +311,7 @@ test('binds the development server to loopback by default', async (t) => {
   t.after(() => developmentServer.close());
   const url = await developmentServer.listen();
   assert.equal(developmentServer.server.address().address, '127.0.0.1');
-  assert.match(url, /^http:\/\/localhost:\d+$/);
+  assert.match(url, /^http:\/\/127\.0\.0\.1:\d+$/);
 });
 
 test('binds the development server to an explicit host and honors HOST', async (t) => {
@@ -1262,7 +1262,7 @@ test('listens on a specified custom port', async (t) => {
   });
   t.after(() => developmentServer.close());
   const url = await developmentServer.listen();
-  assert.equal(url, `http://localhost:${port}`);
+  assert.equal(url, `http://127.0.0.1:${port}`);
 });
 
 test('rejects invalid port values in startDevelopmentServer', (t) => {
