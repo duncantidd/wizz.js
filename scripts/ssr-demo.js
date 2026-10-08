@@ -31,6 +31,9 @@ const { compileServer, compile } = require('../src/compiler');
 const PAGE_SOURCE = path.join(__dirname, '..', 'src', 'pages', 'Home.wizz');
 const STYLESHEET_PATH = path.join(__dirname, '..', 'App.css');
 const PORT = process.env.PORT || 3001;
+// Loopback by default: this demo serves rendered markup with no
+// authentication or TLS. HOST is the explicit opt-in for remote access.
+const HOST = process.env.HOST || '127.0.0.1';
 const DOCUMENT_ROUTES = new Set(['/', '/Home']);
 
 async function main() {
@@ -99,8 +102,10 @@ async function main() {
     response.end(document);
   });
 
-  server.listen(PORT, () => {
-    console.log(`SSR demo serving http://localhost:${PORT} (view-source shows server-rendered markup)`);
+  server.listen(PORT, HOST, () => {
+    const isLoopback = HOST === '127.0.0.1' || HOST === '::1';
+    const displayHost = isLoopback ? 'localhost' : HOST;
+    console.log(`SSR demo serving http://${displayHost}:${PORT} (view-source shows server-rendered markup)`);
   });
 }
 

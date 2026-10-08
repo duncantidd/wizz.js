@@ -471,6 +471,24 @@ function watchSourceFiles(inputDirectory, onChange, options = {}) {
   };
 }
 
+// The dev server serves compiled source, executes /api handlers in-process
+// with .env.server secrets loaded into process.env, and exposes an SSE
+// reload channel — all without authentication or TLS. Binding every
+// interface would hand all of that to the local network, so the default is
+// loopback; HOST (environment) and the --host flag are the explicit opt-ins
+// for remote development, with an explicit option outranking the
+// environment.
+function resolveBindHost(explicitHost) {
+  const candidate = explicitHost ?? process.env.HOST;
+  if (candidate === undefined || candidate === null || candidate === '') {
+    return '127.0.0.1';
+  }
+  if (typeof candidate !== 'string') {
+    throw new TypeError('Invalid host: must be a string.');
+  }
+  return candidate;
+}
+
 function startDevelopmentServer(options = {}) {
   const projectDirectory = path.resolve(options.projectDirectory || path.join(__dirname, '..'));
   const inputDirectory = path.resolve(options.inputDirectory || path.join(projectDirectory, 'src'));
@@ -479,6 +497,7 @@ function startDevelopmentServer(options = {}) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new TypeError('Invalid port: must be an integer between 0 and 65535.');
   }
+  const host = resolveBindHost(options.host);
   const logger = options.logger || console;
   const build = options.build || buildProject;
   const loadEnv = options.loadEnv || loadServerEnv;
@@ -545,13 +564,19 @@ function startDevelopmentServer(options = {}) {
         const onListening = () => {
           server.removeListener('error', onError);
           const address = server.address();
-          const url = `http://localhost:${address.port}`;
+          // Loopback binds read as localhost in the banner; anything else
+          // shows the real interface address, so a remote opt-in is visible.
+          const isLoopback = address.address === '127.0.0.1' || address.address === '::1';
+          const displayHost = isLoopback
+            ? 'localhost'
+            : (address.address.includes(':') ? `[${address.address}]` : address.address);
+          const url = `http://${displayHost}:${address.port}`;
           logger.log(`Wizz development server running at ${url}`);
           resolve(url);
         };
         server.once('error', onError);
         server.once('listening', onListening);
-        server.listen(port);
+        server.listen(port, host);
       });
     }
   };
@@ -587,6 +612,7 @@ module.exports = {
   createSourceSnapshot,
   injectReloadScript,
   readRouteTable,
+  resolveBindHost,
   startDevelopmentServer,
   watchSourceFiles
 };

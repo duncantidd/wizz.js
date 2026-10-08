@@ -26,9 +26,25 @@ test('parses build and dev commands', () => {
     force: false,
     adapter: null
   });
-  assert.deepEqual(parseCommand(['dev']), { command: 'dev', argumentsList: [], json: false, force: false, port: 3000, adapter: null });
-  assert.deepEqual(parseCommand(['dev', '--port', '4321']), { command: 'dev', argumentsList: [], json: false, force: false, port: 4321, adapter: null });
-  assert.deepEqual(parseCommand(['dev', '--port=4321']), { command: 'dev', argumentsList: [], json: false, force: false, port: 4321, adapter: null });
+  assert.deepEqual(parseCommand(['dev']), { command: 'dev', argumentsList: [], json: false, force: false, port: 3000, host: null, adapter: null });
+  assert.deepEqual(parseCommand(['dev', '--port', '4321']), { command: 'dev', argumentsList: [], json: false, force: false, port: 4321, host: null, adapter: null });
+  assert.deepEqual(parseCommand(['dev', '--port=4321']), { command: 'dev', argumentsList: [], json: false, force: false, port: 4321, host: null, adapter: null });
+});
+
+test('recognizes dev --host in both spellings and combines with --port', () => {
+  assert.deepEqual(parseCommand(['dev', '--host', '0.0.0.0']), { command: 'dev', argumentsList: [], json: false, force: false, port: 3000, host: '0.0.0.0', adapter: null });
+  assert.deepEqual(parseCommand(['dev', '--host=devbox.example.com']), { command: 'dev', argumentsList: [], json: false, force: false, port: 3000, host: 'devbox.example.com', adapter: null });
+  assert.deepEqual(parseCommand(['dev', '--port=4321', '--host', '0.0.0.0']), { command: 'dev', argumentsList: [], json: false, force: false, port: 4321, host: '0.0.0.0', adapter: null });
+  assert.deepEqual(parseCommand(['dev', '--host=0.0.0.0', '--port', '4321']), { command: 'dev', argumentsList: [], json: false, force: false, port: 4321, host: '0.0.0.0', adapter: null });
+});
+
+test('rejects missing, empty, repeated, and flag-like --host values', () => {
+  assert.throws(() => parseCommand(['dev', '--host']), /Dev --host requires a host name/);
+  assert.throws(() => parseCommand(['dev', '--host=']), /Dev --host requires a host name/);
+  // A following flag must not be consumed as the host value.
+  assert.throws(() => parseCommand(['dev', '--host', '--port', '4321']), /Dev --host requires a host name/);
+  assert.throws(() => parseCommand(['dev', '--host', '0.0.0.0', '--host=127.0.0.1']), /at most one --host/);
+  assert.throws(() => parseCommand(['dev', '--host=0.0.0.0', '--host', '127.0.0.1']), /at most one --host/);
 });
 
 test('strips the build --json flag from any argument position', () => {
@@ -173,7 +189,22 @@ test('starts the existing development server through the dev command', async () 
     }
   });
   assert.equal(await result, 0);
-  assert.deepEqual(calls, [{ projectDirectory: process.cwd(), port: 3000, logger }, 'listen']);
+  assert.deepEqual(calls, [{ projectDirectory: process.cwd(), port: 3000, host: null, logger }, 'listen']);
+});
+
+test('threads the dev --host flag through to the development server', async () => {
+  const calls = [];
+  const logger = { log() {}, error() {} };
+
+  const result = runCli(['dev', '--host', '0.0.0.0'], {
+    logger,
+    startDev(options) {
+      calls.push(options);
+      return { listen() { return Promise.resolve(); } };
+    }
+  });
+  assert.equal(await result, 0);
+  assert.deepEqual(calls, [{ projectDirectory: process.cwd(), port: 3000, host: '0.0.0.0', logger }]);
 });
 
 test('dev rejects the build-only --json flag instead of silently ignoring it', () => {
@@ -185,8 +216,8 @@ test('dev rejects a repeated --port flag instead of letting the last one win', (
   assert.throws(() => parseCommand(['dev', '--port=3000', '--port', '4321']), /at most one --port/);
   assert.throws(() => parseCommand(['dev', '--port', '3000', '--port=4321']), /at most one --port/);
   // A single flag in each spelling still parses.
-  assert.deepEqual(parseCommand(['dev', '--port', '4321']), { command: 'dev', argumentsList: [], json: false, force: false, port: 4321, adapter: null });
-  assert.deepEqual(parseCommand(['dev', '--port=0']), { command: 'dev', argumentsList: [], json: false, force: false, port: 0, adapter: null });
+  assert.deepEqual(parseCommand(['dev', '--port', '4321']), { command: 'dev', argumentsList: [], json: false, force: false, port: 4321, host: null, adapter: null });
+  assert.deepEqual(parseCommand(['dev', '--port=0']), { command: 'dev', argumentsList: [], json: false, force: false, port: 0, host: null, adapter: null });
 });
 
 test('a failed dev listen releases the server handles and exits with code 1', async () => {

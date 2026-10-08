@@ -10,6 +10,7 @@ const {
   createSourceSnapshot,
   injectReloadScript,
   readRouteTable,
+  resolveBindHost,
   startDevelopmentServer,
   watchSourceFiles
 } = require('../scripts/dev');
@@ -255,6 +256,92 @@ test('builds before serving generated output and supplies SPA fallback', async (
 
   const missingAsset = await fetch(`${url}/missing.js`);
   assert.equal(missingAsset.status, 404);
+});
+
+test('resolves the bind host: loopback default, HOST override, option precedence', () => {
+  const savedHost = process.env.HOST;
+  try {
+    // No option and no environment: loopback. The dev server has no auth or
+    // TLS and executes API handlers in-process, so every-interface would
+    // expose all of it by default.
+    delete process.env.HOST;
+    assert.equal(resolveBindHost(undefined), '127.0.0.1');
+
+    // The environment is the middle layer; an empty HOST is no override.
+    process.env.HOST = '0.0.0.0';
+    assert.equal(resolveBindHost(undefined), '0.0.0.0');
+    process.env.HOST = '';
+    assert.equal(resolveBindHost(undefined), '127.0.0.1');
+
+    // An explicit option outranks the environment.
+    process.env.HOST = '0.0.0.0';
+    assert.equal(resolveBindHost('127.0.0.1'), '127.0.0.1');
+
+    // The host must be a string — a numeric or object host is programmer
+    // error, caught before the server opens instead of deep inside listen().
+    assert.throws(() => resolveBindHost(42), /Invalid host: must be a string/);
+    assert.throws(() => resolveBindHost({}), /Invalid host: must be a string/);
+  } finally {
+    if (savedHost === undefined) {
+      delete process.env.HOST;
+    } else {
+      process.env.HOST = savedHost;
+    }
+  }
+});
+
+test('binds the development server to loopback by default', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), '<div id="app"></div>');
+  fs.mkdirSync(path.join(projectDirectory, 'src'), { recursive: true });
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main><p>Ready</p></main>');
+
+  const savedHost = process.env.HOST;
+  delete process.env.HOST;
+  t.after(() => {
+    if (savedHost === undefined) {
+      delete process.env.HOST;
+    } else {
+      process.env.HOST = savedHost;
+    }
+  });
+
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger: createLogger() });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+  assert.equal(developmentServer.server.address().address, '127.0.0.1');
+  assert.match(url, /^http:\/\/localhost:\d+$/);
+});
+
+test('binds the development server to an explicit host and honors HOST', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), '<div id="app"></div>');
+  fs.mkdirSync(path.join(projectDirectory, 'src'), { recursive: true });
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main><p>Ready</p></main>');
+
+  // The environment override applies when no option is given...
+  const savedHost = process.env.HOST;
+  process.env.HOST = '::1';
+  t.after(() => {
+    if (savedHost === undefined) {
+      delete process.env.HOST;
+    } else {
+      process.env.HOST = savedHost;
+    }
+  });
+
+  const fromEnvironment = startDevelopmentServer({ projectDirectory, port: 0, logger: createLogger() });
+  t.after(() => fromEnvironment.close());
+  await fromEnvironment.listen();
+  assert.equal(fromEnvironment.server.address().address, '::1');
+
+  // ...and an explicit option outranks it.
+  const fromOption = startDevelopmentServer({ projectDirectory, port: 0, host: '127.0.0.1', logger: createLogger() });
+  t.after(() => fromOption.close());
+  await fromOption.listen();
+  assert.equal(fromOption.server.address().address, '127.0.0.1');
 });
 
 test('rebuilds the project when a .wizz source change is observed', (t) => {
