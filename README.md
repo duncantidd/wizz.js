@@ -130,10 +130,12 @@ The host serves traversal-guarded static files from `dist/` (encoded dots, backs
 Start the development server with:
 
 ```bash
-wizz dev [--port <n>]
+wizz dev [--port <n>] [--host <addr>]
 ```
 
 `wizz dev` uses the directory where you run the command as the application project: it builds that directory's `src` into `dist`, serves the result at `http://localhost:3000` (or the specified `--port`), and watches `.wizz` source files. It uses native file events with a 250 ms polling fallback, so changes on mounted filesystems such as WSL's `/mnt/c` still rebuild when an event is missed. Rebuilds update `dist` and automatically trigger live reloading in connected browser tabs via a dev-only Server-Sent Events (SSE) channel (`/_wizz/reload`). If the requested port is already in use, `wizz dev` fails cleanly with an error message naming the port and the `--port` flag.
+
+The server binds to `127.0.0.1` (loopback) by default: it has no authentication or TLS, serves compiled source, executes `/api/**` handlers in-process with `.env.server` secrets loaded, and exposes the reload channel — so binding every interface would expose all of that to the local network. `HOST=<addr>` in the environment, or `--host <addr>` on the command line (which outranks the environment), opts a bind out of loopback for the rare remote-development case; loopback remains the default otherwise.
 
 Print what you have installed with:
 
@@ -141,7 +143,7 @@ Print what you have installed with:
 wizz --version
 ```
 
-which prints the compiler and contract version triple, for example `wizz 1.15.0 (compiler 1.15.0, syntax 1.4.1, output 1.8.2)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, `dev` accepts optional `--port <n>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
+which prints the compiler and contract version triple, for example `wizz 1.15.0 (compiler 1.15.0, syntax 1.4.1, output 1.8.2)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
 
 `wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
 

@@ -11,6 +11,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed — Loopback Binding for Development Servers
+
+#### Changed
+
+- The development server binds to `127.0.0.1` by default instead of every interface (`scripts/dev.js`). `startDevelopmentServer` calls `server.listen(port, host)`, where the host resolves through three layers: an explicit `options.host` (the CLI's `--host` flag) outranks the `HOST` environment variable, which outranks the loopback default. The rationale is the server's threat surface: no authentication or TLS, compiled source served statically, `/api/**` handlers executed in-process with `.env.server` secrets loaded into `process.env`, and the `/_wizz/reload` SSE channel — a default bind to `0.0.0.0`/`::` would expose all of that to the local network. A non-loopback bind is now visible in the startup banner, which prints the real interface address (bracketed for IPv6) instead of unconditionally claiming `localhost`.
+- `wizz dev` accepts `--host <addr>` (both `--host <addr>` and `--host=<addr>` spellings, at most one, alongside `--port`), validated like every other dev flag: a missing, empty, or flag-like value (a hostname never starts with `-`) fails with usage guidance rather than being consumed as a hostname (`scripts/cli.js`, `scripts/cli.test.js`). The banner rule above keeps a remote opt-in explicit at startup.
+- The standalone SSR demo binds to `127.0.0.1` by default for the same reason, with `HOST` as the environment opt-out, and its startup banner shows the actual bind host (`scripts/ssr-demo.js`).
+- The generated node adapter host (`wizz build --adapter node`) keeps its unbound `listen(port)` deliberately: a production deploy host (VPS/EC2/Docker) normally must accept external connections, and its exposure model is the deployment platform's responsibility. The dev and demo servers have no such justification, which is why only they change.
+- Tests pin the contract: `resolveBindHost` is exported and unit-tested for the loopback default, the empty-string `HOST` non-override, option-over-environment precedence, and the `TypeError` on non-string hosts; real-listen tests assert the server binds `127.0.0.1` with no configuration and binds the `HOST`/option host when given (`test/dev.test.js`); CLI parsing and flag threading are covered in `scripts/cli.test.js`.
+
 ### Added — MCP Server (`wizz mcp`)
 
 #### Added
