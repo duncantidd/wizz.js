@@ -518,15 +518,17 @@ wizz init [directory] [--force]
     Scaffold the starter project (index.html shell, src/App.wizz, pages,
     components, a server API handler). Existing files are never overwritten.
 
-wizz dev [--port <n>]
-    Build src into dist, serve at http://localhost:3000 (or --port), watch
+wizz dev [--port <n>] [--host <addr>]
+    Build src into dist, serve at http://127.0.0.1:3000 (or --port), watch
     .wizz sources, and live-reload connected tabs over a dev-only SSE
     channel (/_wizz/reload). Requires an index.html document shell in the
     project directory and fails cleanly when the port is taken. Server-
     renderable routes receive the shell with rendered markup inside the
     mount point plus the serialized state script, and the router hydrates
     it. Missing assets return 404; /server/** is never served as static
-    files.
+    files. The server has no authentication or TLS, so it binds to
+    127.0.0.1 (loopback) by default; HOST=<addr> or --host <addr> opts the
+    bind out of loopback for remote development.
 
 wizz build [input-directory] [output-directory] [--json] [--adapter node]
     Compile src into dist (defaults), preserving paths. Writes

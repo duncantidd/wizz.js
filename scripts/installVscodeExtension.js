@@ -18,7 +18,8 @@ const {
   DEFAULT_REPOSITORY,
   VSIX_ASSET_PATTERN,
   resolveLatestRelease,
-  downloadToFile
+  downloadToFile,
+  verifyFileDigest
 } = require('./releaseAssets');
 
 // Node >= 18.20 refuses to spawn .cmd/.bat shims without a shell
@@ -72,6 +73,15 @@ async function installVscodeExtension({
   try {
     const vsixPath = path.join(tempDirectory, release.vsixName);
     await downloadToFile(release.vsixUrl, vsixPath, { fetchImpl });
+
+    // Same integrity gate as the framework tarball in scripts/update.js:
+    // `code --install-extension` executes the package inside a .vsix, so an
+    // unverified download is a code-execution path. Fail closed on a release
+    // that publishes no digest.
+    if (!release.vsixDigest) {
+      throw new Error('The latest release carries no sha256 digest for the extension; refusing to install unverified code. Download the .vsix manually from the release page and install it with: code --install-extension <file>.vsix');
+    }
+    await verifyFileDigest(vsixPath, release.vsixDigest);
 
     const installPlan = codeInvocation('code', ['--install-extension', vsixPath]);
     const install = spawnImpl(installPlan.file, installPlan.args, { encoding: 'utf8' });

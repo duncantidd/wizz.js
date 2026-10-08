@@ -10,6 +10,7 @@ const {
   createSourceSnapshot,
   injectReloadScript,
   readRouteTable,
+  resolveBindHost,
   startDevelopmentServer,
   watchSourceFiles
 } = require('../scripts/dev');
@@ -238,7 +239,7 @@ test('builds before serving generated output and supplies SPA fallback', async (
   });
   t.after(() => developmentServer.close());
   const url = await developmentServer.listen();
-  assert.match(url, /^http:\/\/localhost:\d+$/);
+  assert.match(url, /^http:\/\/127\.0\.0\.1:\d+$/);
   assert.ok(logger.messages.includes(`Wizz development server running at ${url}`));
 
   const shell = await fetch(`${url}/Home`);
@@ -255,6 +256,92 @@ test('builds before serving generated output and supplies SPA fallback', async (
 
   const missingAsset = await fetch(`${url}/missing.js`);
   assert.equal(missingAsset.status, 404);
+});
+
+test('resolves the bind host: loopback default, HOST override, option precedence', () => {
+  const savedHost = process.env.HOST;
+  try {
+    // No option and no environment: loopback. The dev server has no auth or
+    // TLS and executes API handlers in-process, so every-interface would
+    // expose all of it by default.
+    delete process.env.HOST;
+    assert.equal(resolveBindHost(undefined), '127.0.0.1');
+
+    // The environment is the middle layer; an empty HOST is no override.
+    process.env.HOST = '0.0.0.0';
+    assert.equal(resolveBindHost(undefined), '0.0.0.0');
+    process.env.HOST = '';
+    assert.equal(resolveBindHost(undefined), '127.0.0.1');
+
+    // An explicit option outranks the environment.
+    process.env.HOST = '0.0.0.0';
+    assert.equal(resolveBindHost('127.0.0.1'), '127.0.0.1');
+
+    // The host must be a string — a numeric or object host is programmer
+    // error, caught before the server opens instead of deep inside listen().
+    assert.throws(() => resolveBindHost(42), /Invalid host: must be a string/);
+    assert.throws(() => resolveBindHost({}), /Invalid host: must be a string/);
+  } finally {
+    if (savedHost === undefined) {
+      delete process.env.HOST;
+    } else {
+      process.env.HOST = savedHost;
+    }
+  }
+});
+
+test('binds the development server to loopback by default', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), '<div id="app"></div>');
+  fs.mkdirSync(path.join(projectDirectory, 'src'), { recursive: true });
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main><p>Ready</p></main>');
+
+  const savedHost = process.env.HOST;
+  delete process.env.HOST;
+  t.after(() => {
+    if (savedHost === undefined) {
+      delete process.env.HOST;
+    } else {
+      process.env.HOST = savedHost;
+    }
+  });
+
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger: createLogger() });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+  assert.equal(developmentServer.server.address().address, '127.0.0.1');
+  assert.match(url, /^http:\/\/127\.0\.0\.1:\d+$/);
+});
+
+test('binds the development server to an explicit host and honors HOST', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), '<div id="app"></div>');
+  fs.mkdirSync(path.join(projectDirectory, 'src'), { recursive: true });
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main><p>Ready</p></main>');
+
+  // The environment override applies when no option is given...
+  const savedHost = process.env.HOST;
+  process.env.HOST = '::1';
+  t.after(() => {
+    if (savedHost === undefined) {
+      delete process.env.HOST;
+    } else {
+      process.env.HOST = savedHost;
+    }
+  });
+
+  const fromEnvironment = startDevelopmentServer({ projectDirectory, port: 0, logger: createLogger() });
+  t.after(() => fromEnvironment.close());
+  await fromEnvironment.listen();
+  assert.equal(fromEnvironment.server.address().address, '::1');
+
+  // ...and an explicit option outranks it.
+  const fromOption = startDevelopmentServer({ projectDirectory, port: 0, host: '127.0.0.1', logger: createLogger() });
+  t.after(() => fromOption.close());
+  await fromOption.listen();
+  assert.equal(fromOption.server.address().address, '127.0.0.1');
 });
 
 test('rebuilds the project when a .wizz source change is observed', (t) => {
@@ -1175,7 +1262,7 @@ test('listens on a specified custom port', async (t) => {
   });
   t.after(() => developmentServer.close());
   const url = await developmentServer.listen();
-  assert.equal(url, `http://localhost:${port}`);
+  assert.equal(url, `http://127.0.0.1:${port}`);
 });
 
 test('rejects invalid port values in startDevelopmentServer', (t) => {
@@ -1303,4 +1390,93 @@ test('serves injected dev reload script in HTML responses and exposes /_wizz/rel
   await new Promise((resolve) => setTimeout(resolve, 50));
 
   assert.match(sseData.join(''), /data: reload/);
+});
+
+// The audit-pinned traversal corpus for the dev server's static guard: the
+// lexical resolve+prefix check holds for encoded dots, backslashes, drive
+// letters, double slashes, and NUL bytes, and a symlink planted inside the
+// output tree pointing outside cannot leak a byte through the (lexically
+// blind) prefix check — the realpath re-check answers for it. Every vector
+// must end 400/404 with the server still serving, and a legitimate
+// intra-tree symlink must keep serving.
+test('the dev server blocks traversal vectors and output-tree symlinks', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), DOCUMENT_SHELL);
+  fs.mkdirSync(path.join(projectDirectory, 'src'), { recursive: true });
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), COUNTER_PAGE);
+
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger: createLogger() });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  // A secret the guard must never leak, deliberately extension-bearing so a
+  // blocked path answers the deterministic 404, not the shell fallback. It
+  // sits OUTSIDE dist, in the project root.
+  const secretPath = path.join(projectDirectory, 'secret.txt');
+  fs.writeFileSync(secretPath, 'DEV-TOPSECRET', 'utf8');
+  const distDirectory = path.join(projectDirectory, 'dist');
+
+  // Symlink residual: the prefix check is lexical, so a link inside dist
+  // pointing at the secret (file) and at the project root (directory) must
+  // be caught by the realpath re-check instead. Skipped where symlinks are
+  // unavailable (Windows without privileges).
+  let symlinksAvailable = true;
+  try {
+    fs.symlinkSync(secretPath, path.join(distDirectory, 'leaked.txt'));
+    fs.symlinkSync(projectDirectory, path.join(distDirectory, 'leaked-dir'));
+    // A legitimate intra-dist symlink must keep serving: the re-check only
+    // rejects links whose target leaves the output tree.
+    fs.symlinkSync(path.join(distDirectory, 'index.html'), path.join(distDirectory, 'alias.html'));
+  } catch {
+    symlinksAvailable = false;
+  }
+
+  // Encoded dots and slashes: resolve+relative places the target outside the
+  // output tree, and the extension answers 404 (never the shell fallback).
+  // The slashes are encoded too — with real separators the URL parser itself
+  // consumes the %2e%2e segments (landing on a legitimate in-dist path)
+  // before the server ever decodes.
+  assert.equal((await fetch(`${url}/%2e%2e%2f%2e%2e%2fsecret.txt`)).status, 404);
+  assert.equal((await fetch(`${url}/..%2f..%2fsecret.txt`)).status, 404);
+
+  // Backslashes: a literal filename on POSIX, a caught '..\' prefix on
+  // Windows — either way nothing is served.
+  assert.equal((await fetch(`${url}/..%5c..%5csecret.txt`)).status, 404);
+  assert.equal((await fetch(`${url}/%2e%2e%5c%2e%2e%5csecret.txt`)).status, 404);
+
+  // Drive-letter/absolute forms: '.'+requestPath stays relative on POSIX,
+  // and the startsWith check catches a resolved absolute on Windows.
+  assert.equal((await fetch(`${url}/C:%5cwindows%5cwin.ini`)).status, 404);
+  assert.equal((await fetch(`${url}/%2f%2e%2e%2f%2e%2e%2fsecret.txt`)).status, 404);
+
+  // Leading double slash: parsed as a path, never as a protocol-relative
+  // authority, so resolve('.//..') climbs out lexically and the guard blocks
+  // it; URL normalization cannot smuggle the dots because they are
+  // percent-encoded inside the path.
+  assert.equal((await fetch(`${url}//%2e%2e%2f%2e%2e%2fsecret.txt`)).status, 404);
+  assert.equal((await fetch(`${url}//etc/passwd.txt`)).status, 404);
+
+  // NUL bytes: rejected deterministically as a malformed request. (The URL
+  // parser itself consumes standalone %2e%2e segments before the handler
+  // decodes, so a combined vector keeps the traversal inside one segment.)
+  assert.equal((await fetch(`${url}/foo%00bar.txt`)).status, 400);
+  assert.equal((await fetch(`${url}/a%00b/%2e%2e%2fsecret.txt`)).status, 400);
+
+  // The symlink residual: the lexical guard alone would stream the secret
+  // through the dist-internal link.
+  if (symlinksAvailable) {
+    assert.equal((await fetch(`${url}/leaked.txt`)).status, 404);
+    assert.equal((await fetch(`${url}/leaked-dir/package.json`)).status, 404);
+
+    // Legit intra-tree links still serve.
+    const alias = await fetch(`${url}/alias.html`);
+    assert.equal(alias.status, 200);
+    assert.match(await alias.text(), /<div id="app"><\/div>/);
+  }
+
+  // Nothing leaked, and the server still serves normally after the corpus.
+  const home = await fetch(`${url}/`);
+  assert.equal(home.status, 200);
+  assert.equal((await home.text()).includes('DEV-TOPSECRET'), false);
 });

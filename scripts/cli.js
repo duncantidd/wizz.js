@@ -13,7 +13,7 @@ const { VERSIONS } = require('../src/compiler');
 const USAGE = `Usage:
   wizz init [directory] [--force]   Scaffold a starter project
   wizz build [input-directory] [output-directory] [--json] [--adapter <name>]
-  wizz dev [--port <n>]             Start the development server
+  wizz dev [--port <n>] [--host <addr>]
   wizz mcp [--root <dir>] [--allow-write]
                                     Serve Wizz tooling to AI agents over MCP (stdio)
   wizz update                       Update the managed installation to the latest release
@@ -102,10 +102,26 @@ function parseCommand(argv) {
   if (command === 'dev') {
     let port = 3000;
     let portSeen = false;
+    let host = null;
+    let hostSeen = false;
     const remainingArgs = [];
     for (let i = 0; i < positional.length; i++) {
       const arg = positional[i];
-      if (arg === '--port') {
+      if (arg === '--host' || arg.startsWith('--host=')) {
+        if (hostSeen) {
+          throw new Error('Dev accepts at most one --host flag.\n\n' + USAGE);
+        }
+        hostSeen = true;
+        const hostStr = arg === '--host' ? positional[i + 1] : arg.slice('--host='.length);
+        if (arg === '--host') i++;
+        // A hostname never starts with '-', so a leading dash means the
+        // next flag was consumed as the value (the same discipline --port
+        // applies to its digit check).
+        if (hostStr === undefined || hostStr === '' || hostStr.startsWith('-')) {
+          throw new Error('Dev --host requires a host name.\n\n' + USAGE);
+        }
+        host = hostStr;
+      } else if (arg === '--port') {
         if (i + 1 >= positional.length) {
           throw new Error('Dev --port requires a valid port number.\n\n' + USAGE);
         }
@@ -138,7 +154,7 @@ function parseCommand(argv) {
     if (remainingArgs.length > 0) {
       throw new Error('Dev does not accept arguments.\n\n' + USAGE);
     }
-    return { command: 'dev', argumentsList: [], json: false, force: false, port, adapter: null };
+    return { command: 'dev', argumentsList: [], json: false, force: false, port, host, adapter: null };
   }
 
   if (command === 'mcp') {
@@ -196,7 +212,7 @@ function parseCommand(argv) {
 }
 
 function runCli(argv, dependencies = {}) {
-  const { command, argumentsList, json, force, port, adapter, root, allowWrite } = parseCommand(argv);
+  const { command, argumentsList, json, force, port, host, adapter, root, allowWrite } = parseCommand(argv);
   const build = dependencies.build || buildProject;
   const startDev = dependencies.startDev || startDevelopmentServer;
   const startMcp = dependencies.startMcp || startMcpServer;
@@ -273,7 +289,7 @@ function runCli(argv, dependencies = {}) {
     );
   }
 
-  const developmentServer = startDev({ projectDirectory: process.cwd(), port, logger });
+  const developmentServer = startDev({ projectDirectory: process.cwd(), port, host, logger });
   return developmentServer.listen().then(
     () => 0,
     (error) => {

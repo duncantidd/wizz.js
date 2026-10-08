@@ -7,6 +7,14 @@ set -euo pipefail
 
 # Overridable for testing the latest-release failure paths (WIZZ_INSTALL_REPOSITORY).
 repository="${WIZZ_INSTALL_REPOSITORY:-duncantidd/wizz.js}"
+# The API base is overridable for the same reason: a local test server can
+# stand in for api.github.com offline. It doubles as the trust anchor for
+# the download checks below — an asset URL may only be plain http:// when it
+# points at this very host (mirroring releaseAssets.js validatedDownloadUrl).
+api_base="${WIZZ_INSTALL_API_BASE:-https://api.github.com}"
+# Host (with port) extracted once — the same-host exception below is
+# host:port-exact, matching the URL .host comparison releaseAssets.js makes.
+api_host=$(printf '%s' "$api_base" | sed -E 's#^[a-zA-Z]+://([^/?#]+).*#\1#')
 # The $0 fallback keeps piped invocations (curl ... | bash) working: stdin
 # scripts have no BASH_SOURCE, and under `set -u` referencing it would abort.
 # source_directory only matters for --local installs from a working tree.
@@ -89,12 +97,15 @@ else
     printf 'Resolving the latest Wizz release from GitHub...\n'
     # curl -f delivers no body on a 4xx, so the lookup failure must be caught
     # here rather than left to crash the JSON parser below.
-    if ! api_response=$(curl -fsSL "https://api.github.com/repos/$repository/releases/latest"); then
-      printf 'Could not resolve the latest Wizz release from https://api.github.com/repos/%s.\n' "$repository" >&2
+    if ! api_response=$(curl -fsSL --max-redirs 5 "$api_base/repos/$repository/releases/latest"); then
+      printf 'Could not resolve the latest Wizz release from %s/repos/%s.\n' "$api_base" "$repository" >&2
       printf 'The repository may be private or have no published releases yet; pass a release tarball path or URL, or run with --local.\n' >&2
       exit 1
     fi
-    asset_url=$(printf '%s' "$api_response" | node -e '
+    # The parser prints two lines: the asset URL and its published sha256
+    # digest (empty when the release predates the digest field). Splitting
+    # here keeps one Node invocation for both values.
+    asset_response=$(printf '%s' "$api_response" | node -e '
       let payload = "";
       process.stdin.on("data", (chunk) => { payload += chunk; });
       process.stdin.on("end", () => {
@@ -115,10 +126,33 @@ else
           process.exit(1);
         }
         console.log(asset.browser_download_url);
+        console.log(typeof asset.digest === "string" ? asset.digest : "");
       });
     ')
+    asset_url=$(printf '%s\n' "$asset_response" | sed -n '1p')
+    asset_digest=$(printf '%s\n' "$asset_response" | sed -n '2p')
+    # The URL choke point releaseAssets.js enforces on the Node path, mirrored:
+    # an asset URL must be https, or plain http on the API host itself (the
+    # test seam). A hostile API response can never downgrade the download to
+    # http:// on a third-party host.
+    case "$asset_url" in
+      https://*) ;;
+      http://"$api_host"/*) ;;
+      *)
+        printf 'Refusing to download the release tarball from %s: only https:// URLs are allowed.\n' "$asset_url" >&2
+        exit 1
+        ;;
+    esac
   elif [ "$install_mode" = "url" ]; then
     asset_url="$tarball_source"
+    case "$asset_url" in
+      https://*) ;;
+      http://"$api_host"/*) ;;
+      *)
+        printf 'Refusing to download a tarball from %s: only https:// URLs are allowed.\n' "$asset_url" >&2
+        exit 1
+        ;;
+    esac
   else
     if [ ! -f "$tarball_source" ]; then
       printf 'Tarball not found: %s\n' "$tarball_source" >&2
@@ -128,8 +162,54 @@ else
   fi
 
   if [ -n "${asset_url:-}" ]; then
-    if ! curl -fsSL "$asset_url" -o "$staging_directory/wizz.tgz"; then
+    # Transport hardening, mirroring downloadToFile's manual-redirect rules:
+    # https-only hops when the asset URL is https (so a redirect can never
+    # walk the tarball through an http:// hop), a hard redirect cap, and a
+    # final-URL re-check after the transfer (curl's own checks do not cover
+    # the URL actually served from).
+    download_flags=(-f -s -S --location --max-redirs 5)
+    case "$asset_url" in
+      https://*) download_flags+=(--proto '=https') ;;
+    esac
+    if ! effective_url=$(curl "${download_flags[@]}" -w '%{url_effective}' -o "$staging_directory/wizz.tgz" "$asset_url"); then
       printf 'Could not download the release tarball from %s.\n' "$asset_url" >&2
+      exit 1
+    fi
+    case "$effective_url" in
+      https://*) ;;
+      http://"$api_host"/*) ;;
+      *)
+        printf 'Refusing to install a tarball served from %s: only https:// URLs are allowed.\n' "$effective_url" >&2
+        exit 1
+        ;;
+    esac
+
+    # Integrity gate, fail closed (the extracted tree is what the wizz
+    # launcher executes). The digest comes from the API response, which is
+    # reached over TLS, so it anchors the download against tampering,
+    # truncation, and hostile redirects; an attacker who controls the API
+    # response itself is beyond this check's reach. --latest requires the
+    # digest; an explicit URL (no published digest to compare) relies on
+    # the transport checks above.
+    if [ -n "${asset_digest:-}" ]; then
+      if ! printf '%s' "$asset_digest" | grep -Eq '^sha256:[0-9a-fA-F]{64}$'; then
+        printf 'Refusing to install: the release publishes an unsupported digest (%s).\n' "$asset_digest" >&2
+        exit 1
+      fi
+      if command -v sha256sum >/dev/null 2>&1; then
+        actual_digest="sha256:$(sha256sum "$staging_directory/wizz.tgz" | cut -d ' ' -f 1)"
+      elif command -v shasum >/dev/null 2>&1; then
+        actual_digest="sha256:$(shasum -a 256 "$staging_directory/wizz.tgz" | cut -d ' ' -f 1)"
+      else
+        printf 'Verifying the release tarball requires sha256sum or shasum. Install one and run this installer again.\n' >&2
+        exit 1
+      fi
+      if [ "$actual_digest" != "$asset_digest" ]; then
+        printf 'The integrity check for the release tarball failed: the downloaded bytes do not match the digest the release published. The download may be tampered with, truncated, or stale; retry or download the release manually.\n' >&2
+        exit 1
+      fi
+    elif [ "$install_mode" = "latest" ]; then
+      printf 'The latest release carries no sha256 digest for the tarball; refusing to install unverified code. Download the release manually and pass the tarball path.\n' >&2
       exit 1
     fi
   fi

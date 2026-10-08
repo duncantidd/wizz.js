@@ -1526,3 +1526,101 @@ test('the node adapter host fails fast with guidance instead of a stack trace', 
   assert.equal(invalidPort.code, 1);
   assert.match(invalidPort.stderr, /Invalid PORT/);
 });
+
+// The audit-pinned traversal corpus against the generated host: the lexical
+// resolve+relative guard holds for encoded dots, backslashes, drive letters,
+// double slashes, and NUL bytes, and a symlink planted inside dist pointing
+// outside cannot leak a byte through the (lexically blind) prefix check —
+// the realpath re-check answers for it. Every vector must end 400/404 with
+// the host still serving, and a legitimate intra-dist symlink must keep
+// serving.
+test('the node adapter host blocks traversal vectors and dist symlinks', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  initProject(projectDirectory);
+
+  // A secret the guard must never leak, deliberately extension-bearing so a
+  // blocked path answers the deterministic 404, not the shell fallback. It
+  // sits OUTSIDE dist, in the project root.
+  const secretPath = path.join(projectDirectory, 'secret.txt');
+  fs.writeFileSync(secretPath, 'ADAPTER-TOPSECRET', 'utf8');
+  const distDirectory = path.join(projectDirectory, 'dist');
+
+  buildProject(
+    path.join(projectDirectory, 'src'),
+    distDirectory,
+    { log() {}, error() {} },
+    { adapter: 'node' }
+  );
+
+  // Symlink residual: the prefix check is lexical, so a link inside dist
+  // pointing at the secret (file) and at the project root (directory) must
+  // be caught by the realpath re-check instead. A legitimate intra-dist
+  // symlink must keep serving: the re-check only rejects links whose target
+  // leaves dist. Skipped where symlinks are unavailable (Windows without
+  // privileges).
+  let symlinksAvailable = true;
+  try {
+    fs.symlinkSync(secretPath, path.join(distDirectory, 'leaked.txt'));
+    fs.symlinkSync(projectDirectory, path.join(distDirectory, 'leaked-dir'));
+    fs.symlinkSync(path.join(distDirectory, 'index.html'), path.join(distDirectory, 'alias.html'));
+  } catch {
+    symlinksAvailable = false;
+  }
+
+  const { child, port } = await startAdapterHost(t, distDirectory);
+  const url = `http://127.0.0.1:${port}`;
+
+  try {
+    // Encoded dots and slashes: resolve+relative places the target outside
+    // dist, and the extension answers 404 (never the shell fallback). The
+    // slashes are encoded too — with real separators the URL parser itself
+    // consumes the %2e%2e segments (landing on a legitimate in-dist path)
+    // before the host ever decodes.
+    assert.equal((await fetch(`${url}/%2e%2e%2f%2e%2e%2fpackage.json`)).status, 404);
+    assert.equal((await fetch(`${url}/..%2f..%2fsecret.txt`)).status, 404);
+    assert.equal((await fetch(`${url}/%2e%2e%2f%2e%2e%2fsecret.txt`)).status, 404);
+
+    // Backslashes: a literal filename on POSIX, a caught '..\' prefix on
+    // Windows — either way nothing is served.
+    assert.equal((await fetch(`${url}/..%5c..%5csecret.txt`)).status, 404);
+    assert.equal((await fetch(`${url}/%2e%2e%5c%2e%2e%5csecret.txt`)).status, 404);
+
+    // Drive-letter/absolute forms: '.'+requestPath stays relative on POSIX,
+    // and the isAbsolute/..-prefix checks catch a resolved absolute on
+    // Windows.
+    assert.equal((await fetch(`${url}/C:%5cwindows%5cwin.ini`)).status, 404);
+    assert.equal((await fetch(`${url}/%2f%2e%2e%2f%2e%2e%2fsecret.txt`)).status, 404);
+
+    // Leading double slash: parsed as a path, never as a protocol-relative
+    // authority, so resolve('.//..') climbs out lexically and the guard
+    // blocks it; sibling-prefix forms resolve under dist and find nothing.
+    assert.equal((await fetch(`${url}//%2e%2e%2f%2e%2e%2fsecret.txt`)).status, 404);
+    assert.equal((await fetch(`${url}//etc/passwd.txt`)).status, 404);
+
+    // NUL bytes: rejected deterministically as a malformed request. (The URL
+    // parser itself consumes standalone %2e%2e segments before the host
+    // decodes, so a combined vector keeps the traversal inside one segment.)
+    assert.equal((await fetch(`${url}/foo%00bar.txt`)).status, 400);
+    assert.equal((await fetch(`${url}/a%00b/%2e%2e%2fsecret.txt`)).status, 400);
+
+    // The symlink residual: the lexical guard alone would stream the secret
+    // through the dist-internal link.
+    if (symlinksAvailable) {
+      assert.equal((await fetch(`${url}/leaked.txt`)).status, 404);
+      assert.equal((await fetch(`${url}/leaked-dir/package.json`)).status, 404);
+
+      // Legit intra-dist links still serve.
+      const alias = await fetch(`${url}/alias.html`);
+      assert.equal(alias.status, 200);
+      assert.match(await alias.text(), /<div id="app"><\/div>/);
+    }
+
+    // Nothing leaked, and the host still serves normally after the corpus.
+    const shell = await fetch(`${url}/`);
+    assert.equal(shell.status, 200);
+    assert.equal((await shell.text()).includes('ADAPTER-TOPSECRET'), false);
+  } finally {
+    child.kill();
+  }
+});
