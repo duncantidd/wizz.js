@@ -519,7 +519,7 @@ wizz init [directory] [--force]
     components, a server API handler). Existing files are never overwritten.
 
 wizz dev [--port <n>] [--host <addr>]
-    Build src into dist, serve at http://localhost:3000 (or --port), watch
+    Build src into dist, serve at http://127.0.0.1:3000 (or --port), watch
     .wizz sources, and live-reload connected tabs over a dev-only SSE
     channel (/_wizz/reload). Requires an index.html document shell in the
     project directory and fails cleanly when the port is taken. Server-

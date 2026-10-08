@@ -564,12 +564,15 @@ function startDevelopmentServer(options = {}) {
         const onListening = () => {
           server.removeListener('error', onError);
           const address = server.address();
-          // Loopback binds read as localhost in the banner; anything else
-          // shows the real interface address, so a remote opt-in is visible.
-          const isLoopback = address.address === '127.0.0.1' || address.address === '::1';
-          const displayHost = isLoopback
-            ? 'localhost'
-            : (address.address.includes(':') ? `[${address.address}]` : address.address);
+          // The advertised URL must be exactly dialable, so it names the
+          // bound address, never "localhost": on hosts where localhost
+          // resolves to ::1 first (Linux CI images do), a strict client
+          // such as node's fetch would fail to reach an IPv4 loopback bind
+          // through it. Browsers try both stacks for localhost, but the
+          // banner should not depend on that.
+          const displayHost = address.address.includes(':')
+            ? `[${address.address}]`
+            : address.address;
           const url = `http://${displayHost}:${address.port}`;
           logger.log(`Wizz development server running at ${url}`);
           resolve(url);
