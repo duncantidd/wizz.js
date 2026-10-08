@@ -14,7 +14,8 @@ const {
   createToolRegistry,
   looksLikeWizzProject,
   realpathInsideRoot,
-  resolveInsideRoot
+  resolveInsideRoot,
+  writeComponentFile
 } = require('./mcpTools');
 
 const TOOL_NAMES = [
@@ -212,7 +213,7 @@ test('language_contract documents the version triple, language surface, and diag
   const { text } = await registry.call('language_contract', {});
   // The literal triple is pinned deliberately: a version bump fails this
   // test until the contract text has been reviewed against the compiler.
-  assert.match(text, /compiler 1\.16\.0, syntax 1\.4\.1, output 1\.8\.2/);
+  assert.match(text, /compiler 1\.17\.0, syntax 1\.4\.1, output 1\.8\.2/);
   assert.match(text, /export let/);
   assert.match(text, /onMount/);
   assert.match(text, /onDestroy/);
@@ -457,4 +458,95 @@ test('TOOL_DEFINITIONS is frozen and the write tool requires its fields', () => 
   });
   const write = TOOL_DEFINITIONS.find((tool) => tool.name === 'create_or_update_component');
   assert.deepEqual(write.inputSchema.required, ['path', 'source']);
+});
+test('component_diagnostics caps inline source at the compile limit before the parser runs', async () => {
+  const root = createProjectFixture();
+  const registry = createRegistry(root, false);
+  await assert.rejects(
+    () => registry.call('component_diagnostics', { source: 'x'.repeat(MAX_SOURCE_BYTES + 1) }),
+    (error) => error instanceof ToolExecutionError && /byte compile limit/.test(error.message)
+  );
+  // The boundary value itself is accepted (the cap is exclusive).
+  const boundarySource = '<main><p>x</p></main>' + 'x'.repeat(MAX_SOURCE_BYTES - '<main><p>x</p></main>'.length);
+  assert.equal(Buffer.byteLength(boundarySource, 'utf8'), MAX_SOURCE_BYTES);
+  await registry.call('component_diagnostics', { source: boundarySource });
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('component_diagnostics reports oversized project files as records in all and path modes', async () => {
+  const root = createProjectFixture();
+  const registry = createRegistry(root, false);
+  fs.writeFileSync(path.join(root, 'src', 'Big.wizz'), '<main><p>x</p></main>' + 'x'.repeat(MAX_SOURCE_BYTES), 'utf8');
+  fs.writeFileSync(path.join(root, 'src', 'Small.wizz'), '<main><p>small</p></main>', 'utf8');
+
+  const all = await registry.call('component_diagnostics', { all: true });
+  const bigEntry = all.structured.files.find((entry) => entry.file === 'Big.wizz');
+  const smallEntry = all.structured.files.find((entry) => entry.file === 'Small.wizz');
+  assert.equal(bigEntry.ok, false);
+  assert.match(bigEntry.diagnostics[0].message, /byte compile limit/);
+  assert.equal(smallEntry.ok, true, 'the oversized file must not stop the remaining diagnostics');
+  assert.equal(all.structured.ok, false);
+
+  const single = await registry.call('component_diagnostics', { path: 'src/Big.wizz' });
+  assert.equal(single.structured.ok, false);
+  assert.match(single.structured.diagnostics[0].message, /byte compile limit/);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('writeComponentFile writes through an O_NOFOLLOW fd on the verified parent', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-write-fd-'));
+  const targetDirectory = path.join(root, 'src', 'pages');
+  fs.mkdirSync(targetDirectory, { recursive: true });
+  const target = path.join(targetDirectory, 'New.wizz');
+  const expectedRealParent = fs.realpathSync(targetDirectory);
+
+  const created = writeComponentFile(target, '<main><p>x</p></main>', expectedRealParent);
+  assert.deepEqual(created, { ok: true });
+  assert.equal(fs.readFileSync(target, 'utf8'), '<main><p>x</p></main>');
+
+  const updated = writeComponentFile(target, '<main><p>y</p></main>', expectedRealParent);
+  assert.deepEqual(updated, { ok: true });
+  assert.equal(fs.readFileSync(target, 'utf8'), '<main><p>y</p></main>');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('writeComponentFile refuses a symlink planted at the target instead of following it', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-write-fd-'));
+  const targetDirectory = path.join(root, 'src');
+  fs.mkdirSync(targetDirectory, { recursive: true });
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-write-outside-'));
+  fs.writeFileSync(path.join(outside, 'victim.wizz'), 'original', 'utf8');
+  const target = path.join(targetDirectory, 'link.wizz');
+  fs.symlinkSync(path.join(outside, 'victim.wizz'), target);
+  const expectedRealParent = fs.realpathSync(targetDirectory);
+
+  const result = writeComponentFile(target, '<main><p>x</p></main>', expectedRealParent);
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /symbolic link/);
+  assert.equal(fs.readFileSync(path.join(outside, 'victim.wizz'), 'utf8'), 'original');
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(outside, { recursive: true, force: true });
+});
+
+test('writeComponentFile refuses an ancestor directory swapped for a symlink after the checks', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-write-fd-'));
+  const targetDirectory = path.join(root, 'src', 'components');
+  fs.mkdirSync(targetDirectory, { recursive: true });
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-write-outside-'));
+  fs.writeFileSync(path.join(outside, 'victim.wizz'), 'original', 'utf8');
+
+  // The guard computed this realpath while src/components was still a real
+  // directory inside the root; the attacker then swaps it for a symlink
+  // pointing outside. The write must refuse, and nothing may land outside.
+  const staleExpectedRealParent = fs.realpathSync(targetDirectory);
+  fs.rmSync(targetDirectory, { recursive: true });
+  fs.symlinkSync(outside, targetDirectory);
+
+  const result = writeComponentFile(path.join(targetDirectory, 'New.wizz'), '<main><p>x</p></main>', staleExpectedRealParent);
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /target directory changed/);
+  assert.equal(fs.readFileSync(path.join(outside, 'victim.wizz'), 'utf8'), 'original');
+  assert.ok(!fs.existsSync(path.join(outside, 'New.wizz')));
+  fs.rmSync(root, { recursive: true, force: true });
+  fs.rmSync(outside, { recursive: true, force: true });
 });

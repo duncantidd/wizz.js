@@ -25,6 +25,18 @@ const PLAIN_STYLE_ELEMENT_NAME = 'style';
 // never stored. `listing` is obsolete but follows the same rule.
 const NEWLINE_TRIM_ELEMENTS = new Set(['pre', 'textarea', 'listing']);
 
+// A nesting budget for the element/block stack. The parse loop itself is
+// iterative, but the AST it produces is walked recursively by every later
+// stage (integration, generation, hydration analysis), so an input with
+// tens of thousands of unclosed tags would not fail here — it would push
+// the downstream recursion past the JS stack limit and turn a bad file
+// into a crash-shaped failure. Real markup nests a few dozen deep; 256 is
+// far beyond authoring need and bounds the worst case to a located
+// diagnostic (WIZZ-P054). The parse stage runs on untrusted component
+// source (agent tooling, editor integrations, CI), so the guard is a
+// resource limit, not just an error-message improvement.
+const MAX_TEMPLATE_DEPTH = 256;
+
 function parseTemplate(tokens) {
   // The root of our AST
   const root = {
@@ -40,6 +52,15 @@ function parseTemplate(tokens) {
   let dropNewlineAtIndex = -1;
 
   const stack = [root];
+  // Every open element or block goes through this helper so the nesting
+  // budget above covers the whole stack, not just one push site.
+  const pushNode = (node) => {
+    if (stack.length >= MAX_TEMPLATE_DEPTH) {
+      const at = `${node.loc.start.line}:${node.loc.start.column}`;
+      throw compilerDiagnostic(CODES.parser.templateDepthExceeded, `Template nesting exceeds the maximum depth of ${MAX_TEMPLATE_DEPTH} at ${at}.`);
+    }
+    stack.push(node);
+  };
   // Nesting depth of open <wizz:head> blocks. Head content validation needs to
   // know the context is a head block even when the current parent is one of
   // its elements (e.g. <title>).
@@ -65,7 +86,7 @@ function parseTemplate(tokens) {
           }
           const headBlock = { type: 'HeadBlock', name: 'wizz:head', children: [], loc: token.loc };
           currentParent.children.push(headBlock);
-          stack.push(headBlock);
+          pushNode(headBlock);
           headDepth += 1;
           break;
         }
@@ -81,7 +102,7 @@ function parseTemplate(tokens) {
           }
           const styleBlock = { type: 'StyleBlock', name: 'wizz:style', value: '', loc: token.loc };
           currentParent.children.push(styleBlock);
-          stack.push(styleBlock);
+          pushNode(styleBlock);
           break;
         }
         if (currentParent.type === 'StyleBlock') {
@@ -105,7 +126,7 @@ function parseTemplate(tokens) {
             loc: token.loc
           };
           currentParent.children.push(element);
-          if (!HEAD_VOID_ELEMENTS.has(token.name)) stack.push(element);
+          if (!HEAD_VOID_ELEMENTS.has(token.name)) pushNode(element);
           break;
         }
         if (token.name === PLAIN_STYLE_ELEMENT_NAME) {
@@ -119,7 +140,7 @@ function parseTemplate(tokens) {
           loc: token.loc // Preserving your excellent source mapping
         };
         currentParent.children.push(element);
-        stack.push(element); // This element is now the current parent
+        pushNode(element); // This element is now the current parent
         if (NEWLINE_TRIM_ELEMENTS.has(token.name)) dropNewlineAtIndex = i + 1;
         break;
       }
@@ -264,7 +285,7 @@ function parseTemplate(tokens) {
         if (directive.startsWith('#if ')) {
           const block = { type: 'IfBlock', test: directive.slice(4).trim(), consequent: [], alternate: null, children: [], loc: token.loc };
           currentParent.children.push(block);
-          stack.push(block);
+          pushNode(block);
           block.children = block.consequent;
           break;
         }
@@ -285,7 +306,7 @@ function parseTemplate(tokens) {
           const [, collection, item, key] = match;
           const block = { type: 'EachBlock', collection, item, key: key ?? null, children: [], loc: token.loc };
           currentParent.children.push(block);
-          stack.push(block);
+          pushNode(block);
           break;
         }
         if (directive === '/each') {

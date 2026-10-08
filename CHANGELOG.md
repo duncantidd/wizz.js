@@ -11,6 +11,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed — MCP Server Hardening (TM-02, TM-03)
+
+#### Fixed
+
+- Closed the check-then-use gap (CWE-367) in `create_or_update_component`: the containment checks (`resolveInsideRoot`, the final-segment lstat, `realpathInsideRoot`) and the old `mkdirSync` + `writeFileSync` on the lexical path were not atomic, so a local attacker with write access to the project tree could swap an ancestor directory for a symlink after the checks and redirect agent-controlled bytes outside the root (`scripts/mcpTools.js`). The write now lands through `writeComponentFile`: the target is opened with `O_NOFOLLOW|O_CREAT|O_TRUNC|O_WRONLY` (a final segment planted as a symlink fails with ELOOP and is refused, not followed), the parent directory is re-verified against its verified realpath immediately before *and* after the open, an lstat/fstat dev+ino comparison proves the path still names the opened inode, and the bytes travel through the fd — so a swap after verification cannot redirect them. Documented residual window: an attacker who wins the race between the final parent check and the open can cause an *empty* file (O_CREAT) outside the root; no content ever follows. Every step requires `--allow-write` plus a local writer racing the tool in the same tree. Tests drive the happy path, the planted final-segment symlink (ELOOP refusal, target untouched), and the ancestor-swap race deterministically (`scripts/mcpTools.test.js`).
+- Bounded the in-process parser work an agent can trigger without `--allow-write` (CWE-400): `component_diagnostics`' inline `source` branch — the one compile path with no size bound below the protocol's 2 MiB message cap — now enforces the same 256 KiB `MAX_SOURCE_BYTES` cap as the write gate before the parser runs, and both `all` and `path` diagnostics modes report an oversized file as an error record (with the remaining files still diagnosed) instead of compiling it (`scripts/mcpTools.js`, `scripts/mcpTools.test.js`).
+
+### Changed — Parse-Stage Resource Budgets (compiler 1.16.0 → 1.17.0)
+
+#### Changed
+
+- The Pratt expression parser carries a recursion-depth budget (`MAX_EXPRESSION_DEPTH`, 128): every nested parenthesized group — or infix right-hand recursion — costs one JS stack frame, and a flood of unbalanced `(` previously exhausted the stack with a parser-internal RangeError. It now answers a located diagnostic (`WIZZ-P053`) with the token the parser refused to descend past (`src/compiler/parser/prattParser.js`, `src/compiler/parser/expressionParser.test.js`).
+- The template parser carries a nesting budget (`MAX_TEMPLATE_DEPTH`, 256): the parse loop is iterative, but the AST it produces is walked recursively by every later stage, so tens of thousands of unclosed tags previously pushed the downstream recursion past the stack limit. It now answers a located diagnostic (`WIZZ-P054`) (`src/compiler/parser/templateParser.js`, `src/compiler/parser/templateParser.test.js`).
+- Both budgets are additive catalog entries (`src/compiler/diagnostics.js`) and far beyond authoring need — no accepted syntax changes meaning and no generated module changes, so syntax (1.4.1) and output (1.8.2) hold while the compiler moves to 1.17.0 (`src/compiler/version.js`, `src/compiler/version.test.js`, `package.json`). The parse stage compiles untrusted component source (agent tooling, editor integrations, CI), so the guards are resource limits, not just error-message improvements.
+
 ### Changed — Loopback Binding for Development Servers
 
 #### Changed
