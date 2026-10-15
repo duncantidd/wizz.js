@@ -85,9 +85,14 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // project structure, language contract, diagnostics, the build envelope,
   // and the dev workflow to AI agents over stdio JSON-RPC. An additive
   // CLI/tooling surface; no compiler source, parser, or generated-module
-  // changes, so syntax and output hold.
+  // changes, so syntax and output hold. compiler 1.17.0: parse-stage
+  // resource hardening — a recursion-depth budget in the Pratt expression
+  // parser and a nesting budget in the template parser (new WIZZ-P053 /
+  // WIZZ-P054 codes) turn pathological inputs into located diagnostics
+  // instead of stack overflows. No accepted syntax changes meaning and no
+  // generated module changes, so syntax and output hold.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.16.0',
+    compiler: '1.17.0',
     syntax: '1.4.1',
     output: '1.8.2'
   });

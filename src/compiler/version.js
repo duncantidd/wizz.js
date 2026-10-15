@@ -71,12 +71,20 @@
 // with no compiler source, parser, or generated-module changes, so syntax
 // and output hold.
 //
+// compiler 1.17.0: resource-hardening of the parse stage, which compiles
+// untrusted component source (agent tooling, editor integrations, CI). The
+// Pratt expression parser gains a recursion-depth budget and the template
+// parser a nesting budget (WIZZ-P053 / WIZZ-P054), turning pathological
+// inputs from stack-overflow crashes into located diagnostics. No accepted
+// syntax changes meaning and no generated module changes, so syntax and
+// output hold; the new codes are additive catalog entries.
+//
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.16.0',
+  compiler: '1.17.0',
   syntax: '1.4.1',
   output: '1.8.2'
 });

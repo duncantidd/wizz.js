@@ -78,3 +78,29 @@ test('rejects incomplete and trailing expression tokens', () => {
   assert.throws(() => parseExpression(lexExpression('user.')), /Expected property name after '\.' at 1:6/);
   assert.throws(() => parseExpression(lexExpression('(1 + 2')), /Expected closing '\)' at 1:7/);
 });
+test('bounds expression recursion with a located depth diagnostic', () => {
+  // Just inside the budget: 127 nested groups parse cleanly.
+  assert.doesNotThrow(() => parseExpression(lexExpression(`${'('.repeat(127)}1${')'.repeat(127)}`)));
+
+  // One deeper exceeds the budget with the stable code, located at the
+  // token the parser refused to descend past (128 '(' + the literal).
+  let error;
+  try {
+    parseExpression(lexExpression(`${'('.repeat(128)}1${')'.repeat(128)}`));
+  } catch (caught) {
+    error = caught;
+  }
+  assert.match(error?.message || '', /Expression nesting exceeds the maximum depth of 128 at 1:129/);
+  assert.equal(error.code, 'WIZZ-P053');
+
+  // The crash-shaped form — a flood of unbalanced parens whose only
+  // purpose is stack exhaustion — is a diagnostic, not a RangeError.
+  let floodError;
+  try {
+    parseExpression(lexExpression('('.repeat(100000)));
+  } catch (caught) {
+    floodError = caught;
+  }
+  assert.match(floodError?.message || '', /Expression nesting exceeds the maximum depth of 128/);
+  assert.equal(floodError.code, 'WIZZ-P053');
+});

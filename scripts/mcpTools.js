@@ -18,7 +18,11 @@
 // 2. Write hardening: writes require the explicit startup `--allow-write`
 //    opt-in, target only `.wizz` files, refuse managed trees
 //    (`dist/`, `node_modules/`, `.git/`, `release/`, `vscode-extension/`),
-//    refuse symbolic-link targets, and cap source size.
+//    refuse symbolic-link targets, cap source size, and land through an
+//    O_NOFOLLOW file descriptor with the parent directory re-verified
+//    against its realpath immediately before and after the open — so a
+//    local attacker racing the tool cannot redirect the write through an
+//    ancestor symlink planted after the containment checks (CWE-367).
 // 3. Compile gate: a proposed component source is compiled in collect mode
 //    before anything touches the disk; a source with error-severity
 //    diagnostics is refused with the records echoed and no write.
@@ -42,9 +46,13 @@ const { ToolExecutionError } = require('./mcpProtocol');
 const DEFAULT_INPUT_DIRECTORY = 'src';
 const DEFAULT_OUTPUT_DIRECTORY = 'dist';
 
-// A write tool input cap: a component source larger than this is almost
-// certainly a mistake (an entire page dump, a binary), and refusing it keeps
-// one write call from materializing an arbitrary-size file.
+// A compile-source cap shared by every path that compiles agent- or
+// project-supplied source: the write tool (a component larger than this is
+// almost certainly a mistake — an entire page dump, a binary) and the
+// component_diagnostics tool, whose inline branch otherwise accepts an
+// unbounded string up to the protocol's 2 MiB message cap and compiles it
+// synchronously on every call. Depth budgets in the parser bound
+// recursion; this bounds raw work per call.
 const MAX_SOURCE_BYTES = 256 * 1024;
 
 // First-segment denylist for the write tool: these project-root trees are
@@ -131,6 +139,83 @@ function realpathInsideRoot(root, absolutePath) {
     return { ok: false, reason: `Path resolves outside the project root through the filesystem: ${absolutePath}` };
   }
   return { ok: true, realPath };
+}
+
+/**
+ * The race-hardened component write. The guard checks above
+ * (resolveInsideRoot, the lstat symlink refusal, realpathInsideRoot)
+ * establish containment at a point in time; a local attacker who can write
+ * to the project tree can swap an ancestor directory for a symlink after
+ * those checks and before the write lands (the classic check-then-use gap,
+ * CWE-367) — a plain `writeFileSync` on the lexical path would happily
+ * follow the planted symlink out of the root. This closer narrows the race
+ * to a window where nothing agent-controlled can escape:
+ *
+ * 1. The target is opened with O_NOFOLLOW, so the final segment can never
+ *    be a symlink at open time — one planted between the checks and the
+ *    open fails with ELOOP and is refused, not followed.
+ * 2. The parent directory is re-realpath'd immediately before the open and
+ *    re-verified after it: an ancestor swap that happened before the open
+ *    shows up in the second check, and the fd is closed with nothing
+ *    written.
+ * 3. The bytes travel through the fd, never the path, so a swap after
+ *    verification cannot redirect them; an lstat/fstat dev+ino comparison
+ *    additionally proves the path still names the opened inode.
+ *
+ * Residual window (documented, accepted): an attacker who wins the race
+ * between the final parent realpath and the open can cause an EMPTY file
+ * to be created (O_CREAT) outside the root through a planted ancestor
+ * symlink. No content ever follows — the write goes to the verified fd —
+ * and every step requires --allow-write plus a local writer racing the
+ * tool in the same tree.
+ * @param {string} absolutePath - The lexically-contained target path.
+ * @param {string} source - The compile-gated component source.
+ * @param {string} expectedRealParent - The realpath of the parent directory
+ *   verified immediately before this function is called.
+ * @returns {{ ok: true } | { ok: false, reason: string }}
+ */
+function writeComponentFile(absolutePath, source, expectedRealParent) {
+  // O_NOFOLLOW is platform-dependent (0 where unavailable), so the flag is
+  // ORed conditionally rather than assumed.
+  const openFlags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC |
+    (fs.constants.O_NOFOLLOW || 0);
+  let fd;
+  try {
+    // Re-verify the parent immediately before the open, narrowing the gap
+    // the post-open check below has to cover.
+    const realParentBefore = fs.realpathSync(path.dirname(absolutePath));
+    if (realParentBefore !== expectedRealParent) {
+      return { ok: false, reason: 'The target directory changed while the write was prepared; refusing to write.' };
+    }
+    try {
+      fd = fs.openSync(absolutePath, openFlags, 0o644);
+    } catch (error) {
+      if (error.code === 'ELOOP') {
+        return { ok: false, reason: 'The write target became a symbolic link between the checks and the write; refusing to follow it.' };
+      }
+      throw error;
+    }
+    // The open resolved through the current tree: prove the parent still
+    // realpaths to the verified location and that the path still names the
+    // opened inode before a single byte moves.
+    const realParentAfter = fs.realpathSync(path.dirname(absolutePath));
+    if (realParentAfter !== expectedRealParent) {
+      return { ok: false, reason: 'The target directory changed while the write was prepared; refusing to write.' };
+    }
+    const fdStats = fs.fstatSync(fd);
+    const pathStats = fs.lstatSync(absolutePath);
+    if (fdStats.dev !== pathStats.dev || fdStats.ino !== pathStats.ino) {
+      return { ok: false, reason: 'The target file changed while the write was prepared; refusing to write.' };
+    }
+    fs.writeSync(fd, source, null, 'utf8');
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, reason: `The write failed: ${error.message}` };
+  } finally {
+    if (fd !== undefined) {
+      try { fs.closeSync(fd); } catch { /* the fd is best-effort closed */ }
+    }
+  }
 }
 
 /**
@@ -352,6 +437,18 @@ async function componentDiagnosticsHandler(args, { root }) {
           });
           continue;
         }
+        // The same compile cap as the write path: an oversized file is
+        // reported as an error record instead of being compiled, so one
+        // pathological file cannot turn this call into sustained CPU work
+        // while the remaining files still get their diagnostics.
+        if (Buffer.byteLength(source, 'utf8') > MAX_SOURCE_BYTES) {
+          files.push({
+            file: relativePosix,
+            ok: false,
+            diagnostics: [{ code: null, severity: 'error', message: `Source exceeds the ${MAX_SOURCE_BYTES} byte compile limit; refusing to compile it in-process.`, file: relativePosix, line: null, column: null }]
+          });
+          continue;
+        }
         const gate = compileGate(source, relativePosix);
         files.push({ file: relativePosix, ok: gate.ok, diagnostics: gate.diagnostics });
       }
@@ -381,6 +478,14 @@ async function componentDiagnosticsHandler(args, { root }) {
     if (typeof source !== 'string') {
       throw new ToolExecutionError('source must be a string.');
     }
+    // The inline branch is the one path with no transport-side size bound
+    // below the protocol's 2 MiB message cap, and it compiles synchronously
+    // in this process on every call: enforce the same source cap as the
+    // write tool before the parser ever sees the text.
+    const sourceBytes = Buffer.byteLength(source, 'utf8');
+    if (sourceBytes > MAX_SOURCE_BYTES) {
+      throw new ToolExecutionError(`Inline source exceeds the ${MAX_SOURCE_BYTES} byte compile limit (${sourceBytes} bytes).`);
+    }
     // An optional path label qualifies diagnostic locations; it is a label,
     // not a file read, so it is not path-guarded.
     const label = args.path === undefined ? 'inline.wizz' : requireString(args.path, 'path');
@@ -397,6 +502,15 @@ async function componentDiagnosticsHandler(args, { root }) {
     throw new ToolExecutionError(`Component file not found: ${guard.relativePosix}`);
   }
   const source = fs.readFileSync(guard.absolutePath, 'utf8');
+  // Same compile cap as `all` mode: an oversized file answers as an error
+  // record rather than being compiled in-process.
+  if (Buffer.byteLength(source, 'utf8') > MAX_SOURCE_BYTES) {
+    const diagnostics = [{ code: null, severity: 'error', message: `Source exceeds the ${MAX_SOURCE_BYTES} byte compile limit; refusing to compile it in-process.`, file: guard.relativePosix, line: null, column: null }];
+    return {
+      text: `${guard.relativePosix}: 1 diagnostic(s)\n${diagnosticsText(diagnostics)}`,
+      structured: { target: guard.relativePosix, ok: false, diagnostics }
+    };
+  }
   const gate = compileGate(source, guard.relativePosix);
   return {
     text: `${guard.relativePosix}: ${gate.ok ? 'no diagnostics' : `${gate.diagnostics.length} diagnostic(s)`}\n${diagnosticsText(gate.diagnostics)}`,
@@ -625,8 +739,20 @@ async function createOrUpdateComponentHandler(args, { root, allowWrite }) {
     );
   }
 
+  // The write itself is race-hardened: the guard's containment checks and
+  // this write are not atomic, so the target is opened with O_NOFOLLOW and
+  // the parent directory is re-verified against its realpath immediately
+  // before and after the open — a planted ancestor symlink cannot redirect
+  // agent-controlled bytes out of the root. See writeComponentFile.
   fs.mkdirSync(path.dirname(guard.absolutePath), { recursive: true });
-  fs.writeFileSync(guard.absolutePath, source, 'utf8');
+  const parentGuard = realpathInsideRoot(root, path.dirname(guard.absolutePath));
+  if (!parentGuard.ok) {
+    return refusalResult('path-refused', relativePath, parentGuard.reason);
+  }
+  const write = writeComponentFile(guard.absolutePath, source, parentGuard.realPath);
+  if (!write.ok) {
+    return refusalResult('path-refused', relativePath, write.reason);
+  }
   const action = exists ? 'updated' : 'created';
   return {
     text: `${action === 'created' ? 'Created' : 'Updated'} ${guard.relativePosix}.`,
@@ -769,5 +895,6 @@ module.exports = {
   createToolRegistry,
   looksLikeWizzProject,
   realpathInsideRoot,
-  resolveInsideRoot
+  resolveInsideRoot,
+  writeComponentFile
 };
