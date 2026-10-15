@@ -484,3 +484,33 @@ test('a self-closing pre applies the trailing-text rule', () => {
 
   assert.deepEqual(childValues(ast.children[0]), ['<pre>', '  ']);
 });
+
+test('bounds template nesting with a located depth diagnostic', () => {
+  // Just inside the budget: root + main + 254 nested divs is accepted...
+  const within = '<main>' + '<div>'.repeat(254) + '</div>'.repeat(254) + '</main>';
+  assert.doesNotThrow(() => parseTemplate(tokenize(within)));
+
+  // ...and one deeper exceeds it with the stable code, located at the
+  // element that would have pushed the stack past the limit.
+  const beyond = '<main>' + '<div>'.repeat(255) + '</div>'.repeat(255) + '</main>';
+  const expectedColumn = '<main>'.length + '<div>'.length * 254 + 1;
+  let error;
+  try {
+    parseTemplate(tokenize(beyond));
+  } catch (caught) {
+    error = caught;
+  }
+  assert.match(error?.message || '', new RegExp(`Template nesting exceeds the maximum depth of 256 at 1:${expectedColumn}`));
+  assert.equal(error.code, 'WIZZ-P054');
+
+  // The crash-shaped form — unclosed tags whose only purpose is exhausting
+  // the downstream recursive AST walks — is a diagnostic, not a hang.
+  let floodError;
+  try {
+    parseTemplate(tokenize('<div>'.repeat(50000)));
+  } catch (caught) {
+    floodError = caught;
+  }
+  assert.match(floodError?.message || '', /Template nesting exceeds the maximum depth of 256/);
+  assert.equal(floodError.code, 'WIZZ-P054');
+});
