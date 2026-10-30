@@ -321,11 +321,11 @@ The output directory is created when needed. It must be different from the input
 
 The input directory must contain `App.wizz`. The build emits `dist/App.js` and copies Wizz's browser entry module to `dist/runtime/main.js`. That entry imports `App.js`, finds the `#app` mount target, and mounts the component.
 
-Keep the document shell responsible only for the mount element and entry-module load:
+`dist/` is served as the web root by `wizz dev`, the node adapter, and static hosting of the build, so keep the document shell responsible only for the mount element and loading `/runtime/main.js`:
 
 ```html
 <div id="app"></div>
-<script type="module" src="/dist/runtime/main.js"></script>
+<script type="module" src="/runtime/main.js"></script>
 ```
 
 If the document does not contain `<div id="app"></div>`, the entry module reports `Wizz could not find mount target "#app".`
