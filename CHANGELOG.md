@@ -11,6 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Docs — Application Entry Module Path (`README.md`)
+
+#### Docs
+
+- Corrected the document-shell example in the `Application Entry` section of `README.md` from `<script type="module" src="/dist/runtime/main.js"></script>` to `<script type="module" src="/runtime/main.js"></script>` and noted that `dist/` is served as the web root by `wizz dev`, the node adapter, and static hosting, matching the `wizz init` starter shell (`README.md`, `packaging.test.js`).
+
 ### Fixed — MCP Server Hardening (TM-02, TM-03)
 
 #### Fixed
