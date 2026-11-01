@@ -90,11 +90,15 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // parser and a nesting budget in the template parser (new WIZZ-P053 /
   // WIZZ-P054 codes) turn pathological inputs into located diagnostics
   // instead of stack overflows. No accepted syntax changes meaning and no
-  // generated module changes, so syntax and output hold.
+  // generated module changes, so syntax and output hold. compiler 1.17.1 /
+  // syntax 1.4.2 / output 1.8.3: inline on: handlers are instrumented like
+  // script functions, so their assignments schedule updates (output patch),
+  // and an inline handler mutating a prop fails with the read-only
+  // diagnostic WIZZ-G015 (syntax patch: enforcement of a documented rule).
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.17.0',
-    syntax: '1.4.1',
-    output: '1.8.2'
+    compiler: '1.17.1',
+    syntax: '1.4.2',
+    output: '1.8.3'
   });
 });
 
@@ -111,7 +115,7 @@ test('the version table is frozen so callers cannot mutate the contract', () => 
     'use strict';
     VERSIONS.syntax = '9.9.9';
   }, TypeError);
-  assert.equal(VERSIONS.syntax, '1.4.1');
+  assert.equal(VERSIONS.syntax, '1.4.2');
 });
 
 test('the compiler major version leads or matches every contract major version', () => {

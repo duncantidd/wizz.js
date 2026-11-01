@@ -115,6 +115,30 @@ test('counter fixture mounts, updates through events, and unmounts', async () =>
   assert.deepEqual(target.childNodes, []);
 });
 
+test('inline-handlers fixture updates the DOM from assignments in inline arrow handlers', async () => {
+  const { source, target, component } = mountFixture('inline-handlers');
+
+  assert.match(source, /\(event\) => \{ name = event\.target\.value; queueUpdate\(\{ name: true \}\); \}/);
+  const input = findElement(target, 'input');
+  const button = findElement(target, 'button');
+  const greeting = findElement(target, 'p');
+  assert.equal(button.childNodes[1].nodeValue, '0');
+
+  input.value = 'Ada';
+  input.dispatchEvent('input');
+  button.dispatchEvent('click');
+  button.dispatchEvent('click');
+  await flushUpdates();
+  assert.equal(greeting.childNodes[1].nodeValue, 'Ada');
+  assert.equal(button.childNodes[1].nodeValue, '2');
+  assert.equal(input.value, 'Ada');
+
+  // Destroy removes the instrumented listeners like any other.
+  component.destroy();
+  assert.deepEqual(input.listeners, {});
+  assert.deepEqual(button.listeners, {});
+});
+
 test('profile fixture renders constants once and reactive state through events', async () => {
   const { document, component } = mountFixture('profile');
 

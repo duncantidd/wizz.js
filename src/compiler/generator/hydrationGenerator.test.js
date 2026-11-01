@@ -235,6 +235,11 @@ test('emits per-list machinery for each blocks', () => {
   assert.match(source, /listUpdates\.push\(\(changed\) => \{ if \(changed\.fruits\) hydrateUpdateList_1\(\); \}\);/);
 });
 
+test('collects instrumented inline handlers for adoption', () => {
+  const source = generateHydratable('<script>let name = "";</script><main><input value={name} on:input={(e) => name = e.target.value} /></main>');
+  assert.match(source, /pendingListeners\.push\(\[\w+, "input", \(e\) => \{ name = e\.target\.value; queueUpdate\(\{ name: true \}\); \}\]\);/);
+});
+
 test('defers listener attachment until after the walk passes', () => {
   const source = generateHydratable('<script>function go() {}</script><main><button on:click={go}>go</button></main>');
 

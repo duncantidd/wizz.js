@@ -4,9 +4,11 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { initProject } = require('./init');
-const { VERSIONS } = require('../src/compiler');
+const { VERSIONS, compile } = require('../src/compiler');
+const { CODES } = require('../src/compiler/diagnostics');
 const {
   MAX_SOURCE_BYTES,
+  TEMPLATE_LIMITS,
   TOOL_DEFINITIONS,
   ToolExecutionError,
   assertWritableComponentPath,
@@ -15,6 +17,7 @@ const {
   looksLikeWizzProject,
   realpathInsideRoot,
   resolveInsideRoot,
+  templateLimitsMarkdown,
   writeComponentFile
 } = require('./mcpTools');
 
@@ -213,7 +216,7 @@ test('language_contract documents the version triple, language surface, and diag
   const { text } = await registry.call('language_contract', {});
   // The literal triple is pinned deliberately: a version bump fails this
   // test until the contract text has been reviewed against the compiler.
-  assert.match(text, /compiler 1\.17\.0, syntax 1\.4\.1, output 1\.8\.2/);
+  assert.match(text, /compiler 1\.17\.1, syntax 1\.4\.2, output 1\.8\.3/);
   assert.match(text, /export let/);
   assert.match(text, /onMount/);
   assert.match(text, /onDestroy/);
@@ -549,4 +552,185 @@ test('writeComponentFile refuses an ancestor directory swapped for a symlink aft
   assert.ok(!fs.existsSync(path.join(outside, 'New.wizz')));
   fs.rmSync(root, { recursive: true, force: true });
   fs.rmSync(outside, { recursive: true, force: true });
+});
+
+// ---------------------------------------------------------------------------
+// Template language limits (issue #77): one table feeds the README, the
+// language_contract tool, and project_overview. These tests keep the three
+// in sync and pin every documented claim against the real compiler, so a
+// compiler change that lifts (or changes) a limit fails here until the
+// table is updated.
+// ---------------------------------------------------------------------------
+
+const README_PATH = path.join(__dirname, '..', 'README.md');
+
+function component(script, template) {
+  return `<script>\n${script}\n</script>\n${template}`;
+}
+
+function compileCode(source) {
+  try {
+    compile(source);
+    return null;
+  } catch (error) {
+    return error.code;
+  }
+}
+
+function generated(source) {
+  return compile(source).source;
+}
+
+test('the README embeds the template limits table verbatim', () => {
+  const readme = fs.readFileSync(README_PATH, 'utf8');
+  assert.ok(readme.includes(`\n${templateLimitsMarkdown()}\n`), 'README.md must contain templateLimitsMarkdown() output; regenerate the table');
+  // The table sits near the top: before the CLI reference and the first
+  // authoring section, where a newcomer reads it before writing code.
+  const tableAt = readme.indexOf('## Template Language at a Glance');
+  assert.ok(tableAt > 0);
+  assert.ok(tableAt < readme.indexOf('## CLI'));
+  assert.ok(tableAt < readme.indexOf('## Create a Component'));
+});
+
+test('templateLimitsMarkdown escapes pipes so every row keeps exactly five cells', () => {
+  const rows = templateLimitsMarkdown().split('\n');
+  assert.equal(rows.length, TEMPLATE_LIMITS.length + 2);
+  for (const row of rows) {
+    // Unescaped pipes delimit cells: 5 cells means 6 delimiters.
+    const delimiters = row.match(/(?<!\\)\|/g) || [];
+    assert.equal(delimiters.length, 6, row);
+  }
+  // The expressions row documents `&&`/`||`, so escaping is exercised.
+  assert.match(templateLimitsMarkdown(), /`\\\|\\\|`/);
+});
+
+test('TEMPLATE_LIMITS rows are frozen, complete, and cite only real diagnostic codes', () => {
+  const catalog = new Set(Object.values(CODES).flatMap((stage) => Object.values(stage)));
+  const fields = ['area', 'supported', 'limit', 'failure', 'workaround'];
+  assert.ok(Object.isFrozen(TEMPLATE_LIMITS));
+  assert.equal(new Set(TEMPLATE_LIMITS.map((row) => row.area)).size, TEMPLATE_LIMITS.length);
+  for (const row of TEMPLATE_LIMITS) {
+    assert.ok(Object.isFrozen(row));
+    assert.deepEqual(Object.keys(row), fields);
+    for (const field of fields) {
+      assert.equal(typeof row[field], 'string');
+      assert.ok(row[field].trim().length > 0, `${row.area}.${field}`);
+      assert.doesNotMatch(row[field], /\n/);
+    }
+    for (const code of Object.values(row).join(' ').match(/WIZZ-[PAG]\d{3}/g) || []) {
+      assert.ok(catalog.has(code), `${row.area} cites unknown code ${code}`);
+    }
+  }
+});
+
+test('language_contract serves the limits table as text and as a defensive structured copy', async () => {
+  const root = createProjectFixture();
+  const registry = createRegistry(root);
+  const first = await registry.call('language_contract', {});
+  assert.match(first.text, /Template language at a glance/);
+  for (const row of TEMPLATE_LIMITS) {
+    assert.ok(first.text.includes(`- ${row.area}`), row.area);
+    assert.ok(first.text.includes(row.limit), row.area);
+    assert.ok(first.text.includes(row.workaround), row.area);
+  }
+  // The corrected grammar line names the arithmetic operators the parser
+  // actually accepts.
+  assert.match(first.text, /\+ - \* \/, strict equality \(===\)/);
+  assert.deepEqual(first.structured.templateLimits, TEMPLATE_LIMITS.map((row) => ({ ...row })));
+  // A caller mutating one response cannot corrupt the next one.
+  first.structured.templateLimits[0].limit = 'tampered';
+  first.structured.templateLimits.length = 0;
+  const second = await registry.call('language_contract', {});
+  assert.equal(second.structured.templateLimits.length, TEMPLATE_LIMITS.length);
+  assert.equal(second.structured.templateLimits[0].limit, TEMPLATE_LIMITS[0].limit);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('project_overview surfaces the limits before any component is written', async () => {
+  const root = createProjectFixture();
+  const registry = createRegistry(root);
+  const { structured, text } = await registry.call('project_overview', {});
+  assert.match(text, /Template language limits \(full contract: language_contract\):/);
+  for (const row of TEMPLATE_LIMITS) {
+    assert.ok(text.includes(`- ${row.area}: ${row.limit}`), row.area);
+  }
+  assert.deepEqual(structured.templateLimits, TEMPLATE_LIMITS.map((row) => ({ ...row })));
+  // A missing input directory still answers with the limits.
+  const missing = await registry.call('project_overview', { inputDirectory: 'src/nowhere' });
+  assert.equal(missing.structured.templateLimits.length, TEMPLATE_LIMITS.length);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('every documented compile-error limit fails with the code the table cites', () => {
+  const imports = "  import Card from './Card.wizz';\n  let xs = [];\n  function f() {}";
+  const cases = [
+    // Expressions row: each excluded form is WIZZ-P033.
+    ...['a.b()', 'a ? 1 : 2', '!a', 'a !== 1', 'a < 1', 'a && 1', 'a || 1', 'a[0]', '`x${a}`', 'a + 1.5', '[1]', '@html a']
+      .map((expression) => [`expression ${expression}`, component('let a = { b: 1 };', `<p>{${expression}}</p>`), 'WIZZ-P033']),
+    ['{:else if}', component('let a = 1;', '<div>{#if a === 1}<b>a</b>{:else if a === 2}<i>b</i>{/if}</div>'), 'WIZZ-P033'],
+    ['each member collection', component('let s = { xs: [] };', '<ul>{#each s.xs as x}<li>{x}</li>{/each}</ul>'), 'WIZZ-P002'],
+    ['each index alias', component('let xs = [];', '<ul>{#each xs as x, i}<li>{x}</li>{/each}</ul>'), 'WIZZ-P002'],
+    ['each body on:', component('let xs = [];\n  function f() {}', '<ul>{#each xs as x}<li on:click={f}>{x}</li>{/each}</ul>'), 'WIZZ-G006'],
+    ['each body component', component(imports, '<ul>{#each xs as x}<li><Card /></li>{/each}</ul>'), 'WIZZ-G004'],
+    ['each body nested if', component('let xs = [];', '<ul>{#each xs as x}<li>{#if x === 1}<b>a</b>{/if}</li>{/each}</ul>'), 'WIZZ-G005'],
+    ['each body nested each', component('let xs = [];', '<ul>{#each xs as x}<li>{#each xs as y}<b>{y}</b>{/each}</li>{/each}</ul>'), 'WIZZ-G005'],
+    ['each body two roots', component('let xs = [];', '<ul>{#each xs as x}<li>{x}</li><li>{x}</li>{/each}</ul>'), 'WIZZ-G003'],
+    ['component children', component(imports, '<div><Card>hi</Card></div>'), 'WIZZ-G008'],
+    ['component on:', component(imports, '<div><Card on:click={f} /></div>'), 'WIZZ-G011'],
+    ['component at root', component(imports, '<Card />'), 'WIZZ-G010']
+  ];
+  for (const [name, source, code] of cases) {
+    assert.equal(compileCode(source), code, name);
+  }
+});
+
+test('every documented silent limit compiles and generates the documented behavior', () => {
+  // {#if}: the branch test runs inside create() only; update() never
+  // re-evaluates it.
+  const ifSource = generated(component('let ok = 1;\n  function flip() { ok = 2; }', '<div on:click={flip}>{#if ok === 1}<b>a</b>{:else}<i>b</i>{/if}</div>'));
+  const updateBody = ifSource.slice(ifSource.indexOf('function update('), ifSource.indexOf('// --- Initialization'));
+  assert.match(ifSource, /if \(ok === 1\)/);
+  assert.doesNotMatch(updateBody, /ok === 1/);
+
+  // {#each}: in-place mutation schedules nothing; a const collection is
+  // accepted.
+  assert.doesNotMatch(generated(component('let xs = [];\n  function add() { xs.push(1); }', '<ul on:click={add}>{#each xs as x}<li>{x}</li>{/each}</ul>')), /queueUpdate\(\{ xs/);
+  assert.equal(compileCode(component('const xs = [];', '<ul>{#each xs as x}<li>{x}</li>{/each}</ul>')), null);
+
+  // Dynamic attributes: non-property names are stringified, never removed.
+  const attributes = generated(component('let a = false;', '<div hidden={a} aria-pressed={a} disabled={a}></div>'));
+  assert.match(attributes, /setAttribute\("hidden", String\(a\)\)/);
+  assert.match(attributes, /setAttribute\("aria-pressed", String\(a\)\)/);
+  assert.match(attributes, /\.disabled = a;/);
+  assert.doesNotMatch(attributes, /removeAttribute/);
+
+  // Quoted values are literal text.
+  assert.match(generated(component('let kind = "x";', '<div class="card {kind}"></div>')), /setAttribute\("class", "card \{kind\}"\)/);
+
+  // Assignments nested in an expression schedule no update; bind: is a
+  // plain attribute.
+  assert.doesNotMatch(generated(component('let a = 1;\n  let ok = 1;', '<button on:click={() => ok ? a = 2 : 0}>{a}</button>')), /queueUpdate\(\{ a/);
+  assert.doesNotMatch(generated(component('let a = 1;', '<button on:click={() => (a = 2)}>{a}</button>')), /queueUpdate\(\{ a/);
+  assert.match(generated(component('let name = "";', '<input bind:value={name} />')), /setAttribute\("bind:value", String\(name\)\)/);
+});
+
+test('every documented working pattern compiles and is reactive', () => {
+  // Derived value recomputed in a handler.
+  assert.match(generated(component("let done = false;\n  let label = 'Open';\n  function toggle() { done = !done; label = done ? 'Done' : 'Open'; }", '<button on:click={toggle}>{label}</button>')), /queueUpdate\(\{ label: true \}\)/);
+  // Class toggling instead of a reactive {#if}.
+  const classToggle = generated(component("let openClass = '';\n  function open() { openClass = ' open'; }", "<div on:click={open} class={'panel' + openClass}></div>"));
+  assert.match(classToggle, /target_\d+\.setAttribute\("class", String\('panel' \+ openClass\)\)/);
+  // Nested {#if} inside {:else} for chains.
+  assert.equal(compileCode(component('let a = 1;', '<div>{#if a === 1}<b>a</b>{:else}{#if a === 2}<i>b</i>{:else}<u>c</u>{/if}{/if}</div>')), null);
+  // Reassigning the collection.
+  assert.match(generated(component('let xs = [];\n  function add() { xs = [...xs, 1]; }', '<ul on:click={add}>{#each xs as x}<li>{x}</li>{/each}</ul>')), /queueUpdate\(\{ xs: true \}\)/);
+  // Event delegation with a data attribute on each row.
+  assert.equal(compileCode(component("let rows = [];\n  let picked = '';\n  function pick(event) { picked = event.target.closest('[data-id]').dataset.id; }", '<ul on:click={pick}>{#each rows as row (row.id)}<li data-id={row.id} class={row.cls}>{row.name}</li>{/each}</ul>')), null);
+  // Whole-value attribute expression.
+  assert.equal(compileCode(component('let kind = "x";', "<div class={'card ' + kind}></div>")), null);
+  // Two-way input through an inline arrow, and through a named setter.
+  assert.match(generated(component('let name = "";', '<input value={name} on:input={(e) => name = e.target.value} />')), /\(e\) => \{ name = e\.target\.value; queueUpdate\(\{ name: true \}\); \}/);
+  assert.match(generated(component('let name = "";\n  function setName(e) { name = e.target.value; }', '<input value={name} on:input={setName} />')), /function setName\(e\) \{ name = e\.target\.value; queueUpdate\(\{ name: true \}\);/);
+  // Callback props instead of on: on a component tag.
+  assert.match(generated(component("  import Card from './Card.wizz';\n  function select() {}", '<div><Card onSelect={select} /></div>')), /"onSelect": select/);
 });
