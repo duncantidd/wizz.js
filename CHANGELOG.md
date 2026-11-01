@@ -11,6 +11,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed — Reactive Inline Event Handlers (compiler 1.17.0 → 1.17.1, syntax 1.4.1 → 1.4.2, output 1.8.2 → 1.8.3)
+
+#### Fixed
+
+- Assignments written directly in an inline `on:` handler never scheduled an update: `on:input={(e) => name = e.target.value}`, block-bodied arrows, and `function (e) { ... }` expressions were embedded verbatim, so the state changed but the DOM did not. The generator now runs each handler through the same assignment interceptor as script functions. New `interceptHandlerExpression()`, `findHandlerMutations()`, and `normalizeHandlerExpression()` (`src/compiler/generator/assignmentInterceptor.js`) accept only a function literal spanning the whole directive value, rewrite an expression-bodied arrow to a block body (the dropped return value is unobservable because `addEventListener` ignores it), and emit every other form untouched. `componentGenerator.js` collects the results once (`collectHandlerSources()`, a `WeakMap` keyed by attribute, both `{#if}` branches walked) and passes them to `generateCreateFunction()` and, through the options, to `generateHydrationFunction()`, so fresh mounts and hydrated adoptions attach the same listener. Persistent state assigned in a handler writes through `__wizzPersistWrite` as in the script. Arrow parameters and local declarations shadow reactive names.
+- An inline handler that assigns a prop now fails with the existing read-only diagnostic `WIZZ-G015` (`Props are read-only: 'name' cannot be assigned in the 'on:click' handler.`) instead of silently assigning the child's local copy, matching the script-level rule.
+- Versions: **output patch**, because generated listeners change for handlers that mutate reactive state (every other handler is byte-identical, which the default-output pin confirms); **syntax patch**, because a component with an inline prop mutation that used to compile now fails. Conservative assumption: this enforces the documented "props are read-only" rule rather than adding a restriction, so it is a fix, not a major change. The compiler patch follows.
+
+#### Tests
+
+- `assignmentInterceptor.test.js`: executes instrumented handlers to check notifications, state, persistence writes, and the dropped return value; covers every assignment and update operator, `async` (modifier and parameter name), multi-line heads, block and function bodies with ASI, property chains, parameter, destructured, and local-declaration shadowing, strings and templates containing `}` and `,`, trailing line and block comments, `__proto__`/`constructor` names, and the refused forms (bare assignments, sequences, `function`/`class` bodies, partial-span arrows, unbalanced heads, empty and non-string input), which must come back byte-identical.
+- `componentGenerator.test.js` (prop rejection, shadowed parameters, both `{#if}` branches, persistent writes, untouched non-mutating handlers), `domGenerator.test.js` (`handlerSources` wins; raw value without an entry), `hydrationGenerator.test.js` (adoption collects the instrumented listener), and an end-to-end fixture, `test/fixtures/inline-handlers.wizz`, that types into an input and clicks a button through inline arrows, then checks the DOM and listener teardown (`test/endToEnd.test.js`).
+
+#### Docs
+
+- The issue #77 limits table no longer lists inline-arrow assignments as a silent limit. The "Event handlers" row now documents the inline two-way input pattern and the remaining gaps (`bind:`, assignments nested in expressions); the README table was regenerated, and `scripts/mcpTools.test.js` pins the new behavior. `README.md` ("Create a Component"), `src/compiler/generator/README.md`, `src/compiler/README.md`, and `version.js`/`version.test.js` describe the instrumentation and the new triple.
+
+### Docs — Template Language Limits Up Front (issue #77)
+
+#### Added
+
+- `TEMPLATE_LIMITS` in `scripts/mcpTools.js`: one frozen table of the template language's current limits — expressions, `{#if}`, the `{#each}` collection and body, dynamic attributes, quoted attribute values, event handlers, and component tags — each row with what is supported, the limit, how it fails (the `WIZZ-P###`/`WIZZ-G###` code, or **Silent** when the source compiles but the DOM does not update), and the working pattern. It is the single source for three surfaces, so they cannot drift.
+- `language_contract` appends the table as text and returns it as `structured.templateLimits`; `project_overview`, the first tool an agent calls, adds a one-line-per-limit summary and the same `structured.templateLimits` (a fresh copy per call, so a caller mutating one response cannot corrupt the next) (`scripts/mcpTools.js`).
+- Tests pin the table to the compiler: every cited code is in the diagnostics catalog and is produced by a probe source; every silent row is checked against generated output (`{#if}` tests absent from `update()`, `items.push()` and inline-arrow assignments scheduling no `queueUpdate`, `setAttribute(name, String(value))` with no `removeAttribute`, literal `class="card {kind}"`, `bind:value` as a plain attribute); every working pattern compiles and is reactive. A compiler change that lifts a limit fails the suite until the table is updated (`scripts/mcpTools.test.js`).
+
+#### Docs
+
+- New `## Template Language at a Glance` section near the top of `README.md` (before the CLI reference), generated from `templateLimitsMarkdown()` and required verbatim by a test; the MCP tool table now lists the limits in `project_overview` and `language_contract`.
+- Corrected the `language_contract` expression line: the grammar accepts integer (not decimal) literals plus `+ - * /` and parentheses, which the old text omitted.
+- Newly documented silent behaviors found while verifying the table: `items.push(x)` does not update an `{#each}` (reassign instead), assignments written directly in an inline `on:` arrow did not schedule an update (fixed in compiler 1.17.1 above), braces inside quoted attribute values are literal text, and `bind:` is not a directive.
+- `STRUCTURE.md` and the ROADMAP Framework Feedback entry 1 note where the table lives and that its boolean-attribute docs note has landed.
+- The table itself changes no compiler, parser, or generated output (tooling text only, matching the earlier MCP hardening fix); the version bump above comes from the inline-handler fix.
+
 ### Docs — Application Entry Module Path (`README.md`)
 
 #### Docs

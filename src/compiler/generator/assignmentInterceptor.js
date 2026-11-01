@@ -667,4 +667,143 @@ function findReactiveMutations(rawScript, names) {
   }));
 }
 
-module.exports = { interceptAssignments, findReactiveMutations };
+// Expression-body starts that would change meaning, or stop parsing, once
+// the body is moved into statement position: `function`/`class` become
+// declarations, and `let [` / `let {` begin a lexical declaration.
+const STATEMENT_HAZARD_STARTS = new Set(['function', 'class', 'let']);
+
+/**
+ * Normalizes an inline `on:` directive handler into a form the statement
+ * scanner can instrument, or returns null when the handler is not a
+ * function literal spanning the whole directive value.
+ *
+ * - `function (...) { ... }` and block-bodied arrows pass through as-is:
+ *   their bodies are already statement contexts, and arrow/function
+ *   parameters shadow reactive names exactly as they do in the script.
+ * - Expression-bodied arrows (`(e) => name = e.target.value`) are rewritten
+ *   to a block body (`(e) => { name = e.target.value }`), turning the body
+ *   expression into a statement. The listener's return value is dropped,
+ *   which is unobservable: addEventListener ignores listener return values.
+ *
+ * Anything else — a handler reference (`increment`), a call, a sequence
+ * whose first element is an arrow (`(e) => a = 1, b`), or a body that would
+ * mean something different as a statement — returns null and is emitted
+ * untouched, preserving the scanner's rule of never risking valid source.
+ * @param {string} expression - The raw directive value.
+ * @returns {string | null} The normalized handler source, or null.
+ */
+function normalizeHandlerExpression(expression) {
+  if (typeof expression !== 'string') return null;
+  const tokens = tokenizeScript(expression);
+  const significant = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (tokens[index].type !== 'comment') significant.push(index);
+  }
+  if (significant.length === 0) return null;
+  const at = (position) => tokens[significant[position]];
+  const lastToken = at(significant.length - 1);
+
+  // Returns the significant position of the token that closes the bracket
+  // opened at `position`, or -1. Template interpolation closes are tracked
+  // as `}` so `${ ... }` nests correctly.
+  const matchForward = (position) => {
+    let depth = 0;
+    for (let cursor = position; cursor < significant.length; cursor += 1) {
+      const token = at(cursor);
+      if (token.type !== 'punctuator') continue;
+      if ('([{'.includes(token.value) || token.value === '${') depth += 1;
+      else if (')]}'.includes(token.value)) {
+        depth -= 1;
+        if (depth === 0) return cursor;
+      }
+    }
+    return -1;
+  };
+
+  let position = 0;
+  const first = at(0);
+
+  if (first.type === 'identifier' && first.value === 'function') {
+    // Function expression: the body brace must close at the very end.
+    const openParen = significant.findIndex((index, cursor) => cursor > 0 && isPunctuator(tokens[index], '('));
+    if (openParen === -1) return null;
+    const closeParen = matchForward(openParen);
+    if (closeParen === -1 || !isPunctuator(at(closeParen + 1), '{')) return null;
+    return matchForward(closeParen + 1) === significant.length - 1 ? expression : null;
+  }
+
+  // `async` prefixes an arrow only when it is not itself the parameter.
+  if (first.type === 'identifier' && first.value === 'async' && !isPunctuator(at(1), '=>')) position = 1;
+
+  const head = at(position);
+  if (!head) return null;
+  if (head.type === 'identifier' && (!RESERVED_WORDS.has(head.value) || head.value === 'async')) {
+    position += 1;
+  } else if (isPunctuator(head, '(')) {
+    const close = matchForward(position);
+    if (close === -1) return null;
+    position = close + 1;
+  } else {
+    return null;
+  }
+  if (!isPunctuator(at(position), '=>')) return null;
+  position += 1;
+
+  const bodyStart = at(position);
+  if (!bodyStart) return null;
+  if (isPunctuator(bodyStart, '{')) {
+    return matchForward(position) === significant.length - 1 ? expression : null;
+  }
+  if (bodyStart.type === 'identifier' && STATEMENT_HAZARD_STARTS.has(bodyStart.value)) return null;
+
+  // An arrow's expression body ends at the first top-level comma; anything
+  // after it belongs to an enclosing sequence, which a block cannot hold.
+  let depth = 0;
+  for (let cursor = position; cursor < significant.length; cursor += 1) {
+    const token = at(cursor);
+    if (token.type !== 'punctuator') continue;
+    if ('([{'.includes(token.value) || token.value === '${') depth += 1;
+    else if (')]}'.includes(token.value)) depth -= 1;
+    else if (depth === 0 && token.value === ',') return null;
+  }
+
+  // A trailing line comment would swallow a closing brace on the same line.
+  const trailing = tokens[tokens.length - 1];
+  const close = trailing.type === 'comment' && trailing.value.startsWith('//') ? '\n}' : ' }';
+  return `${expression.slice(0, bodyStart.start)}{ ${expression.slice(bodyStart.start, lastToken.end)}${expression.slice(lastToken.end)}${close}`;
+}
+
+/**
+ * Instruments an inline `on:` directive handler so mutations inside it
+ * notify the update dispatcher, exactly like mutations in script functions.
+ * Handlers without a statement-level reactive mutation are returned
+ * byte-identical, so existing generated output does not change.
+ * @param {string} expression - The raw directive value.
+ * @param {Array<string>} reactiveVars - Reactive variable names.
+ * @param {Array<{ name: string, storageKey: string }>} [persistentVars]
+ * @returns {string} The handler source to emit.
+ */
+function interceptHandlerExpression(expression, reactiveVars, persistentVars) {
+  const normalized = normalizeHandlerExpression(expression);
+  if (normalized === null) return expression;
+  const intercepted = interceptAssignments(normalized, reactiveVars, persistentVars);
+  return intercepted === normalized ? expression : intercepted;
+}
+
+/**
+ * The inline-handler counterpart of findReactiveMutations(): reports the
+ * statement-level mutations of `names` an instrumented handler would carry.
+ * Locations are relative to the handler source.
+ */
+function findHandlerMutations(expression, names) {
+  const normalized = normalizeHandlerExpression(expression);
+  return normalized === null ? [] : findReactiveMutations(normalized, names);
+}
+
+module.exports = {
+  interceptAssignments,
+  findReactiveMutations,
+  interceptHandlerExpression,
+  findHandlerMutations,
+  normalizeHandlerExpression
+};

@@ -383,6 +383,7 @@ async function projectOverviewHandler(args, { root }) {
     adapters: [...KNOWN_ADAPTERS],
     components,
     apiRoutes,
+    templateLimits: templateLimitsStructured(),
     ...(discoveryError ? { discoveryError } : {})
   };
   const routed = components.filter((component) => component.route !== null);
@@ -393,7 +394,11 @@ async function projectOverviewHandler(args, { root }) {
     `Document shell (index.html): ${overview.documentShell ? 'present' : 'missing'}`,
     `dist/ build output: ${overview.distPresent ? 'present' : 'absent'}`,
     `Known adapters: ${overview.adapters.join(', ')}`,
-    ...(discoveryError ? [`Discovery error: ${discoveryError}`] : [])
+    ...(discoveryError ? [`Discovery error: ${discoveryError}`] : []),
+    // The limits travel with the overview because it is the first tool an
+    // agent calls: knowing them before the first write avoids redesigns.
+    'Template language limits (full contract: language_contract):',
+    ...TEMPLATE_LIMITS.map((row) => `- ${row.area}: ${row.limit} Instead: ${row.workaround}`)
   ].join('\n');
   return { text, structured: overview };
 }
@@ -564,6 +569,101 @@ async function buildProjectHandler(args, { root }) {
 }
 
 /**
+ * The template language's current limits, each with how it fails and the
+ * pattern that works today. This table is the single source for the
+ * language_contract and project_overview tools and for the README's
+ * "Template Language at a Glance" table (a test renders it with
+ * templateLimitsMarkdown() and requires the README to contain the result
+ * verbatim), so the three cannot drift. Every row was verified against the
+ * compiler: a row that names a code is a compile error; "Silent" means the
+ * source compiles but the DOM does not do what a JS-literate author expects.
+ */
+const TEMPLATE_LIMITS = Object.freeze([
+  {
+    area: 'Expressions `{...}`',
+    supported: 'Identifiers, member access (`a.b`), integer and string literals, `+ - * /`, `===`, and parentheses.',
+    limit: 'No calls, ternaries, `!`, `!==`, `<`/`>`, `&&`/`||`, indexing (`a[0]`), template literals, decimals, or array/object literals.',
+    failure: 'Compile error (WIZZ-P033)',
+    workaround: 'Compute the value in a script handler into a reactive `let` and render `{label}`. There are no computed values, so recompute it in every handler that changes its inputs.'
+  },
+  {
+    area: '`{#if}`',
+    supported: '`{#if cond}...{:else}...{/if}`, nesting, events, and components inside branches; expressions inside the taken branch stay reactive.',
+    limit: 'The branch is chosen once, at mount; changing the condition later does not swap branches. No `{:else if}`.',
+    failure: 'Silent non-update (`{:else if}`: WIZZ-P033)',
+    workaround: 'Render every state and toggle visibility with a reactive class plus CSS: `class={\'panel\' + openClass}`. Chain conditions by nesting `{#if}` inside `{:else}`.'
+  },
+  {
+    area: '`{#each}` collection',
+    supported: 'A bare identifier naming a top-level `let` array, keyed `(item.id)` or keyless.',
+    limit: 'No member collections (`state.items`) or index alias (`item, i`). A `const` collection renders once. In-place mutation (`items.push(x)`) does not update.',
+    failure: 'Syntax: WIZZ-P002; `const` and mutation: silent non-update',
+    workaround: 'Reassign the array: `items = [...items, x]`. Store any index or flag you need on the items themselves.'
+  },
+  {
+    area: '`{#each}` body',
+    supported: 'Exactly one native root element per item; its text and dynamic attributes update.',
+    limit: 'No `on:` directives (WIZZ-G006), imported components (WIZZ-G004), or nested `{#if}`/`{#each}` (WIZZ-G005); one root element only (WIZZ-G003); the block must sit inside a native element.',
+    failure: 'Compile error',
+    workaround: 'Delegate events: put `on:click={pick}` on the list\'s parent element, render `data-id={item.id}` on each row, and read `event.target.closest(\'[data-id]\').dataset.id` in `pick`. Precompute per-row variants (class suffix, label) as item fields.'
+  },
+  {
+    area: 'Dynamic attributes',
+    supported: '`name={expr}` updates reactively; `value`, `checked`, and `disabled` are set as DOM properties.',
+    limit: 'Every other dynamic attribute is written with `setAttribute(name, String(value))` and is never removed: `hidden={false}` still hides, and `undefined` renders as `"undefined"`.',
+    failure: 'Silent',
+    workaround: 'Toggle presence with a reactive class and CSS, and pass explicit strings such as `\'true\'`/`\'false\'` to `aria-*` attributes.'
+  },
+  {
+    area: 'Quoted attribute values',
+    supported: 'Static text: `class="card"`.',
+    limit: 'Braces inside quotes are not interpolated: `class="card {kind}"` renders the literal text.',
+    failure: 'Silent',
+    workaround: 'Use one expression for the whole value: `class={\'card \' + kind}`.'
+  },
+  {
+    area: 'Event handlers',
+    supported: '`on:<event>={handler}` with a named script function or an inline arrow; assignments inside inline arrows update the DOM (`on:input={(e) => name = e.target.value}`).',
+    limit: 'There is no `bind:`; an unknown directive such as `bind:value` becomes a plain attribute. An assignment nested in an expression (`ok ? a = 1 : 0`, `(a = 1)`) does not schedule an update.',
+    failure: 'Silent',
+    workaround: 'Two-way inputs pair `value={name}` with `on:input={(e) => name = e.target.value}`. Write each mutation as its own statement, or move the logic into a named function.'
+  },
+  {
+    area: 'Component tags',
+    supported: 'Default `.wizz` imports rendered self-closing inside a native element (`<Card title={t} />`); attributes, including functions, pass as props.',
+    limit: 'No children (WIZZ-G008), no `on:` directives (WIZZ-G011), not at the template root (WIZZ-G010), not inside `{#each}` (WIZZ-G004).',
+    failure: 'Compile error',
+    workaround: 'Pass callbacks as props (`onSelect={select}`) instead of `on:`. Render list rows as native elements and keep per-row logic in item fields.'
+  }
+].map((row) => Object.freeze(row)));
+
+/** Renders TEMPLATE_LIMITS as the GitHub-flavored table the README embeds. */
+function templateLimitsMarkdown() {
+  // A literal pipe would split a table cell, so escape it everywhere.
+  const cell = (value) => value.replace(/\|/g, '\\|');
+  return [
+    '| Area | Supported | Current limit | How it fails | Working pattern |',
+    '| --- | --- | --- | --- | --- |',
+    ...TEMPLATE_LIMITS.map((row) => `| ${[row.area, row.supported, row.limit, row.failure, row.workaround].map(cell).join(' | ')} |`)
+  ].join('\n');
+}
+
+/** Renders TEMPLATE_LIMITS as plain text for the tool responses. */
+function templateLimitsText() {
+  return TEMPLATE_LIMITS.map((row) => [
+    `- ${row.area}`,
+    `  Supported: ${row.supported}`,
+    `  Limit: ${row.limit}`,
+    `  Fails as: ${row.failure}`,
+    `  Instead: ${row.workaround}`
+  ].join('\n')).join('\n');
+}
+
+function templateLimitsStructured() {
+  return TEMPLATE_LIMITS.map((row) => ({ ...row }));
+}
+
+/**
  * The component language contract: what a .wizz file may contain, the
  * lifecycle hooks, and where the stable diagnostic codes live. The content
  * is an inline string — it ships in the CLI tarball by construction, needs
@@ -594,8 +694,9 @@ Script boundary (inside <script>):
   Assignments inside statement-level hook callbacks are reactive.
 
 Template expressions ({...}) use a safe subset: identifiers, member access,
-string and number literals, and strict equality — no arbitrary JS. Text
-output escapes &, <, >; attribute values additionally escape ".
+integer and string literals, + - * /, strict equality (===), and
+parentheses — no arbitrary JS. Text output escapes &, <, >; attribute values
+additionally escape ".
 
 Directives:
 - on:<event>={handler} — native browser event names; client-only.
@@ -615,8 +716,13 @@ Stable diagnostics: every author-facing compile failure carries a code —
 WIZZ-P### (parse stage) or WIZZ-G### (generate stage; the WIZZ-A### analyzer
 namespace is reserved and empty). The catalog in src/compiler/diagnostics.js
 is the single source of truth; tooling switches on codes without parsing
-prose. See the component_diagnostics tool for structured records.`,
-    structured: { versions: { ...VERSIONS } }
+prose. See the component_diagnostics tool for structured records.
+
+Template language at a glance — current limits and working patterns. Design
+around these before writing a component; rows marked silent compile cleanly
+but do not update the DOM:
+${templateLimitsText()}`,
+    structured: { versions: { ...VERSIONS }, templateLimits: templateLimitsStructured() }
   };
 }
 
@@ -886,6 +992,7 @@ module.exports = {
   DEFAULT_INPUT_DIRECTORY,
   DEFAULT_OUTPUT_DIRECTORY,
   MAX_SOURCE_BYTES,
+  TEMPLATE_LIMITS,
   WRITE_DENIED_ROOT_DIRECTORIES,
   TOOL_DEFINITIONS,
   ToolExecutionError,
@@ -896,5 +1003,6 @@ module.exports = {
   looksLikeWizzProject,
   realpathInsideRoot,
   resolveInsideRoot,
+  templateLimitsMarkdown,
   writeComponentFile
 };

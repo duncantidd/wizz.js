@@ -61,9 +61,12 @@ function collectComponentRefNames(templateAST, componentImports = []) {
 /**
  * Generates the create() lifecycle function for a component.
  * @param {Object} templateAST - The enriched template AST.
+ * @param {Array} [componentImports] - Imported component descriptors.
+ * @param {WeakMap<Object, string>} [handlerSources] - Instrumented `on:`
+ *   handler sources keyed by attribute; absent entries emit the raw value.
  * @returns {string} The generated JavaScript string.
  */
-function generateCreateFunction(templateAST, componentImports = []) {
+function generateCreateFunction(templateAST, componentImports = [], handlerSources = new WeakMap()) {
   const builder = new CodeBuilder();
   let nodeCounter = 0;
   const importedComponents = new Set(componentImports.map((component) => component.name));
@@ -241,7 +244,7 @@ function generateCreateFunction(templateAST, componentImports = []) {
             if (!handlerExpression) {
               throw compilerDiagnostic(CODES.generator.eventMissingHandler, `Event directive '${attr.name}' requires a handler expression.`);
             }
-            builder.add(`trackListener(${varName}, ${JSON.stringify(eventName)}, ${handlerExpression});`);
+            builder.add(`trackListener(${varName}, ${JSON.stringify(eventName)}, ${handlerSources.get(attr) ?? handlerExpression});`);
             return;
           }
 

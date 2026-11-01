@@ -1,7 +1,13 @@
 // src/compiler/generator/assignmentInterceptor.test.js
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { interceptAssignments, findReactiveMutations } = require('./assignmentInterceptor');
+const {
+  interceptAssignments,
+  findReactiveMutations,
+  interceptHandlerExpression,
+  findHandlerMutations,
+  normalizeHandlerExpression
+} = require('./assignmentInterceptor');
 
 // Executes an intercepted script the way a component factory would: with a
 // queueUpdate dispatcher in scope, and captures the notifications it sends.
@@ -830,4 +836,213 @@ test('executed persistent scripts call the write-through with the new value', ()
 
   assert.deepEqual(notifications, [{ theme: true }]);
   assert.deepEqual(writes, [['theme', 'dark']]);
+});
+
+// ---------------------------------------------------------------------------
+// Inline on: handler instrumentation
+// ---------------------------------------------------------------------------
+
+// Evaluates an instrumented handler expression with the component's state
+// held in `state`, invokes it with `event`, and reports the notifications,
+// persistence writes, and resulting state. `with` would be simpler but is
+// illegal in strict mode, so names are bound as accessor-backed locals.
+function runHandler(handlerSource, initialState, event) {
+  const names = Object.keys(initialState);
+  const notifications = [];
+  const writes = [];
+  const body = `let ${names.map((name) => `${name} = __state.${name}`).join(', ')};
+    const __handler = (${handlerSource});
+    const __result = __handler(__event);
+    return { result: __result, state: { ${names.join(', ')} } };`;
+  const run = new Function('queueUpdate', '__wizzPersistWrite', '__state', '__event', body);
+  const outcome = run((changes) => notifications.push(changes), (key, value) => writes.push([key, value]), initialState, event);
+  return { ...outcome, notifications, writes };
+}
+
+const REACTIVE = ['name', 'count', 'items'];
+
+test('instruments expression-bodied arrow handlers into block bodies', () => {
+  assert.equal(
+    interceptHandlerExpression('(e) => name = e.target.value', REACTIVE),
+    '(e) => { name = e.target.value; queueUpdate({ name: true }); }'
+  );
+  const run = runHandler(interceptHandlerExpression('(e) => name = e.target.value', REACTIVE), { name: '' }, { target: { value: 'Ada' } });
+  assert.deepEqual(run.notifications, [{ name: true }]);
+  assert.equal(run.state.name, 'Ada');
+});
+
+test('instruments every assignment and update operator form inside handlers', () => {
+  for (const [handler, initial, expected] of [
+    ['() => count += 2', { count: 1 }, 3],
+    ['() => count++', { count: 1 }, 2],
+    ['() => --count', { count: 1 }, 0],
+    ['() => count **= 3', { count: 2 }, 8],
+    ['() => count ??= 5', { count: null }, 5]
+  ]) {
+    const run = runHandler(interceptHandlerExpression(handler, REACTIVE), initial);
+    assert.deepEqual(run.notifications, [{ count: true }], handler);
+    assert.equal(run.state.count, expected, handler);
+  }
+});
+
+test('instruments single-parameter, async, and multi-line arrow heads', () => {
+  assert.match(interceptHandlerExpression('e => count = e', REACTIVE), /^e => \{ count = e; queueUpdate\(\{ count: true \}\); \}$/);
+  assert.match(interceptHandlerExpression('async (e) => count = 1', REACTIVE), /^async \(e\) => \{ count = 1; queueUpdate/);
+  assert.match(interceptHandlerExpression('async e => count = 1', REACTIVE), /^async e => \{ count = 1; queueUpdate/);
+  // `async` used as the parameter name, not the modifier.
+  assert.match(interceptHandlerExpression('async => count = async', REACTIVE), /^async => \{ count = async; queueUpdate/);
+  const multiLine = interceptHandlerExpression('(\n  event\n) =>\n  count = event.detail', REACTIVE);
+  assert.deepEqual(runHandler(multiLine, { count: 0 }, { detail: 7 }).state.count, 7);
+});
+
+test('instruments block-bodied arrows and function expressions in place', () => {
+  assert.equal(
+    interceptHandlerExpression('(e) => { name = e.target.value; count += 1; }', REACTIVE),
+    '(e) => { name = e.target.value; queueUpdate({ name: true }); count += 1; queueUpdate({ count: true }); }'
+  );
+  assert.equal(
+    interceptHandlerExpression('function (e) { count = 1; }', REACTIVE),
+    'function (e) { count = 1; queueUpdate({ count: true }); }'
+  );
+  assert.equal(
+    interceptHandlerExpression('function named(e) { count = 1 }', REACTIVE),
+    'function named(e) { count = 1; queueUpdate({ count: true }); }'
+  );
+  // ASI inside a block body.
+  const run = runHandler(interceptHandlerExpression('() => {\n  count = 1\n  name = "x"\n}', REACTIVE), { count: 0, name: '' });
+  assert.deepEqual(run.notifications, [{ count: true }, { name: true }]);
+});
+
+test('instruments property-chain mutations with the root reactive name', () => {
+  const run = runHandler(interceptHandlerExpression('() => items.list = [1]', REACTIVE), { items: { list: [] } });
+  assert.deepEqual(run.notifications, [{ items: true }]);
+  assert.deepEqual(run.state.items.list, [1]);
+});
+
+test('writes persistent state through the persistence helper from handlers', () => {
+  const source = interceptHandlerExpression('() => count += 1', REACTIVE, [{ name: 'count', storageKey: 'clicks' }]);
+  const run = runHandler(source, { count: 1 });
+  assert.deepEqual(run.notifications, [{ count: true }]);
+  assert.deepEqual(run.writes, [['clicks', 2]]);
+});
+
+test('arrow parameters and local declarations shadow reactive names in handlers', () => {
+  for (const handler of [
+    '(name) => name = 1',
+    'name => name = 2',
+    '({ name }) => name = 3',
+    '(e, count) => count += 1',
+    '() => { let count = 0; count = 1; }',
+    'function (name) { name = 1; }'
+  ]) {
+    assert.equal(interceptHandlerExpression(handler, REACTIVE), handler, handler);
+  }
+  // Shadowing is per-name: an unshadowed sibling is still instrumented.
+  assert.equal(
+    interceptHandlerExpression('(name) => { name = 1; count = name; }', REACTIVE),
+    '(name) => { name = 1; count = name; queueUpdate({ count: true }); }'
+  );
+});
+
+test('leaves handlers without a statement-level reactive mutation byte-identical', () => {
+  for (const handler of [
+    'increment',
+    'handlers.save',
+    '(event) => increment(event.detail)',
+    '(e) => items.push(e)',
+    '() => ({ count: 1 })',
+    '(e) => (count = 1)',
+    '() => ok ? count = 1 : 0',
+    '() => other = 1',
+    '() => "count = 1"',
+    '() => `count = ${1}`',
+    '() => /count = 1/.test(x)',
+    '() => count === 1',
+    '() => count == 1'
+  ]) {
+    assert.equal(interceptHandlerExpression(handler, REACTIVE), handler, handler);
+  }
+});
+
+test('refuses forms whose meaning would change in statement position', () => {
+  for (const handler of [
+    // A directive value that is itself an assignment evaluates at mount.
+    'count = 5',
+    'count += 1',
+    // A sequence whose first element is the arrow: wrapping would swallow b.
+    '(e) => count = 1, b',
+    // Bodies that become declarations as statements.
+    '() => function () { count = 1 }',
+    '() => class { m() { count = 1 } }',
+    // The arrow ends before the value does.
+    '(() => count = 1)',
+    '() => { count = 1 }, other',
+    'function () { count = 1 }, other',
+    // Malformed or unbalanced heads.
+    '(e => count = 1',
+    'if => count = 1',
+    ''
+  ]) {
+    assert.equal(normalizeHandlerExpression(handler), null, handler);
+    assert.equal(interceptHandlerExpression(handler, REACTIVE), handler, handler);
+  }
+  assert.equal(normalizeHandlerExpression(undefined), null);
+  assert.equal(normalizeHandlerExpression(null), null);
+});
+
+test('tracks brackets, strings, and template interpolations when finding the body end', () => {
+  // Commas and braces nested inside the body do not end it.
+  const nested = interceptHandlerExpression('(e) => items = [...items, { id: e, label: `${e, "}"}` }]', REACTIVE);
+  assert.match(nested, /^\(e\) => \{ items = \[\.\.\.items, \{ id: e, label: `\$\{e, "\}"\}` \}\]; queueUpdate\(\{ items: true \}\); \}$/);
+  assert.deepEqual(runHandler(nested, { items: [] }, 1).state.items, [{ id: 1, label: '}' }]);
+  assert.equal(
+    interceptHandlerExpression("() => name = '}'", REACTIVE),
+    "() => { name = '}'; queueUpdate({ name: true }); }"
+  );
+  // Inner arrows in the body are expressions, not the handler.
+  const inner = interceptHandlerExpression('() => items = items.map((x) => x + 1)', REACTIVE);
+  assert.deepEqual(runHandler(inner, { items: [1] }).state.items, [2]);
+});
+
+test('closes the block on a new line after a trailing line comment', () => {
+  const source = interceptHandlerExpression('() => count = 1 // bump', REACTIVE);
+  assert.equal(source, '() => { count = 1; queueUpdate({ count: true }); // bump\n}');
+  assert.deepEqual(runHandler(source, { count: 0 }).notifications, [{ count: true }]);
+  assert.equal(
+    interceptHandlerExpression('() => count = 1 /* bump */', REACTIVE),
+    '() => { count = 1; queueUpdate({ count: true }); /* bump */ }'
+  );
+});
+
+test('every instrumented handler is a valid expression that returns undefined', () => {
+  for (const handler of [
+    '(e) => name = e',
+    'async (e) => count = await e',
+    '() => count = 1 // c',
+    '(e) => { count = e; }',
+    'function (e) { count = e; }'
+  ]) {
+    const source = interceptHandlerExpression(handler, REACTIVE);
+    assert.notEqual(source, handler, handler);
+    assert.doesNotThrow(() => new Function('queueUpdate', `return (${source});`), source);
+  }
+  // Listener return values are ignored by addEventListener, so dropping the
+  // expression body's value is unobservable; pin that it is dropped.
+  assert.equal(runHandler(interceptHandlerExpression('() => count = 4', REACTIVE), { count: 0 }).result, undefined);
+});
+
+test('handler instrumentation ignores prototype-named identifiers', () => {
+  // Reactive names are looked up in a Set, never on an object, so
+  // `__proto__`/`constructor` in handler source cannot hit inherited keys.
+  for (const handler of ['() => __proto__ = 1', '() => constructor = 1', '() => toString = 1']) {
+    assert.equal(interceptHandlerExpression(handler, REACTIVE), handler, handler);
+  }
+});
+
+test('findHandlerMutations reports handler mutations of the given names only', () => {
+  assert.deepEqual(findHandlerMutations('(e) => title = e', ['title']).map((mutation) => mutation.name), ['title']);
+  assert.deepEqual(findHandlerMutations('() => { title.text = 1; }', ['title']).map((mutation) => mutation.name), ['title']);
+  assert.deepEqual(findHandlerMutations('(title) => title = 1', ['title']), []);
+  assert.deepEqual(findHandlerMutations('select', ['title']), []);
+  assert.deepEqual(findHandlerMutations('() => title === 1', ['title']), []);
 });
