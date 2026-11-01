@@ -109,6 +109,17 @@ test('emits event handler expressions with arguments', () => {
   assert.match(source, /trackListener\(\w+, "click", \(event\) => increment\(event\.detail\)\)/);
 });
 
+test('emits the instrumented handler source when one is supplied for the attribute', () => {
+  const attribute = { name: 'on:input', value: '(e) => name = e.target.value' };
+  const template = { type: 'Root', children: [{ type: 'Element', name: 'input', attributes: [attribute], children: [] }] };
+  const handlerSources = new WeakMap([[attribute, '(e) => { name = e.target.value; queueUpdate({ name: true }); }']]);
+
+  assert.match(generateCreateFunction(template, [], handlerSources), /trackListener\(\w+, "input", \(e\) => \{ name = e\.target\.value; queueUpdate\(\{ name: true \}\); \}\);/);
+  // Without an entry (or a map) the raw directive value is emitted.
+  assert.match(generateCreateFunction(template), /trackListener\(\w+, "input", \(e\) => name = e\.target\.value\);/);
+  assert.match(generateCreateFunction(template, [], new WeakMap()), /trackListener\(\w+, "input", \(e\) => name = e\.target\.value\);/);
+});
+
 test('rejects event directives without a handler expression', () => {
   assert.throws(
     () => generateCreateFunction({

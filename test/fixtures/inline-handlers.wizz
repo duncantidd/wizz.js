@@ -1,0 +1,10 @@
+<script>
+  let name = '';
+  let count = 0;
+</script>
+
+<main>
+  <input value={name} on:input={(event) => name = event.target.value} />
+  <button on:click={() => count += 1}>Clicks: {count}</button>
+  <p>Hello {name}</p>
+</main>

@@ -37,6 +37,21 @@ You edit only `index.html`, `App.css`, and `src/**/*.wizz`. Everything else is g
 
 To upgrade the installed framework after a new release, run `wizz update` (or re-run the installer; the install is a snapshot, not a link to any repository).
 
+## Template Language at a Glance
+
+The `.wizz` template language is deliberately small. Read this table before designing a component: rows that fail as **Silent** compile cleanly but do not update the DOM the way JavaScript habits suggest, so they surface late. Each row names the pattern that works today. The same table is served to agents by the MCP server's `language_contract` and `project_overview` tools (see [MCP Server](#mcp-server)); the parser's full grammar is in [`src/compiler/parser/README.md`](src/compiler/parser/README.md#supported-language-surface).
+
+| Area | Supported | Current limit | How it fails | Working pattern |
+| --- | --- | --- | --- | --- |
+| Expressions `{...}` | Identifiers, member access (`a.b`), integer and string literals, `+ - * /`, `===`, and parentheses. | No calls, ternaries, `!`, `!==`, `<`/`>`, `&&`/`\|\|`, indexing (`a[0]`), template literals, decimals, or array/object literals. | Compile error (WIZZ-P033) | Compute the value in a script handler into a reactive `let` and render `{label}`. There are no computed values, so recompute it in every handler that changes its inputs. |
+| `{#if}` | `{#if cond}...{:else}...{/if}`, nesting, events, and components inside branches; expressions inside the taken branch stay reactive. | The branch is chosen once, at mount; changing the condition later does not swap branches. No `{:else if}`. | Silent non-update (`{:else if}`: WIZZ-P033) | Render every state and toggle visibility with a reactive class plus CSS: `class={'panel' + openClass}`. Chain conditions by nesting `{#if}` inside `{:else}`. |
+| `{#each}` collection | A bare identifier naming a top-level `let` array, keyed `(item.id)` or keyless. | No member collections (`state.items`) or index alias (`item, i`). A `const` collection renders once. In-place mutation (`items.push(x)`) does not update. | Syntax: WIZZ-P002; `const` and mutation: silent non-update | Reassign the array: `items = [...items, x]`. Store any index or flag you need on the items themselves. |
+| `{#each}` body | Exactly one native root element per item; its text and dynamic attributes update. | No `on:` directives (WIZZ-G006), imported components (WIZZ-G004), or nested `{#if}`/`{#each}` (WIZZ-G005); one root element only (WIZZ-G003); the block must sit inside a native element. | Compile error | Delegate events: put `on:click={pick}` on the list's parent element, render `data-id={item.id}` on each row, and read `event.target.closest('[data-id]').dataset.id` in `pick`. Precompute per-row variants (class suffix, label) as item fields. |
+| Dynamic attributes | `name={expr}` updates reactively; `value`, `checked`, and `disabled` are set as DOM properties. | Every other dynamic attribute is written with `setAttribute(name, String(value))` and is never removed: `hidden={false}` still hides, and `undefined` renders as `"undefined"`. | Silent | Toggle presence with a reactive class and CSS, and pass explicit strings such as `'true'`/`'false'` to `aria-*` attributes. |
+| Quoted attribute values | Static text: `class="card"`. | Braces inside quotes are not interpolated: `class="card {kind}"` renders the literal text. | Silent | Use one expression for the whole value: `class={'card ' + kind}`. |
+| Event handlers | `on:<event>={handler}` with a named script function or an inline arrow; assignments inside inline arrows update the DOM (`on:input={(e) => name = e.target.value}`). | There is no `bind:`; an unknown directive such as `bind:value` becomes a plain attribute. An assignment nested in an expression (`ok ? a = 1 : 0`, `(a = 1)`) does not schedule an update. | Silent | Two-way inputs pair `value={name}` with `on:input={(e) => name = e.target.value}`. Write each mutation as its own statement, or move the logic into a named function. |
+| Component tags | Default `.wizz` imports rendered self-closing inside a native element (`<Card title={t} />`); attributes, including functions, pass as props. | No children (WIZZ-G008), no `on:` directives (WIZZ-G011), not at the template root (WIZZ-G010), not inside `{#each}` (WIZZ-G004). | Compile error | Pass callbacks as props (`onSelect={select}`) instead of `on:`. Render list rows as native elements and keep per-row logic in item fields. |
+
 ## CLI
 
 Wizz installs without npm or a package registry. A first-time install needs only Node.js 18+, curl, and tar — one command fetches the installer from the repository and runs it:
@@ -143,7 +158,7 @@ Print what you have installed with:
 wizz --version
 ```
 
-which prints the compiler and contract version triple, for example `wizz 1.17.0 (compiler 1.17.0, syntax 1.4.1, output 1.8.2)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
+which prints the compiler and contract version triple, for example `wizz 1.17.1 (compiler 1.17.1, syntax 1.4.2, output 1.8.3)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
 
 `wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
 
@@ -162,10 +177,10 @@ The server exposes six tools:
 
 | Tool | What it does |
 | --- | --- |
-| `project_overview` | Surveys the application: components and routes, server API routes, document shell, build output, adapters, and the version triple. |
+| `project_overview` | Surveys the application: components and routes, server API routes, document shell, build output, adapters, the version triple, and the [template language limits](#template-language-at-a-glance) (text and structured `templateLimits`). |
 | `component_diagnostics` | Compiles a component — a project file, inline source, or every component — into structured `WIZZ-P###`/`WIZZ-G###` diagnostic records without writing anything. |
 | `build_project` | Runs the build in-process and returns the machine-readable `wizz-build-diagnostics@1` envelope. |
-| `language_contract` | The `.wizz` component language contract: file structure, reactive state and props, directives, imports, the version triple, and the diagnostic-code catalog. |
+| `language_contract` | The `.wizz` component language contract: file structure, reactive state and props, directives, imports, the version triple, the diagnostic-code catalog, and the template-limits table with working patterns (also structured as `templateLimits`). |
 | `dev_workflow` | The development and deployment workflow: `wizz dev`, `wizz build`, the node adapter deploy recipe, API routes, and `.env.server`. |
 | `create_or_update_component` | Creates or updates a `.wizz` component inside the project, compile-gated. |
 
@@ -203,7 +218,13 @@ Event directives use native browser event names and accept either a component-lo
 <button on:click={(event) => increment(event.detail)}>Add</button>
 ```
 
-The directive expression is emitted as the listener passed to `addEventListener()`.
+The directive expression is emitted as the listener passed to `addEventListener()`. Assignments inside an inline handler are reactive exactly like those in script functions, so a two-way input needs no separate setter:
+
+```wizz
+<input value={name} on:input={(event) => name = event.target.value} />
+```
+
+An inline handler cannot assign a prop (props are read-only; this is the same `WIZZ-G015` error as in the script), and an assignment nested inside an expression — `ok ? count = 1 : 0` — does not schedule an update; write it as its own statement.
 
 Reactive updates are batched. When a handler runs, each changed variable is marked, and one DOM update runs on the next microtask with all marks combined — a handler that changes several variables triggers a single update, and the DOM settles before the browser paints. Updates therefore happen asynchronously: read the DOM after an `await`, not synchronously after dispatching an event.
 
@@ -321,11 +342,11 @@ The output directory is created when needed. It must be different from the input
 
 The input directory must contain `App.wizz`. The build emits `dist/App.js` and copies Wizz's browser entry module to `dist/runtime/main.js`. That entry imports `App.js`, finds the `#app` mount target, and mounts the component.
 
-Keep the document shell responsible only for the mount element and entry-module load:
+`dist/` is served as the web root by `wizz dev`, the node adapter, and static hosting of the build, so keep the document shell responsible only for the mount element and loading `/runtime/main.js`:
 
 ```html
 <div id="app"></div>
-<script type="module" src="/dist/runtime/main.js"></script>
+<script type="module" src="/runtime/main.js"></script>
 ```
 
 If the document does not contain `<div id="app"></div>`, the entry module reports `Wizz could not find mount target "#app".`
@@ -493,7 +514,7 @@ As a consumer of generated modules, within one `output` major version every gene
 A breaking change to either contract bumps its major version and the compiler's major version. Every compiled module is stamped with all three versions on its first line, so build artifacts stay traceable to the compiler that produced them:
 
 ```js
-// Generated by Wizz 1.8.3 (component syntax 1.4.1, generated output 1.8.2). Edits will be overwritten.
+// Generated by Wizz 1.17.1 (component syntax 1.4.2, generated output 1.8.3). Edits will be overwritten.
 ```
 
 `compile()` also returns the frozen version table as its `version` field.

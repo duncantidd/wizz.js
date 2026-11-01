@@ -285,7 +285,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     for (const attribute of elementNode.attributes || []) {
       if (!attribute.name.startsWith('on:')) continue;
       builder.add('  if (problems.length === 0) {');
-      builder.add(`    pendingListeners.push([${ref}, ${JSON.stringify(attribute.name.slice(3))}, ${attribute.value}]);`);
+      builder.add(`    pendingListeners.push([${ref}, ${JSON.stringify(attribute.name.slice(3))}, ${options.handlerSources?.get(attribute) ?? attribute.value}]);`);
       builder.add('  }');
     }
   }

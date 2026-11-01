@@ -79,14 +79,29 @@
 // syntax changes meaning and no generated module changes, so syntax and
 // output hold; the new codes are additive catalog entries.
 //
+// compiler 1.17.1 / syntax 1.4.2 / output 1.8.3: inline `on:` handler
+// fix. Assignments written directly in an inline directive handler —
+// `on:input={(e) => name = e.target.value}`, block-bodied arrows, and
+// function expressions — were emitted verbatim and never scheduled an
+// update, although the documented contract is that handlers mutating
+// reactive state update the DOM. The generator now runs those handlers
+// through the same assignment interceptor as script functions (an
+// expression-bodied arrow becomes a block body; addEventListener ignores
+// listener return values, so dropping the value is unobservable). Output
+// patch: generated listeners for mutating inline handlers change; every
+// other handler is emitted byte-identical. Syntax patch: an inline handler
+// that mutates a prop now fails with the existing read-only diagnostic
+// (WIZZ-G015) instead of silently assigning a local copy — enforcement of
+// the already-documented "props are read-only" rule, not a new restriction.
+//
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.17.0',
-  syntax: '1.4.1',
-  output: '1.8.2'
+  compiler: '1.17.1',
+  syntax: '1.4.2',
+  output: '1.8.3'
 });
 
 module.exports = { VERSIONS };

@@ -77,6 +77,17 @@ test('the files whitelist ships the user-facing boilerplate intact', () => {
   }
 });
 
+test('README documents the served /runtime/main.js entry script matching the document shell', () => {
+  // dist/ is served as the web root by wizz dev, the node adapter, and static
+  // hosting, so the document shell loads /runtime/main.js rather than
+  // /dist/runtime/main.js (issue #74).
+  const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+  const shell = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
+  assert.match(shell, /<script type="module" src="\/runtime\/main\.js"><\/script>/);
+  assert.match(readme, /<script type="module" src="\/runtime\/main\.js"><\/script>/);
+  assert.doesNotMatch(readme, /src="\/dist\/runtime\/main\.js"/);
+});
+
 const EXPECTED_FILES = [
   'package.json', // always included by npm
   'README.md', 'LICENSE', 'CHANGELOG.md', // docs auto-included and whitelisted
