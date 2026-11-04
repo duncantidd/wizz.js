@@ -11,6 +11,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed — Single Delivery of Extracted Styles (issues #75, #76; compiler 1.17.1 → 1.18.0, output 1.8.3 → 1.9.0)
+
+#### Changed
+
+- `wizz build` writes the extracted stylesheet to `dist/wizz.css` instead of `dist/app.css`, and the injected link is `/wizz.css` (`STYLESHEET_FILENAME`, `build.js`). `app.css` differed from the starter's `App.css` only by case, so case-insensitive filesystems merged the two into one file linked twice while case-sensitive ones kept two: the same project built differently per OS (#75). `App.css` now always copies verbatim, and the inode comparison and merge branch in `copyDocumentShell` are gone.
+- A shell that links the old `/app.css` name is rewritten to `/wizz.css` in the built copy, with a build note, so the link cannot 404 on a case-sensitive host. The match is case-sensitive and limited to `<link>` tags, so an author's `/App.css` is untouched.
+
+#### Added
+
+- `extractedStyles` option on `compile()` and `compileServer()`: the module carries no CSS and neither injects nor delivers a scoped `<style>`; `data-wizz-s` markup is unchanged and `payload.style` stays populated for extraction. A style-only component compiles with no head machinery at all.
+- `inlineStyles` option on `buildProject()`: keeps per-module delivery. `scripts/dev.js` passes it because the dev server replaces the built shell with the authored one, so nothing links the stylesheet in development.
+- `splitImportRules()` (`src/compiler/analyzer/cssScanner.js`). `writeExtractedStyles` hoists top-level `@import` statements above every component and collapses duplicates. Without this, removing the injected `<style>` tags would have silently disabled any `@import` that landed after another component's rules.
+
+#### Fixed
+
+- Plain and SSR production builds delivered every scoped rule twice: once in the extracted stylesheet and again from `<style data-wizz-style>` injection, in client and hydratable modules and in the server head run (#76). `buildProject` now decides delivery before compiling (`shellLinksExtractedStyles()`): when the built shell will link the stylesheet, client, hydratable, and server modules all compile with `extractedStyles`. When nothing links it (no shell, or no `</head>`), modules keep injecting, so a shell-less project stays styled.
+- Link detection ignores HTML comments and requires a `<link>` with `rel="stylesheet"`, so a commented-out link, a preload hint, or an `<a href="/wizz.css">` no longer suppresses the injected link. The injection also skips a commented-out `</head>`. Both mattered less while runtime injection hid the mistake.
+- Versions: **compiler and output minor**, because `extractedStyles` is an additive capability and `wizz build` output changes for styled components; output without the option is unchanged apart from the version header. Syntax holds. `package.json` follows the compiler to 1.18.0.
+
+#### Migration
+
+- Application-owned documents that serve built modules from a project with a shell must link `/wizz.css`; those modules no longer carry their CSS. Deployment rules that reference `app.css` by name need updating.
+
+#### Tests
+
+- `build.test.js`: no CSS in `App.js`, `.hydrate.js`, or `.server.js` with the scope attribute intact; the stylesheet selector matches the rendered scope; fallback to injection for a missing shell, no `</head>`, and a commented-only `</head>`; `inlineStyles`; JSON mode; unstyled projects; legacy link rewrite; `/App.css` left alone; links that deliver no rules; comment-aware injection; `@import` hoisting; idempotent rebuilds. The filesystem-case branch and its probe helper are removed because results no longer depend on the host.
+- `cssScanner.test.js` (`splitImportRules` look-alikes in strings, comments, nested rules, and `@import-foo`; a missing final semicolon; case; semicolons in URLs), `componentGenerator.test.js`, `serverGenerator.test.js`, `index.test.js`, `test/hydration.test.js` (hydration with no style node and no mismatch, head block still adopted), and `test/dev.test.js` (development stays inline).
+
+#### Docs
+
+- `README.md`, `STRUCTURE.md`, `src/compiler/generator/README.md`, `src/compiler/analyzer/README.md`, `src/compiler/README.md`, `version.js`, and the `wizz mcp` workflow text describe `wizz.css`, single delivery, and the new triple.
+
 ### Fixed — Reactive Inline Event Handlers (compiler 1.17.0 → 1.17.1, syntax 1.4.1 → 1.4.2, output 1.8.2 → 1.8.3)
 
 #### Fixed

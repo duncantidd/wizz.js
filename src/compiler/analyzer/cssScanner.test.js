@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { scopeCss } = require('./cssScanner');
+const { scopeCss, splitImportRules } = require('./cssScanner');
 
 test('scopes terminal type selectors after the type token', () => {
   assert.equal(
@@ -205,4 +205,42 @@ test('scopes a realistic two-rule stylesheet end to end', () => {
   assert.match(scoped, /animation: pop-abc123 0\.2s ease-out;/);
   // The string literal survives verbatim.
   assert.match(scoped, /content: "\{count\}";/);
+});
+
+test('splitImportRules lifts top-level @import statements and keeps the rest verbatim', () => {
+  assert.deepEqual(
+    splitImportRules('@import url("a.css");\nh1 { color: red }\n@import "b.css" screen;\np { margin: 0 }'),
+    { imports: ['@import url("a.css");', '@import "b.css" screen;'], css: '\nh1 { color: red }\np { margin: 0 }' }
+  );
+});
+
+test('splitImportRules leaves CSS without an @import byte-identical', () => {
+  const css = '/* note */ h1 { color: red }\n@media print { p { margin: 0 } }\n';
+  assert.deepEqual(splitImportRules(css), { imports: [], css });
+  assert.deepEqual(splitImportRules(''), { imports: [], css: '' });
+});
+
+test('splitImportRules terminates a final @import that has no semicolon', () => {
+  assert.deepEqual(splitImportRules('@import "a.css"'), { imports: ['@import "a.css";'], css: '' });
+});
+
+test('splitImportRules accepts any case and no space before the string', () => {
+  assert.deepEqual(splitImportRules('@IMPORT"a.css";').imports, ['@IMPORT"a.css";']);
+});
+
+test('splitImportRules ignores look-alikes: strings, comments, nested rules, and other at-rules', () => {
+  const css = [
+    '/* @import "comment.css"; */',
+    'a::before { content: "@import \'x\';" }',
+    '@media print { @import "nested.css"; }',
+    '@import-foo "custom.css";'
+  ].join('\n');
+  assert.deepEqual(splitImportRules(css), { imports: [], css });
+});
+
+test('splitImportRules keeps a semicolon inside the @import url intact', () => {
+  assert.deepEqual(
+    splitImportRules('@import url("a.css?x=1;y=2");').imports,
+    ['@import url("a.css?x=1;y=2");']
+  );
 });

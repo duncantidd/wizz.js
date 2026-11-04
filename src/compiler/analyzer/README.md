@@ -177,7 +177,7 @@ How it works:
 - **At-rule descent.** Only `@media`, `@supports`, and `@container` bodies are descended into; every other at-rule (`@font-face`, `@import`, `@charset`, vendor-prefixed variants, unknown names) passes through verbatim.
 - **Keyframe scoping.** `@keyframes`/`@-webkit-keyframes` names get the scope as a suffix (`panel-in` → `panel-in-<scope>`) because keyframe names are document-global, and a second pass rewrites matching `animation` / `animation-name` idents in declarations to the suffixed names. Undeclared names (library animations) pass through untouched.
 
-The generators call `scopeCss` once per styled component: the server generator and `wizz build` extraction share its output (guaranteeing `app.css` always agrees with the injected `<style>` markup), and the client generator embeds it in `createStyleNodes()`.
+The generators call `scopeCss` once per styled component: the server generator and `wizz build` extraction share its output (guaranteeing `wizz.css` always agrees with the injected `<style>` markup), and the client generator embeds it in `createStyleNodes()`. `splitImportRules` separates top-level `@import` statements from scoped CSS so `wizz build` can hoist them: `@import` is only valid at the top of a file, and extraction concatenates every component.
 
 ## Ordering and Boundaries
 

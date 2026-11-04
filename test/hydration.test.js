@@ -609,14 +609,14 @@ test('escaping survives the full round trip for hostile text and attribute conte
 // Compiles both targets for an inline head-declaring page into a temporary
 // ESM project and imports them (cache-busted) with the shim document and a
 // pre-seeded shell title installed.
-async function loadHeadModules(t, pageSource) {
+async function loadHeadModules(t, pageSource, compileOptions = {}) {
   const projectDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-head-test-'));
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
   fs.writeFileSync(path.join(projectDirectory, 'package.json'), '{"type":"module"}');
 
-  const { source: serverSource } = compileServer(pageSource, { filePath: 'src/Page.wizz' });
+  const { source: serverSource } = compileServer(pageSource, { filePath: 'src/Page.wizz', ...compileOptions });
   fs.writeFileSync(path.join(projectDirectory, 'server.js'), serverSource);
-  const { source: clientSource } = compile(pageSource, { filePath: 'src/Page.wizz', hydratable: true });
+  const { source: clientSource } = compile(pageSource, { filePath: 'src/Page.wizz', hydratable: true, ...compileOptions });
   fs.writeFileSync(path.join(projectDirectory, 'client.js'), clientSource);
 
   const bust = `?test=${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -738,6 +738,44 @@ test('a tampered delivered title falls back to a fresh head with no duplicates',
 
   component.destroy();
   assert.deepEqual(document.head.childNodes.map((node) => node.nodeName), ['TITLE']);
+});
+
+test('extracted-style modules hydrate with no style node and no mismatch', async (t) => {
+  const { document, clientModule, metricsBefore, warnings, render } = await loadHeadModules(
+    t,
+    '<main><h1>{who}</h1></main><wizz:style>h1 { color: red }</wizz:style><script>\nlet who = "A";\n</' + 'script>',
+    { extractedStyles: true }
+  );
+  const { html, head, state } = render();
+
+  assert.equal(head, undefined);
+  const target = deliverMarkup(document, html);
+  const main = target.childNodes[0];
+
+  const component = clientModule.hydrateComponent(target, {}, state);
+
+  assert.equal(warnings.length, 0);
+  assert.equal(target.childNodes[0], main, 'the delivered root is adopted, not recreated');
+  assert.equal(document.metrics.elements, metricsBefore.elements);
+  assert.equal(document.head.childNodes.filter((node) => node.nodeName === 'STYLE').length, 0);
+  component.destroy();
+});
+
+test('extracted-style modules still adopt a delivered head block', async (t) => {
+  const { document, clientModule, warnings, render } = await loadHeadModules(
+    t,
+    '<main><h1>T</h1></main><wizz:head><title>Page</title></wizz:head><wizz:style>h1 { color: red }</wizz:style>',
+    { extractedStyles: true }
+  );
+  const { html, head, state } = render();
+
+  deliverHeadRun(document, head);
+  const target = deliverMarkup(document, html);
+  const component = clientModule.hydrateComponent(target, {}, state);
+
+  assert.equal(warnings.length, 0);
+  assert.equal(document.head.childNodes.filter((node) => node.nodeName === 'TITLE' && node.textContent === 'Page').length, 1);
+  component.destroy();
 });
 
 test('delivered styles are adopted without duplication and refcounted', async (t) => {

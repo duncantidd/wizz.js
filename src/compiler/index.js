@@ -29,6 +29,12 @@ const { VERSIONS } = require('./version.js');
  * @param {Object<string, string>} [options.componentIneligibilityReasons] -
  *   Import names mapped to the child's own gate failure, chained into the
  *   thrown diagnostic ("Underlying reason: …").
+ * @param {boolean} [options.extractedStyles] - When true, the caller delivers
+ *   the component's scoped CSS through a linked stylesheet (`wizz build`'s
+ *   extracted sheet), so the generated module carries no CSS and injects no
+ *   `<style>`. Markup keeps its `data-wizz-s` scope attributes. Every module
+ *   of a page must agree on this flag: server delivery and hydration adoption
+ *   share the style run.
  * @param {string} [options.diagnostics] - Set to `'collect'` to receive a
  *   structured diagnostic instead of a thrown error: a failed compile
  *   returns `{ diagnostics: [record] }`, and a successful compile adds
@@ -53,7 +59,8 @@ function compile(source, options = {}) {
     componentServerRenderable: optionObject.componentServerRenderable,
     componentIneligibilityReasons: optionObject.componentIneligibilityReasons,
     // Forwarded for generated diagnostics (head locations), not the gate.
-    filePath
+    filePath,
+    extractedStyles: optionObject.extractedStyles === true
   };
 
   try {
@@ -102,6 +109,12 @@ function compile(source, options = {}) {
  * @param {Object<string, string>} [options.componentIneligibilityReasons] -
  *   Import names mapped to the child's own gate failure, chained into the
  *   thrown diagnostic ("Underlying reason: …").
+ * @param {boolean} [options.extractedStyles] - When true, the caller delivers
+ *   the component's scoped CSS through a linked stylesheet (`wizz build`'s
+ *   extracted sheet), so the generated module carries no CSS and injects no
+ *   `<style>`. Markup keeps its `data-wizz-s` scope attributes. Every module
+ *   of a page must agree on this flag: server delivery and hydration adoption
+ *   share the style run.
  * @param {string} [options.diagnostics] - Set to `'collect'` to receive a
  *   structured diagnostic instead of a thrown error, exactly as with
  *   `compile()`: a failed compile returns `{ diagnostics: [record] }`, and
@@ -120,6 +133,7 @@ function compileServer(source, options = {}) {
     componentIneligibilityReasons: optionObject.componentIneligibilityReasons,
     // Forwarded for generated diagnostics (head locations), not the gate.
     filePath,
+    extractedStyles: optionObject.extractedStyles === true,
     // Decorates child `.server.js` import specifiers so a development
     // server's in-process module cache re-evaluates the child graph after a
     // rebuild (empty for production builds, which emit clean specifiers).
