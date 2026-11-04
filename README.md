@@ -33,7 +33,7 @@ wizz dev
 
 A Wizz project contains only source files. The framework is not vendored into the project: the compiler, runtime, and CLI live in the managed install (`${XDG_DATA_HOME:-~/.local/share}/wizz`), and the `wizz` command loads them from there.
 
-You edit only `index.html`, `App.css`, and `src/**/*.wizz`. Everything else is generated: `wizz dev` and `wizz build` write `dist/` containing the compiled component modules, a copy of the runtime (`dist/runtime/`), and the extracted `app.css`. Treat `dist/` as disposable build output — browsers never see the compiler, and the generated `dist/` is self-contained for deployment.
+You edit only `index.html`, `App.css`, and `src/**/*.wizz`. Everything else is generated: `wizz dev` and `wizz build` write `dist/` containing the compiled component modules, a copy of the runtime (`dist/runtime/`), and the extracted `wizz.css`. Treat `dist/` as disposable build output — browsers never see the compiler, and the generated `dist/` is self-contained for deployment.
 
 To upgrade the installed framework after a new release, run `wizz update` (or re-run the installer; the install is a snapshot, not a link to any repository).
 
@@ -158,7 +158,7 @@ Print what you have installed with:
 wizz --version
 ```
 
-which prints the compiler and contract version triple, for example `wizz 1.17.1 (compiler 1.17.1, syntax 1.4.2, output 1.8.3)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
+which prints the compiler and contract version triple, for example `wizz 1.18.0 (compiler 1.18.0, syntax 1.4.2, output 1.9.0)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
 
 `wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
 
@@ -446,7 +446,7 @@ A component may declare one `<wizz:style>` block holding plain CSS. Every elemen
 
 The block's contents are raw text: CSS braces, colons, and quotes never reach the template expression lexer, and expressions are not interpolated into CSS — styles are trusted author input like scripts, which sidesteps the injection class entirely. The block is root-level (one per component, no attributes, no nesting), and a plain `<style>` element is rejected with a diagnostic pointing at `<wizz:style>` so the scoping contract stays explicit. An `h2` in the page itself — like the one above — carries no scope attribute and matches no component rule. Document-wide styles (resets, shared tokens) keep living in the document stylesheet as they always have.
 
-Delivery is automatic and never duplicates: `wizz dev` server-renders one `<style>` tag per styled component into the document head (a component imported by several pages injects exactly once per document), hydration adopts the delivered stylesheet instead of recreating it, and client mounts share one refcounted stylesheet per component scope. `wizz build` extracts every component's scoped rules into `dist/app.css` — computed with the same scoping pass the generators use, including `@media` descent and scope-suffixed `@keyframes` names — and injects `<link rel="stylesheet" href="/app.css">` into the copied document shell, so production pages arrive styled from the first paint with zero runtime work.
+Delivery is automatic and never duplicates: `wizz dev` server-renders one `<style>` tag per styled component into the document head (a component imported by several pages injects exactly once per document), hydration adopts the delivered stylesheet instead of recreating it, and client mounts share one refcounted stylesheet per component scope. `wizz build` extracts every component's scoped rules into `dist/wizz.css` — computed with the same scoping pass the generators use, including `@media` descent and scope-suffixed `@keyframes` names, with any `@import` hoisted to the top of the file — and injects `<link rel="stylesheet" href="/wizz.css">` into the copied document shell, so production pages arrive styled from the first paint with zero runtime work. The stylesheet is then the only delivery: client, hydratable, and server modules are compiled without their CSS, so every rule is downloaded once. When nothing links it (no `index.html` was found, or the shell has no `</head>`), modules keep delivering their own styles instead. If you serve built modules from your own document in a project that has a shell, link `/wizz.css` from that document yourself. A shell that still links the old `/app.css` name keeps working: the build rewrites the link and prints a note.
 
 ## Persistent Cross-Tab State
 
@@ -514,7 +514,7 @@ As a consumer of generated modules, within one `output` major version every gene
 A breaking change to either contract bumps its major version and the compiler's major version. Every compiled module is stamped with all three versions on its first line, so build artifacts stay traceable to the compiler that produced them:
 
 ```js
-// Generated by Wizz 1.17.1 (component syntax 1.4.2, generated output 1.8.3). Edits will be overwritten.
+// Generated by Wizz 1.18.0 (component syntax 1.4.2, generated output 1.9.0). Edits will be overwritten.
 ```
 
 `compile()` also returns the frozen version table as its `version` field.

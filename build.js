@@ -4,11 +4,18 @@ const path = require('node:path');
 
 // Single public compiler entry point: parsing, analysis, ID assignment, generation.
 const { compile, compileServer } = require('./src/compiler');
-const { scopeCss } = require('./src/compiler/analyzer/cssScanner');
+const { scopeCss, splitImportRules } = require('./src/compiler/analyzer/cssScanner');
 const { discoverApiRoutes, listJavaScriptFiles } = require('./scripts/apiRoutes');
 
-const STYLESHEET_FILENAME = 'app.css';
-const STYLESHEET_HREF_PATTERN = /href\s*=\s*(["'])\/app\.css\1/;
+// The extracted stylesheet's name must not collide with an author file, even
+// by case alone: `app.css` shared one file with the starter's `App.css` on
+// case-insensitive filesystems and two files on case-sensitive ones, so the
+// same project built differently per OS. Only App.css is copied beside it.
+const STYLESHEET_FILENAME = 'wizz.css';
+const STYLESHEET_HREF_PATTERN = /\bhref\s*=\s*(["'])\/wizz\.css\1/;
+// Shells written before the rename link the extracted sheet under its old
+// name. Case-sensitive on purpose: `/App.css` is the author's own stylesheet.
+const LEGACY_STYLESHEET_HREF_PATTERN = /(\bhref\s*=\s*["'])\/app\.css(["'])/;
 
 // The envelope `wizz build --json` prints. Versioned so tooling can pin the
 // shape it parses: new fields may be added within format version 1, but
@@ -143,6 +150,7 @@ function compileWizzFile(inputPath, outputPath, options = {}) {
   const collect = options.diagnostics === 'collect';
   const result = compile(rawWizzCode, {
     filePath: options.filePath || inputPath,
+    extractedStyles: options.extractedStyles === true,
     ...(collect ? { diagnostics: 'collect' } : {})
   });
 
@@ -200,6 +208,7 @@ function computeServerEligibility(inputFiles, compiledByInputPath, failureReason
     visiting.add(inputPath);
     try {
       const { rawWizzCode, payload } = compiledByInputPath.get(inputPath);
+      const extractedStyles = options.extractedStyles === true;
       const componentServerRenderable = {};
       const componentIneligibilityReasons = {};
 
@@ -217,13 +226,14 @@ function computeServerEligibility(inputFiles, compiledByInputPath, failureReason
       const gateOptions = { componentServerRenderable, componentIneligibilityReasons };
       const serverResult = compileServer(rawWizzCode, {
         filePath: inputPath,
+        extractedStyles,
         ...gateOptions,
         // Decorates child import specifiers so a development server's module
         // cache re-evaluates the child graph after a rebuild; empty for
         // production builds.
         moduleQuery: options.moduleQuery
       });
-      const hydratableResult = compile(rawWizzCode, { filePath: inputPath, hydratable: true, ...gateOptions });
+      const hydratableResult = compile(rawWizzCode, { filePath: inputPath, hydratable: true, extractedStyles, ...gateOptions });
 
       serverBuildsByInputPath.set(inputPath, { serverResult, hydratableResult });
       const result = { eligible: true, reason: null };
@@ -288,11 +298,18 @@ function writeExtractedStyles(outputDirectory, styles) {
   if (styles.length === 0) return false;
 
   // A per-file header comment keeps the extracted stylesheet debuggable;
-  // CSS comments are inert, so delivery semantics are unaffected.
+  // CSS comments are inert, so delivery semantics are unaffected. @import is
+  // only valid at the top of a file, so it is hoisted above every component.
+  const imports = new Set();
   const stylesheet = styles
-    .map(({ filePath, css }) => `/* ${filePath} */\n${css}`)
+    .map(({ filePath, css }) => {
+      const split = splitImportRules(css);
+      split.imports.forEach((rule) => imports.add(rule));
+      return `/* ${filePath} */\n${split.css}`;
+    })
     .join('\n\n');
-  fs.writeFileSync(path.join(outputDirectory, STYLESHEET_FILENAME), `${stylesheet}\n`, 'utf8');
+  const preamble = imports.size > 0 ? `${[...imports].join('\n')}\n\n` : '';
+  fs.writeFileSync(path.join(outputDirectory, STYLESHEET_FILENAME), `${preamble}${stylesheet}\n`, 'utf8');
   return true;
 }
 
@@ -310,10 +327,42 @@ function findDocumentShell(inputDirectory) {
   return null;
 }
 
+function stripHtmlComments(html) {
+  return html.replace(/<!--[\s\S]*?-->/g, '');
+}
+
+// A commented-out link or a preload hint delivers no rules, so neither counts.
+function linksExtractedStylesheet(shell) {
+  const linkTags = stripHtmlComments(shell).match(/<link\b[^>]*>/gi) || [];
+  return linkTags.some((tag) => (
+    STYLESHEET_HREF_PATTERN.test(tag) && /\brel\s*=\s*["']?stylesheet\b/i.test(tag)
+  ));
+}
+
+function rewriteLegacyStylesheetLinks(shell) {
+  return shell.replace(/<link\b[^>]*>/gi, (tag) => (
+    tag.replace(LEGACY_STYLESHEET_HREF_PATTERN, `$1/${STYLESHEET_FILENAME}$2`)
+  ));
+}
+
+/**
+ * Reports whether the built shell will link the extracted stylesheet. This
+ * decides how modules are compiled, before any style is known to exist: when
+ * it is true the stylesheet is the only delivery, so it must stay in lockstep
+ * with what copyDocumentShell does. Otherwise (no shell, or a shell without a
+ * </head> to link from) modules keep injecting their own styles at runtime.
+ */
+function shellLinksExtractedStyles(inputDirectory) {
+  const shellPath = findDocumentShell(inputDirectory);
+  if (shellPath === null) return false;
+  const shell = rewriteLegacyStylesheetLinks(fs.readFileSync(shellPath, 'utf8'));
+  return linksExtractedStylesheet(shell) || /<\/head\s*>/i.test(stripHtmlComments(shell));
+}
+
 /**
  * Copies the project's document shell into the output directory, injecting
- * the app.css link before </head> when component styles were extracted. A
- * shell that already links /app.css is left untouched (no double link), and
+ * the stylesheet link before </head> when component styles were extracted. A
+ * shell that already links /wizz.css is left untouched (no double link), and
  * a project without a shell keeps today's behavior — the dev server reports
  * the missing shell at serve time.
  *
@@ -332,16 +381,24 @@ function copyDocumentShell(inputDirectory, outputDirectory, hasStyles, logger = 
     return false;
   }
 
-  let shell = fs.readFileSync(shellPath, 'utf8');
-  if (hasStyles && !STYLESHEET_HREF_PATTERN.test(shell)) {
-    if (!/<\/head/i.test(shell)) {
-      logger.log(`Note: the document shell has no <head> element, so the extracted ${STYLESHEET_FILENAME} is not linked.`);
+  const authoredShell = fs.readFileSync(shellPath, 'utf8');
+  let shell = rewriteLegacyStylesheetLinks(authoredShell);
+  if (hasStyles && shell !== authoredShell) {
+    logger.log(`Note: the document shell links /app.css; the extracted stylesheet is now ${STYLESHEET_FILENAME}, so the built shell links /${STYLESHEET_FILENAME} instead. Update index.html to match.`);
+  }
+  if (hasStyles && !linksExtractedStylesheet(shell)) {
+    if (!/<\/head\s*>/i.test(stripHtmlComments(shell))) {
+      logger.log(`Note: the document shell has no <head> element, so the extracted ${STYLESHEET_FILENAME} is not linked and components inject their styles at runtime.`);
     } else {
+      // Comments match first so a commented-out </head> is never the anchor.
       // Function-form replacement: the shell may contain `$` sequences
       // (`$&`, `$'`, `$$`) that string-form replacement would expand.
-      shell = shell.replace(/([ \t]*)<\/head(\s*)?>/i, (match, indent) => (
-        `${indent}<link rel="stylesheet" href="/${STYLESHEET_FILENAME}">\n${indent}</head>`
-      ));
+      let linked = false;
+      shell = shell.replace(/<!--[\s\S]*?-->|([ \t]*)<\/head\s*>/gi, (match, indent) => {
+        if (linked || match.startsWith('<!--')) return match;
+        linked = true;
+        return `${indent}<link rel="stylesheet" href="/${STYLESHEET_FILENAME}">\n${indent}</head>`;
+      });
     }
   }
 
@@ -349,36 +406,7 @@ function copyDocumentShell(inputDirectory, outputDirectory, hasStyles, logger = 
 
   const shellStylesheetPath = path.join(path.dirname(shellPath), 'App.css');
   if (fs.existsSync(shellStylesheetPath)) {
-    const destAppCssPath = path.join(outputDirectory, 'App.css');
-    const destExtractedCssPath = path.join(outputDirectory, STYLESHEET_FILENAME);
-
-    let isSameFile = false;
-    if (fs.existsSync(destExtractedCssPath)) {
-      try {
-        const stat1 = fs.statSync(destAppCssPath);
-        const stat2 = fs.statSync(destExtractedCssPath);
-        isSameFile = stat1.ino === stat2.ino && stat1.dev === stat2.dev;
-      } catch {
-        // A failed stat means one of the two paths does not exist, and a
-        // missing file cannot be the same file as an existing one — so the
-        // copy must proceed. Case-insensitive path comparison would be wrong
-        // here: on a case-sensitive filesystem `dist/App.css` and
-        // `dist/app.css` are distinct files (the stat fails precisely because
-        // `App.css` is not written yet), and merging would drop the shell
-        // stylesheet entirely. On case-insensitive filesystems the statSync
-        // above resolves the lookup itself, so the ino comparison already
-        // answered the same-file question.
-        isSameFile = false;
-      }
-    }
-
-    if (isSameFile) {
-      const globalCss = fs.readFileSync(shellStylesheetPath, 'utf8');
-      const existingExtractedCss = fs.readFileSync(destExtractedCssPath, 'utf8');
-      fs.writeFileSync(destExtractedCssPath, `${globalCss}\n\n${existingExtractedCss}`, 'utf8');
-    } else {
-      fs.copyFileSync(shellStylesheetPath, destAppCssPath);
-    }
+    fs.copyFileSync(shellStylesheetPath, path.join(outputDirectory, 'App.css'));
   }
   return true;
 }
@@ -945,6 +973,9 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
     throw new TypeError(`Unknown build adapter: ${options.adapter}. Known adapters: ${KNOWN_ADAPTERS.join(', ')}.`);
   }
   const adapterName = options.adapter ?? null;
+  // The dev server replaces the built shell with the authored one, so nothing
+  // links the extracted stylesheet there and it opts out with inlineStyles.
+  const inlineStyles = options.inlineStyles === true;
   const jsonDiagnostics = [];
   const jsonFiles = [];
   let resolvedInputDirectory = null;
@@ -964,6 +995,10 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
     }
 
     const inputFiles = discoverWizzFiles(resolvedInputDirectory);
+    // Decided up front because it shapes every generated module: a page whose
+    // shell links the extracted stylesheet gets its CSS exactly once, from
+    // that stylesheet, on the client and server targets alike.
+    const extractedStyles = !inlineStyles && shellLinksExtractedStyles(resolvedInputDirectory);
 
     // Pass 1 — client builds. Every .wizz file gets its browser module; a
     // client-side failure is reported and recorded so importing files can chain
@@ -979,6 +1014,7 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
           // position-independent locations.
           const outcome = compileWizzFile(inputPath, outputPath, {
             diagnostics: 'collect',
+            extractedStyles,
             filePath: toPosixPath(path.relative(resolvedInputDirectory, inputPath))
           });
           if (outcome.diagnostics.length > 0) {
@@ -990,7 +1026,7 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
           compiledByInputPath.set(inputPath, outcome);
           compiledFileCount++;
         } else {
-          compiledByInputPath.set(inputPath, compileWizzFile(inputPath, outputPath));
+          compiledByInputPath.set(inputPath, compileWizzFile(inputPath, outputPath, { extractedStyles }));
           compiledFileCount++;
           logger.log(`Compiled ${inputPath} -> ${outputPath}`);
         }
@@ -1025,7 +1061,7 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
       failureReasonsByInputPath,
       // Threaded through so the development server can decorate child import
       // specifiers per rebuild; production builds leave it empty.
-      { moduleQuery: options.moduleQuery }
+      { moduleQuery: options.moduleQuery, extractedStyles }
     );
 
     // Pass 3 — server artifacts for eligible files (pages AND components: a
@@ -1070,12 +1106,13 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
     emitRouteManifest(resolvedInputDirectory, resolvedOutputDirectory, inputFiles, serverRenderableByInputPath);
 
     // Pass 4 — style extraction and shell copy: production builds get one
-    // app.css carrying every component's scoped rules, linked from the copied
-    // shell so first paint is styled with zero runtime work. The dev server's
-    // per-document <style> injection keeps working unchanged on top of this.
-    const extractedStyles = extractComponentStyles(resolvedInputDirectory, compiledByInputPath);
-    writeExtractedStyles(resolvedOutputDirectory, extractedStyles);
-    copyDocumentShell(resolvedInputDirectory, resolvedOutputDirectory, extractedStyles.length > 0, logger);
+    // wizz.css carrying every component's scoped rules, linked from the copied
+    // shell so first paint is styled with zero runtime work (the modules were
+    // compiled without their copy above). The dev server keeps its per-document
+    // <style> injection through inlineStyles.
+    const componentStyles = extractComponentStyles(resolvedInputDirectory, compiledByInputPath);
+    writeExtractedStyles(resolvedOutputDirectory, componentStyles);
+    copyDocumentShell(resolvedInputDirectory, resolvedOutputDirectory, componentStyles.length > 0, logger);
 
     // The output directory holds ES modules and their assets, so pin the module
     // type beside the emitted artifacts: Node-side imports — the dev server's
@@ -1190,6 +1227,7 @@ module.exports = {
   copyDocumentShell,
   extractComponentStyles,
   findDocumentShell,
+  shellLinksExtractedStyles,
   writeExtractedStyles,
   copyRuntimeModules,
   discoverWizzFiles,

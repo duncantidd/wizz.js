@@ -254,6 +254,8 @@ function __wizzPersistSubscribe(key, callback) {
  * @param {Object<string, string>} [options.componentIneligibilityReasons] -
  *   Import names mapped to the child's own gate failure, chained into the
  *   thrown diagnostic.
+ * @param {boolean} [options.extractedStyles] - When true, a linked stylesheet
+ *   delivers the component's scoped CSS: no `<style>` code is generated.
  * @param {string} [options.filePath] - Path of the component file, used to
  *   qualify the `data-wizz-loc` diagnostics emitted on head nodes.
  * @returns {string} The final compiled JavaScript module.
@@ -282,7 +284,10 @@ function generateComponent(astPayload, options = {}) {
   // Gating on static presence keeps head-free, component-free output
   // byte-identical.
   const ownHead = astPayload.head != null;
-  const ownStyle = astPayload.style != null;
+  // With extractedStyles the linked stylesheet delivers this component's CSS,
+  // so the module carries no copy of it. The scope attributes are stamped
+  // during analysis and stay in the markup either way.
+  const ownStyle = astPayload.style != null && options.extractedStyles !== true;
   const hasRenderedComponentTags = componentImports.some(({ name }) => renderedImportNames(astPayload.template, name));
   const headActive = ownHead || ownStyle || (hydratable && hasRenderedComponentTags);
   // Conflict warnings name a title location when one exists (titles are what
@@ -655,7 +660,7 @@ function generateComponent(astPayload, options = {}) {
   // block rides along so the run machinery activates for styled-only
   // components (their delivered stylesheet must not strand the run markers).
   if (hydratable) {
-    const hydrationCode = generateHydrationFunction(astPayload.template, componentImports, astPayload.head, { ...options, handlerSources }, astPayload.style);
+    const hydrationCode = generateHydrationFunction(astPayload.template, componentImports, astPayload.head, { ...options, handlerSources }, ownStyle ? astPayload.style : null);
     hydrationCode.split('\n').forEach(line => builder.add(line));
   }
 

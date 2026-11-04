@@ -753,7 +753,7 @@ wizz dev [--port <n>] [--host <addr>]
 wizz build [input-directory] [output-directory] [--json] [--adapter node]
     Compile src into dist (defaults), preserving paths. Writes
     dist/package.json ({"type":"module"}), extracts scoped styles into
-    dist/app.css, and writes the route and API manifests. --json prints the
+    dist/wizz.css, and writes the route and API manifests. --json prints the
     machine-parsable wizz-build-diagnostics@1 envelope; --adapter node
     additionally emits dist/server.mjs.
 

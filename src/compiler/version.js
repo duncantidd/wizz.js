@@ -26,7 +26,8 @@
 //     the `data-wizz-s` scope attribute in markup (server HTML, client
 //     `create()`, and hydration walks agree) and the head surface dedups
 //     scoped `<style>` nodes by their `data-wizz-style` attribute with
-//     `data-wizz-refs` refcounting. For components declaring
+//     `data-wizz-refs` refcounting (compiles requested with `extractedStyles`
+//     carry no CSS and create no such node: a linked stylesheet delivers it). For components declaring
 //     `let name = persist(key, default)` state, the surface additionally
 //     carries the additive `persist` capability: client initializers read the
 //     value through the `__wizzPersistRead` helper, statement mutations write
@@ -94,14 +95,21 @@
 // (WIZZ-G015) instead of silently assigning a local copy — enforcement of
 // the already-documented "props are read-only" rule, not a new restriction.
 //
+// compiler 1.18.0 / output 1.9.0: the additive `extractedStyles` compile
+// option. When a linked stylesheet delivers a component's CSS, client,
+// hydratable, and server modules carry none of it and neither inject nor
+// adopt a scoped `<style>`; `data-wizz-s` markup is unchanged. Output without
+// the option is byte-identical apart from the version header, so syntax
+// holds.
+//
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.17.1',
+  compiler: '1.18.0',
   syntax: '1.4.2',
-  output: '1.8.3'
+  output: '1.9.0'
 });
 
 module.exports = { VERSIONS };

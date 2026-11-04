@@ -179,12 +179,12 @@ test('the scaffolded project serves / and /home with SSR state and builds cleanl
   // Component styles were extracted and linked from the copied shell. The
   // showcase App.wizz itself has no scoped style block — it leans on the
   // global App.css — so only the three styled components contribute.
-  const stylesheet = fs.readFileSync(path.join(projectDirectory, 'dist', 'app.css'), 'utf8');
+  const stylesheet = fs.readFileSync(path.join(projectDirectory, 'dist', 'wizz.css'), 'utf8');
   assert.match(stylesheet, /\/\* pages\/Home\.wizz \*\//);
   assert.match(stylesheet, /\/\* components\/Counter\.wizz \*\//);
   assert.match(stylesheet, /\/\* components\/Card\.wizz \*\//);
   const shell = fs.readFileSync(path.join(projectDirectory, 'dist', 'index.html'), 'utf8');
-  assert.match(shell, /href="\/app\.css"/);
+  assert.match(shell, /href="\/wizz\.css"/);
 
   // The global stylesheet beside the shell is part of the document set: the
   // build copies it exactly as the dev server does, or the shell's ./App.css

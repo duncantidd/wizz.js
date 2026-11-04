@@ -299,6 +299,30 @@ test('compileServer errors identify the input file when compiling from a file', 
   );
 });
 
+test('the extractedStyles option reaches both targets and keeps the payload style', () => {
+  const source = '<main></main><wizz:style>main { color: red }</wizz:style>';
+
+  for (const result of [
+    compile(source, { extractedStyles: true }),
+    compile(source, { extractedStyles: true, hydratable: true }),
+    compileServer(source, { extractedStyles: true })
+  ]) {
+    assert.ok(!result.source.includes('color: red'));
+    // wizz build reads the payload to write the extracted stylesheet.
+    assert.equal(result.payload.style.css, 'main { color: red }');
+  }
+  assert.ok(compile(source).source.includes('color: red'));
+  assert.ok(compileServer(source).source.includes('color: red'));
+});
+
+test('the extractedStyles option keeps a usable source map', () => {
+  const { sourceMap } = compile(
+    '<script>\nlet n = 0;\n</script><main>{n}</main><wizz:style>main { color: red }</wizz:style>',
+    { filePath: 'src/A.wizz', extractedStyles: true }
+  );
+  assert.ok(sourceMap === null || sourceMap.version === 3);
+});
+
 test('the hydratable option exports hydrateComponent and gates the surface', () => {
   const { source } = compile(
     '<script>let count = 0;</script><main><p>Count: {count}</p></main>',

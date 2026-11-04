@@ -352,4 +352,27 @@ function scopeCss(css, scope) {
   return processBlock(css, scope, keyframeNames);
 }
 
-module.exports = { scopeCss };
+/**
+ * Splits top-level @import statements out of a stylesheet. @import is only
+ * valid at the start of a stylesheet, so concatenating component CSS into one
+ * file silently disables any @import that lands after another component's
+ * rules; the caller hoists the returned statements above the combined CSS.
+ *
+ * @param {string} css - A stylesheet (scoped or raw).
+ * @returns {{ imports: string[], css: string }} The `;`-terminated statements
+ *   and the remaining CSS, otherwise byte-identical.
+ */
+function splitImportRules(css) {
+  const imports = [];
+  let rest = '';
+  for (const item of scanItems(css)) {
+    if (item.body === null && /^@import(?![\w-])/i.test(maskLiterals(item.prelude).trimStart())) {
+      imports.push(`${item.prelude.trim()};`);
+    } else {
+      rest += item.raw;
+    }
+  }
+  return { imports, css: rest };
+}
+
+module.exports = { scopeCss, splitImportRules };
