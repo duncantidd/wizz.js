@@ -96,9 +96,9 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // and an inline handler mutating a prop fails with the read-only
   // diagnostic WIZZ-G015 (syntax patch: enforcement of a documented rule).
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.17.1',
+    compiler: '1.18.0',
     syntax: '1.4.2',
-    output: '1.8.3'
+    output: '1.9.0'
   });
 });
 

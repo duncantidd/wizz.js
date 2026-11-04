@@ -645,6 +645,31 @@ test('styled components deliver a scoped style tag through the head run', async 
   assert.ok(head.includes(`data-wizz-s="${scope}"`));
 });
 
+test('extractedStyles renders scoped markup with no style delivery', async () => {
+  const rendered = await renderSource(
+    '<main><h2>T</h2></main><wizz:style>h2 { color: red }</wizz:style>',
+    {},
+    {},
+    { extractedStyles: true }
+  );
+
+  assert.match(rendered.html, /<main data-wizz-s="[a-z0-9]+"/);
+  assert.ok(!rendered.moduleSource.includes('color: red'));
+  assert.ok(!('head' in rendered), 'a style-only component has no head to deliver');
+});
+
+test('extractedStyles keeps head markup in the head run', async () => {
+  const { head } = await renderSource(
+    '<main></main><wizz:head><title>Page</title></wizz:head><wizz:style>main { color: red }</wizz:style>',
+    {},
+    {},
+    { extractedStyles: true }
+  );
+
+  assert.ok(head.includes('<title'));
+  assert.ok(!head.includes('<style'));
+});
+
 test('the style tag carries no data-wizz-head-id delivery tag', async () => {
   const { head } = await renderSource(
     '<main><h2>T</h2></main><wizz:style>h2 { color: red }</wizz:style>'

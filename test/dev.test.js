@@ -663,6 +663,22 @@ test('delivers scoped component styles with their own h2 rules from the first lo
   assert.match(document, /<h2>Page<\/h2>/);
 });
 
+test('development builds keep inline styles and leave the shell unlinked', async (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), DOCUMENT_SHELL);
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main>Hi</main><wizz:style>main { color: red }</wizz:style>');
+
+  const developmentServer = startDevelopmentServer({ projectDirectory, port: 0, logger: createLogger() });
+  t.after(() => developmentServer.close());
+  const url = await developmentServer.listen();
+
+  const document = await (await fetch(`${url}/`)).text();
+  assert.equal((document.match(/<style data-wizz-style=/g) || []).length, 1);
+  assert.equal(document.includes('href="/wizz.css"'), false);
+  assert.ok(fs.readFileSync(path.join(projectDirectory, 'dist', 'App.js'), 'utf8').includes('color: red'));
+});
+
 test('a styled component rendered twice on one page injects its stylesheet once', async (t) => {
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));

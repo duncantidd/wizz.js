@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { spawn, spawnSync } = require('node:child_process');
+const { pathToFileURL } = require('node:url');
 const { initProject } = require('./scripts/init');
 const {
   BUILD_DIAGNOSTICS_FORMAT,
@@ -17,25 +18,12 @@ const {
   main,
   NODE_ADAPTER_HOST_FILENAME,
   NODE_ADAPTER_HOST_SOURCE,
-  parseBuildArguments
+  parseBuildArguments,
+  shellLinksExtractedStyles
 } = require('./build');
 
 function createTemporaryDirectory() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-build-test-'));
-}
-
-// Whether the filesystem holding `directory` folds case: probe with a file
-// name that only differs from an existing one by case. Tests whose outcomes
-// legitimately branch on same-file semantics (App.css vs app.css) assert
-// each branch explicitly instead of loosening the assertion to fit both.
-function isCaseInsensitiveFilesystem(directory) {
-  const probePath = path.join(directory, 'wizz-case-probe');
-  fs.writeFileSync(probePath, '');
-  try {
-    return fs.existsSync(path.join(directory, 'WIZZ-CASE-PROBE'));
-  } finally {
-    fs.rmSync(probePath, { force: true });
-  }
 }
 
 function writeFile(filePath, contents = '') {
@@ -688,7 +676,7 @@ test('copies runtime modules without requiring component files', (t) => {
     fs.readFileSync(path.join(__dirname, 'src', 'runtime', 'main.js'), 'utf8')
   );
 });
-test('extracts styled component rules into app.css linked from the copied shell', (t) => {
+test('extracts styled component rules into wizz.css linked from the copied shell', (t) => {
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
 
@@ -724,7 +712,7 @@ test('extracts styled component rules into app.css linked from the copied shell'
 
   buildProject(inputDirectory, outputDirectory, createLogger());
 
-  const stylesheet = fs.readFileSync(path.join(outputDirectory, 'app.css'), 'utf8');
+  const stylesheet = fs.readFileSync(path.join(outputDirectory, 'wizz.css'), 'utf8');
   // Discovery order: components sort before pages, so Card precedes Panel;
   // each block carries its source file header.
   // The scanner preserves the author's formatting verbatim; only the
@@ -738,8 +726,8 @@ test('extracts styled component rules into app.css linked from the copied shell'
 
   // The copied shell links the stylesheet before </head>.
   const shell = fs.readFileSync(path.join(outputDirectory, 'index.html'), 'utf8');
-  const linkIndex = shell.indexOf('<link rel="stylesheet" href="/app.css">');
-  assert.ok(linkIndex !== -1, 'shell should link app.css');
+  const linkIndex = shell.indexOf('<link rel="stylesheet" href="/wizz.css">');
+  assert.ok(linkIndex !== -1, 'shell should link wizz.css');
   assert.ok(linkIndex < shell.indexOf('</head>'), 'link should come before </head>');
   assert.ok(shell.includes('<title>Showcase</title>'), 'shell content is preserved');
   assert.ok(shell.includes('<div id="app"></div>'), 'mount point is preserved');
@@ -757,7 +745,7 @@ test('copies the document shell verbatim when no component has styles', (t) => {
 
   buildProject(inputDirectory, outputDirectory, createLogger());
 
-  assert.equal(fs.existsSync(path.join(outputDirectory, 'app.css')), false);
+  assert.equal(fs.existsSync(path.join(outputDirectory, 'wizz.css')), false);
   assert.equal(fs.readFileSync(path.join(outputDirectory, 'index.html'), 'utf8'), shell);
 });
 
@@ -786,27 +774,19 @@ test('copies a shell-side App.css into the output for the root layout', (t) => {
   buildProject(inputDirectory, outputDirectory, createLogger());
 
   // The global stylesheet is part of the document set: the shell links it as
-  // ./App.css, so the build must ship it or the link 404s. Where the two
-  // output names resolve to one file (case-insensitive filesystems), the
-  // shell stylesheet merges into the extracted one instead of clobbering it;
-  // where they are distinct, each is written verbatim.
+  // ./App.css, so the build must ship it or the link 404s. Its name cannot
+  // meet the extracted file's on any filesystem, so these assertions hold on
+  // case-insensitive and case-sensitive hosts alike (issue #75).
   const builtAppCss = fs.readFileSync(path.join(outputDirectory, 'App.css'), 'utf8');
-  const builtExtractedCss = fs.readFileSync(path.join(outputDirectory, 'app.css'), 'utf8');
-  if (isCaseInsensitiveFilesystem(projectDirectory)) {
-    assert.ok(builtAppCss.startsWith(appCss), 'the merged output keeps the global stylesheet first');
-    assert.ok(builtAppCss.includes('color: red'), 'the merge preserves the extracted styles');
-    assert.equal(builtExtractedCss, builtAppCss, 'both spellings resolve to the single merged file');
-  } else {
-    assert.equal(builtAppCss, appCss, 'the shell stylesheet copies verbatim beside the extracted one');
-    assert.equal(builtExtractedCss.includes('color: red'), true, 'the extracted styles are never clobbered by the copy');
-    assert.equal(builtExtractedCss.includes(appCss.trim()), false, 'the global stylesheet does not leak into the extracted file');
-  }
-  // The relative author link does not suppress the extracted app.css
-  // injection: the pattern is slash-anchored and case-sensitive, so the
-  // built shell links both stylesheets exactly once each.
+  const builtExtractedCss = fs.readFileSync(path.join(outputDirectory, 'wizz.css'), 'utf8');
+  assert.equal(builtAppCss, appCss, 'the shell stylesheet copies verbatim beside the extracted one');
+  assert.equal(builtExtractedCss.includes('color: red'), true, 'the extracted styles are never clobbered by the copy');
+  assert.equal(builtExtractedCss.includes(appCss.trim()), false, 'the global stylesheet does not leak into the extracted file');
+  assert.equal(fs.readdirSync(outputDirectory).filter((name) => /\.css$/i.test(name)).length, 2);
+  // The built shell links both stylesheets exactly once each.
   const shell = fs.readFileSync(path.join(outputDirectory, 'index.html'), 'utf8');
   assert.equal(shell.split('./App.css').length - 1, 1);
-  assert.equal(shell.split('href="/app.css"').length - 1, 1);
+  assert.equal(shell.split('href="/wizz.css"').length - 1, 1);
 });
 
 test('copies App.css from the shell directory for the src layout', (t) => {
@@ -859,7 +839,7 @@ test('a shell-less project does not copy a stray App.css', (t) => {
   assert.equal(fs.existsSync(path.join(outputDirectory, 'App.css')), false);
 });
 
-test('leaves an already-linked app.css reference alone', (t) => {
+test('leaves an already-linked wizz.css reference alone', (t) => {
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
 
@@ -869,15 +849,15 @@ test('leaves an already-linked app.css reference alone', (t) => {
     path.join(inputDirectory, 'App.wizz'),
     '<main><p>App</p></main><wizz:style>main { padding: 0 }</wizz:style>'
   );
-  const shell = '<!DOCTYPE html>\n<html><head><link rel="stylesheet" href="/app.css"></head><body><div id="app"></div></body></html>';
+  const shell = '<!DOCTYPE html>\n<html><head><link rel="stylesheet" href="/wizz.css"></head><body><div id="app"></div></body></html>';
   writeFile(path.join(inputDirectory, 'index.html'), shell);
 
   buildProject(inputDirectory, outputDirectory, createLogger());
 
   // The stylesheet is still extracted, but the author's own link stands.
-  assert.match(fs.readFileSync(path.join(outputDirectory, 'app.css'), 'utf8'), /main\[data-wizz-s="[a-z0-9]+"\]/);
+  assert.match(fs.readFileSync(path.join(outputDirectory, 'wizz.css'), 'utf8'), /main\[data-wizz-s="[a-z0-9]+"\]/);
   const builtShell = fs.readFileSync(path.join(outputDirectory, 'index.html'), 'utf8');
-  assert.equal(builtShell.split('/app.css').length - 1, 1); // the author's own link, unmodified
+  assert.equal(builtShell.split('/wizz.css').length - 1, 1); // the author's own link, unmodified
   assert.equal((builtShell.match(/<link /g) || []).length, 1);
 });
 
@@ -898,7 +878,7 @@ test('builds styled components without a document shell', (t) => {
   // Existing behavior is preserved: no shell at the input root is not an
   // error, and the dev server reports the missing shell at serve time.
   assert.deepEqual(result, { compiledCount: 1, failedCount: 0 });
-  assert.match(fs.readFileSync(path.join(outputDirectory, 'app.css'), 'utf8'), /main\[data-wizz-s="[a-z0-9]+"\]/);
+  assert.match(fs.readFileSync(path.join(outputDirectory, 'wizz.css'), 'utf8'), /main\[data-wizz-s="[a-z0-9]+"\]/);
   assert.equal(fs.existsSync(path.join(outputDirectory, 'index.html')), false);
   assert.match(logger.messages.join('\n'), /no index\.html document shell was found/);
 });
@@ -920,7 +900,7 @@ test('finds the document shell at the project root for the src layout', (t) => {
   buildProject(inputDirectory, outputDirectory, logger);
 
   const shell = fs.readFileSync(path.join(outputDirectory, 'index.html'), 'utf8');
-  assert.match(shell, /<link rel="stylesheet" href="\/app\.css">/);
+  assert.match(shell, /<link rel="stylesheet" href="\/wizz\.css">/);
   assert.equal(logger.messages.filter((message) => message.includes('document shell')).length, 0);
 });
 
@@ -1623,4 +1603,186 @@ test('the node adapter host blocks traversal vectors and dist symlinks', async (
   } finally {
     child.kill();
   }
+});
+
+// Issue #75: single-file shell layout shared by the style-delivery tests below.
+function createStyledProject(t, shell, appSource = '<main><h1>Hi</h1></main><wizz:style>h1 { color: red }</wizz:style>') {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'App.wizz'), appSource);
+  if (shell !== null) writeFile(path.join(inputDirectory, 'index.html'), shell);
+  return { inputDirectory, outputDirectory };
+}
+
+const SHELL_WITH_HEAD = '<!DOCTYPE html>\n<html><head><title>T</title></head><body><div id="app"></div></body></html>';
+
+function readBuilt(outputDirectory, name) {
+  return fs.readFileSync(path.join(outputDirectory, name), 'utf8');
+}
+
+test('a shell-linked build delivers scoped CSS once: no client, hydratable, or server copy', (t) => {
+  const { inputDirectory, outputDirectory } = createStyledProject(t, SHELL_WITH_HEAD);
+
+  buildProject(inputDirectory, outputDirectory, createLogger());
+
+  assert.match(readBuilt(outputDirectory, 'wizz.css'), /color: red/);
+  for (const moduleName of ['App.js', 'App.hydrate.js', 'App.server.js']) {
+    const source = readBuilt(outputDirectory, moduleName);
+    assert.equal(source.includes('color: red'), false, `${moduleName} must not carry the CSS`);
+    assert.equal(source.includes('createStyleNodes'), false, `${moduleName} must not inject a style`);
+    assert.match(source, /data-wizz-s/, `${moduleName} keeps the scope attribute the stylesheet selects on`);
+  }
+});
+
+test('the extracted scope selector matches the markup scope of the CSS-free modules', async (t) => {
+  const { inputDirectory, outputDirectory } = createStyledProject(t, SHELL_WITH_HEAD);
+
+  buildProject(inputDirectory, outputDirectory, createLogger());
+
+  const serverModule = await import(pathToFileURL(path.join(outputDirectory, 'App.server.js')).href);
+  const { html, head } = serverModule.renderComponent();
+  const scope = html.match(/data-wizz-s="([^"]+)"/)[1];
+  assert.ok(readBuilt(outputDirectory, 'wizz.css').includes(`h1[data-wizz-s="${scope}"]`));
+  assert.equal((head || '').includes('<style'), false);
+});
+
+test('modules keep injecting styles when nothing links the stylesheet', (t) => {
+  const shells = {
+    'no shell': null,
+    'no </head>': '<html><body><div id="app"></div></body></html>',
+    'only a commented </head>': '<html><!-- </head> --><body><div id="app"></div></body></html>'
+  };
+  for (const [label, shell] of Object.entries(shells)) {
+    const { inputDirectory, outputDirectory } = createStyledProject(t, shell);
+    buildProject(inputDirectory, outputDirectory, createLogger());
+    for (const moduleName of ['App.js', 'App.hydrate.js', 'App.server.js']) {
+      assert.ok(readBuilt(outputDirectory, moduleName).includes('color: red'), `${label}: ${moduleName}`);
+    }
+    if (shell !== null) {
+      assert.equal(readBuilt(outputDirectory, 'index.html').includes('wizz.css'), false, label);
+    }
+  }
+});
+
+test('the inlineStyles build option keeps runtime delivery beside a linkable shell', (t) => {
+  const { inputDirectory, outputDirectory } = createStyledProject(t, SHELL_WITH_HEAD);
+
+  buildProject(inputDirectory, outputDirectory, createLogger(), { inlineStyles: true });
+
+  for (const moduleName of ['App.js', 'App.hydrate.js', 'App.server.js']) {
+    assert.ok(readBuilt(outputDirectory, moduleName).includes('color: red'), moduleName);
+  }
+});
+
+test('json mode compiles CSS-free modules exactly like prose mode', (t) => {
+  const { inputDirectory, outputDirectory } = createStyledProject(t, SHELL_WITH_HEAD);
+
+  const result = buildProject(inputDirectory, outputDirectory, createLogger(), { json: true });
+
+  assert.equal(result.ok, true);
+  assert.equal(readBuilt(outputDirectory, 'App.js').includes('color: red'), false);
+});
+
+test('an unstyled project ships no stylesheet and identical modules either way', (t) => {
+  const appSource = '<main><p>App</p></main>';
+  const linked = createStyledProject(t, SHELL_WITH_HEAD, appSource);
+  const inline = createStyledProject(t, SHELL_WITH_HEAD, appSource);
+
+  buildProject(linked.inputDirectory, linked.outputDirectory, createLogger());
+  buildProject(inline.inputDirectory, inline.outputDirectory, createLogger(), { inlineStyles: true });
+
+  assert.equal(fs.existsSync(path.join(linked.outputDirectory, 'wizz.css')), false);
+  assert.equal(readBuilt(linked.outputDirectory, 'App.js').split('\n//# sourceMappingURL')[0], readBuilt(inline.outputDirectory, 'App.js').split('\n//# sourceMappingURL')[0]);
+});
+
+test('a shell linking the pre-rename /app.css is rewritten to the extracted stylesheet', (t) => {
+  const shell = '<html><head><link rel="stylesheet" href="./App.css"><link href=\'/app.css\' rel="stylesheet"></head><body><div id="app"></div></body></html>';
+  const { inputDirectory, outputDirectory } = createStyledProject(t, shell);
+
+  const logger = createLogger();
+  buildProject(inputDirectory, outputDirectory, logger);
+
+  const built = readBuilt(outputDirectory, 'index.html');
+  assert.equal(built.includes('/app.css'), false);
+  assert.equal(built.split('/wizz.css').length - 1, 1);
+  assert.ok(built.includes('href="./App.css"'), 'the author stylesheet link is untouched');
+  assert.match(logger.messages.join('\n'), /links \/app\.css/);
+  assert.equal(readBuilt(outputDirectory, 'App.js').includes('color: red'), false);
+});
+
+test('an author link to /App.css is not mistaken for the extracted stylesheet', (t) => {
+  const shell = '<html><head><link rel="stylesheet" href="/App.css"></head><body><div id="app"></div></body></html>';
+  const { inputDirectory, outputDirectory } = createStyledProject(t, shell);
+
+  buildProject(inputDirectory, outputDirectory, createLogger());
+
+  const built = readBuilt(outputDirectory, 'index.html');
+  assert.ok(built.includes('href="/App.css"'));
+  assert.ok(built.includes('href="/wizz.css"'));
+});
+
+test('links that deliver no rules do not count as linking the stylesheet', (t) => {
+  const shells = [
+    '<html><head><!-- <link rel="stylesheet" href="/wizz.css"> --></head><body></body></html>',
+    '<html><head><link rel="preload" as="style" href="/wizz.css"></head><body></body></html>',
+    '<html><head></head><body><a href="/wizz.css">styles</a></body></html>'
+  ];
+  for (const shell of shells) {
+    const { inputDirectory, outputDirectory } = createStyledProject(t, shell);
+    buildProject(inputDirectory, outputDirectory, createLogger());
+    assert.equal(
+      (readBuilt(outputDirectory, 'index.html').match(/<link rel="stylesheet" href="\/wizz\.css">/g) || []).length,
+      shell.includes('<!--') ? 2 : 1,
+      shell
+    );
+  }
+});
+
+test('the link lands before the real </head>, not one inside a comment', (t) => {
+  const shell = '<html><!-- </head> --><head><title>$& $1</title></head><body><div id="app"></div></body></html>';
+  const { inputDirectory, outputDirectory } = createStyledProject(t, shell);
+
+  buildProject(inputDirectory, outputDirectory, createLogger());
+
+  const built = readBuilt(outputDirectory, 'index.html');
+  assert.ok(built.startsWith('<html><!-- </head> --><head><title>$& $1</title>'));
+  assert.ok(built.indexOf('href="/wizz.css"') > built.indexOf('</title>'));
+  assert.ok(built.indexOf('href="/wizz.css"') < built.lastIndexOf('</head>'));
+});
+
+test('@import statements hoist above every component in the extracted stylesheet', (t) => {
+  const { inputDirectory, outputDirectory } = createStyledProject(t, SHELL_WITH_HEAD);
+  writeFile(path.join(inputDirectory, 'components', 'A.wizz'), '<div></div><wizz:style>div { color: red }</wizz:style>');
+  writeFile(path.join(inputDirectory, 'components', 'B.wizz'), '<div></div><wizz:style>@import url("https://fonts.test/a.css");\ndiv { color: blue }</wizz:style>');
+  writeFile(path.join(inputDirectory, 'components', 'C.wizz'), '<div></div><wizz:style>@import url("https://fonts.test/a.css");\n@IMPORT "b.css" screen;</wizz:style>');
+
+  buildProject(inputDirectory, outputDirectory, createLogger());
+
+  const stylesheet = readBuilt(outputDirectory, 'wizz.css');
+  assert.ok(stylesheet.startsWith('@import url("https://fonts.test/a.css");\n@IMPORT "b.css" screen;\n\n'));
+  assert.equal(stylesheet.split('@import').length - 1, 1, 'duplicates collapse');
+});
+
+test('rebuilding is idempotent and a stale shell from the same output is overwritten', (t) => {
+  const { inputDirectory, outputDirectory } = createStyledProject(t, SHELL_WITH_HEAD);
+
+  buildProject(inputDirectory, outputDirectory, createLogger());
+  const first = { css: readBuilt(outputDirectory, 'wizz.css'), shell: readBuilt(outputDirectory, 'index.html') };
+  buildProject(inputDirectory, outputDirectory, createLogger());
+
+  assert.equal(readBuilt(outputDirectory, 'wizz.css'), first.css);
+  assert.equal(readBuilt(outputDirectory, 'index.html'), first.shell);
+});
+
+test('shellLinksExtractedStyles agrees with the shell copy for a missing input shell', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  const inputDirectory = path.join(projectDirectory, 'src');
+  fs.mkdirSync(inputDirectory);
+
+  assert.equal(shellLinksExtractedStyles(inputDirectory), false);
+  writeFile(path.join(projectDirectory, 'index.html'), SHELL_WITH_HEAD);
+  assert.equal(shellLinksExtractedStyles(inputDirectory), true);
 });

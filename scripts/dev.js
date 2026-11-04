@@ -72,7 +72,9 @@ function buildApplication(inputDirectory, outputDirectory, projectDirectory, log
   // server restarted. Timestamp plus sequence survives rapid test rebuilds.
   moduleQuerySequence += 1;
   const moduleQuery = `?v=${Date.now()}-${moduleQuerySequence}`;
-  const result = build(inputDirectory, outputDirectory, logger, { moduleQuery });
+  // The shell copied below replaces the built one, so nothing links the
+  // extracted stylesheet here: styles stay inline, as hot rebuilds expect.
+  const result = build(inputDirectory, outputDirectory, logger, { moduleQuery, inlineStyles: true });
   copyDocumentShell(projectDirectory, outputDirectory);
 
   if (result.failedCount > 0) {
