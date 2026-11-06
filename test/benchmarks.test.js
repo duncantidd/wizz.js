@@ -126,7 +126,7 @@ test('benchmark fixture batches 1,000 repeated updates into one DOM update', (t)
   assert.equal(countText.nodeValue, '0');
   scheduled.pop()();
   assert.equal(countText.nodeValue, '1000');
-  assert.equal(document.metrics.queries, 1);
+  assert.equal(document.metrics.queries, 0);
   assert.equal(document.metrics.textWrites, 1);
   assert.ok(dispatchDuration >= 0);
   t.diagnostic(`1,000 queued updates dispatched in ${dispatchDuration.toFixed(2)} ms`);
@@ -222,7 +222,7 @@ test('hydration adopts delivered markup with zero DOM creation and exact reactiv
     textNodes: document.metrics.textNodes - before.textNodes,
     queries: document.metrics.queries - before.queries
   };
-  assert.deepEqual(hydration, { elements: 0, textNodes: 0, queries: 2 });
+  assert.deepEqual(hydration, { elements: 0, textNodes: 0, queries: 0 });
 
   // The initial update converges with exactly one reactive text write.
   assert.equal(document.metrics.textWrites - before.textWrites, 1);
@@ -233,7 +233,7 @@ test('hydration adopts delivered markup with zero DOM creation and exact reactiv
   assert.equal(paragraph.childNodes[1].nodeValue, '1');
   assert.equal(paragraph.attributes['data-note'], 'clicked');
   assert.equal(document.metrics.textWrites - before.textWrites, 2);
-  assert.equal(document.metrics.queries - before.queries, 4);
+  assert.equal(document.metrics.queries - before.queries, 0);
 
   component.destroy();
   assert.deepEqual(target.childNodes, []);

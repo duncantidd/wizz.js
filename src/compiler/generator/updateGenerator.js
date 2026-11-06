@@ -1,11 +1,69 @@
 const { CodeBuilder } = require('./codeBuilder');
 
+const hasDependencies = (node) => node.dependencies?.length > 0;
+
+// create() renders only the first top-level element, so anything else at the
+// top of the template has no node to update.
+const findRootElement = (templateAST) => (templateAST.children || []).find((node) => node.type === 'Element');
+
+/**
+ * Names the DOM nodes update() writes to: elements with a reactive attribute
+ * and reactive text. Each one gets a factory-scope variable that create() and
+ * the hydration walk assign and update() reads, so a write can only ever reach
+ * this instance's own node.
+ *
+ * Looking nodes up when writing cannot work. A `data-wizz-id` query crosses
+ * into child components, which number their elements from 1 as well, and a
+ * template child index stops matching the DOM beside late-mounted children,
+ * untaken branches, and list items.
+ *
+ * Each bodies are skipped because their records update their own nodes, and
+ * component tags because they receive setProps() and create no node here. The
+ * `__wizz` prefix keeps these names clear of author variables in the same scope.
+ * @param {Object} templateAST - The analyzed template AST.
+ * @returns {{names: Map<Object, string>, conditional: Set<Object>}} Variable
+ *   names by AST node, plus the nodes inside an {#if}: their branch may not have
+ *   been created, so update() guards those writes.
+ */
+function collectUpdateTargets(templateAST) {
+  const names = new Map();
+  const conditional = new Set();
+
+  function track(node, insideBranch) {
+    names.set(node, `__wizzTarget_${names.size + 1}`);
+    if (insideBranch) conditional.add(node);
+  }
+
+  function walk(node, insideBranch) {
+    if (node.type === 'Expression') {
+      if (hasDependencies(node)) track(node, insideBranch);
+    } else if (node.type === 'IfBlock') {
+      // The parser's `children` alias repoints to the alternate at {:else}, so
+      // both branches are walked explicitly.
+      (node.consequent || []).forEach((child) => walk(child, true));
+      (node.alternate || []).forEach((child) => walk(child, true));
+    } else if (node.type === 'Element' && node.componentId == null) {
+      if ((node.attributes || []).some((attribute) => attribute.dynamic && hasDependencies(attribute))) {
+        track(node, insideBranch);
+      }
+      (node.children || []).forEach((child) => walk(child, insideBranch));
+    }
+  }
+
+  const rootElement = findRootElement(templateAST);
+  if (rootElement) walk(rootElement, false);
+  return { names, conditional };
+}
+
 /**
  * Generates the update() lifecycle function for a component's reactivity engine.
  * @param {Object} templateAST - The enriched template AST.
+ * @param {ReturnType<typeof collectUpdateTargets>} [targets] - The component's
+ *   update targets; the same object must reach the create and hydration
+ *   generators, which assign the variables this function reads.
  * @returns {string} The generated JavaScript string.
  */
-function generateUpdateFunction(templateAST) {
+function generateUpdateFunction(templateAST, targets = collectUpdateTargets(templateAST)) {
   const builder = new CodeBuilder();
   const hasEachBlock = (node) => node.type === 'EachBlock'
     || (node.children || []).some(hasEachBlock)
@@ -19,8 +77,25 @@ function generateUpdateFunction(templateAST) {
     builder.add('listUpdates.forEach((updateList) => updateList(changed));');
   }
 
+  // Emits one guarded write. Nodes inside an {#if} may not exist, and a skipped
+  // write must not abort the rest of the pass.
+  function emitWrite(node, dependencyName, write) {
+    const target = targets.names.get(node);
+    const guard = targets.conditional.has(node) ? `if (${target}) ` : '';
+    builder.add(`if (changed.${dependencyName}) {`)
+      .indent()
+      .add(`${guard}${target}${write}`)
+      .dedent()
+      .add('}');
+  }
+
   function walk(node) {
-    if (node.type === 'Element') {
+    if (node.type === 'Expression') {
+      // Wrapped in String() so numeric results cannot reach the DOM as numbers.
+      (node.dependencies || []).forEach((dependencyName) => {
+        emitWrite(node, dependencyName, `.nodeValue = String(${node.value});`);
+      });
+    } else if (node.type === 'Element') {
       // Imported component tags receive prop updates through their mounted
       // instance, not through DOM attribute writes.
       if (node.componentId != null) {
@@ -36,59 +111,16 @@ function generateUpdateFunction(templateAST) {
         return;
       }
 
-      // 1. Get the assigned data-wizz-id (if this element has reactive children)
-      const idAttr = node.attributes && node.attributes.find(attr => attr.name === 'data-wizz-id');
-      const wizzId = idAttr ? idAttr.value : null;
-
       for (const attribute of node.attributes || []) {
         if (!attribute.dynamic || !attribute.dependencies?.length) continue;
         for (const dependencyName of attribute.dependencies) {
-          builder.add(`if (changed.${dependencyName}) {`)
-            .indent()
-            .add(`const target_${wizzId} = rootNode.getAttribute('data-wizz-id') === '${wizzId}' ? rootNode : rootNode.querySelector('[data-wizz-id="${wizzId}"]');`);
-          if (['value', 'checked', 'disabled'].includes(attribute.name)) {
-            builder.add(`target_${wizzId}.${attribute.name} = ${attribute.value};`);
-          } else {
-            builder.add(`target_${wizzId}.setAttribute(${JSON.stringify(attribute.name)}, String(${attribute.value}));`);
-          }
-          builder.dedent().add('}');
+          emitWrite(node, dependencyName, ['value', 'checked', 'disabled'].includes(attribute.name)
+            ? `.${attribute.name} = ${attribute.value};`
+            : `.setAttribute(${JSON.stringify(attribute.name)}, String(${attribute.value}));`);
         }
       }
 
-      // 2. Iterate through children and track the exact index
-      if (node.children && Array.isArray(node.children)) {
-        node.children.forEach((child, childIndex) => {
-          
-          // 3. Find Reactive Expressions
-          if (child.type === 'Expression' && child.dependencies && child.dependencies.length > 0) {
-            
-            // 4. Loop through each dependency and generate an if-block
-            child.dependencies.forEach(dependencyName => {
-              builder.add(`if (changed.${dependencyName}) {`)
-                    .indent();
-              
-              // Target the exact DOM element via the unique ID
-              builder.add(`const target_${wizzId} = rootNode.getAttribute('data-wizz-id') === '${wizzId}' ? rootNode : rootNode.querySelector('[data-wizz-id="${wizzId}"]');`);
-              
-              // Update the specific text node at the exact child index.
-              // We pull the raw string (e.g., "count + 1") directly from child.value.
-              // We wrap it in String() so numeric calculations don't throw type errors in the DOM.
-              builder.add(`target_${wizzId}.childNodes[${childIndex}].nodeValue = String(${child.value});`);
-              
-              builder.dedent()
-                    .add('}');
-            });
-          }
-          
-          // 5. Continue walking down the tree
-          walk(child);
-        });
-      }
-    } else if (node.type === 'Root') {
-      // Handle the root node traversal
-      if (node.children && Array.isArray(node.children)) {
-        node.children.forEach(walk);
-      }
+      (node.children || []).forEach(walk);
     } else if (node.type === 'IfBlock') {
       // Conditional branches exist in the DOM after mount, so their reactive
       // content and component props participate in updates like any other.
@@ -97,7 +129,8 @@ function generateUpdateFunction(templateAST) {
     }
   }
 
-  walk(templateAST);
+  const rootElement = findRootElement(templateAST);
+  if (rootElement) walk(rootElement);
 
   builder.dedent()
         .add('}');
@@ -105,4 +138,4 @@ function generateUpdateFunction(templateAST) {
   return builder.generate();
 }
 
-module.exports = { generateUpdateFunction };
+module.exports = { generateUpdateFunction, collectUpdateTargets };

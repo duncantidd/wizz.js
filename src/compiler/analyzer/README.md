@@ -84,7 +84,7 @@ After `assignNodeIds()`, the direct parent element receives a DOM targeting attr
 }
 ```
 
-The generator can use the dependency list to decide what to update and `data-wizz-id` to locate the affected element in the browser.
+The generator uses the dependency list to decide what to update, and the hydration walk uses `data-wizz-id` to verify delivered elements. Updates do not read it: ids restart at `1` in every component, so they are not unique in the page.
 
 ## Analysis Rules
 

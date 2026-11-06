@@ -11,6 +11,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed — Direct Update Targets (issue #63; compiler 1.18.0 → 1.18.1, output 1.9.0 → 1.9.1)
+
+#### Fixed
+
+- A parent's `update()` could write to an element inside a child component (#63). Targets were found with `rootNode.querySelector('[data-wizz-id="N"]')`, but ids restart at `1` in every component, so a child earlier in document order won the match. A hydrated parent with `<Label />` before `<input value={draft}>` set `.value` on the child's `<span>` and left the input stale. Fresh mounts hit the same bug when the child sat inside an earlier sibling element.
+- Reactive text updated the wrong node when a child's DOM position differed from its template position. `childNodes[templateIndex]` was off beside a fresh-mounted child component (which mounts after its siblings), after an untaken `{#if}` branch, and after `{#each}` items. The write landed on another node or threw.
+- A component with reactive content in an untaken `{#if}` branch no longer crashes at mount. The initial update pass queried for an element that was never created and threw `Cannot read properties of null`.
+- A reactive expression placed directly in an `{#if}` branch, with no wrapping element, now updates. `update()` previously skipped it.
+- An author variable named like `target_1` can no longer be shadowed by a generated local inside `update()`, which sent the write to the variable's value instead of the node.
+
+#### Changed
+
+- `update()` now writes through `__wizzTarget_N` factory-scope variables that `create()` and the hydration walk assign (`collectUpdateTargets()`, `updateGenerator.js`). Only writes inside `{#if}` carry a null guard. `data-wizz-id` is still stamped, and is now used only to verify delivered markup during hydration.
+- Updates issue no DOM queries. The batched-update benchmark goes from 1 query to 0, and hydration from 2 to 0 on adoption.
+- Versions: **compiler and output patch**. The module surface is unchanged and no accepted syntax changes meaning. `package.json` follows the compiler to 1.18.1.
+
+#### Docs
+
+- `README.md` replaces the warning about id lookups: a node replaced by hand now stops updating. `src/compiler/generator/README.md`, `src/compiler/analyzer/README.md`, and `STRUCTURE.md` describe captured targets.
+
+#### Tests
+
+- `test/hydration.test.js` runs each case through both fresh mount and hydration: the #63 repro, nested id collisions on text and attributes, text beside a child, after an untaken branch, and after a resizing list, untaken and taken branches, generated-name collisions, and writes queued before `destroy()`. It also covers separate instances and hydration fallback. The element shim gains `insertBefore`.
+- `updateGenerator.test.js` is rewritten around target variables and covers `collectUpdateTargets`, including guard placement and templates with content outside the root element. `domGenerator.test.js`, `hydrationGenerator.test.js`, and `componentGenerator.test.js` pin the assignments, and benchmark query pins move to 0.
+
 ### Fixed — Single Delivery of Extracted Styles (issues #75, #76; compiler 1.17.1 → 1.18.0, output 1.8.3 → 1.9.0)
 
 #### Changed

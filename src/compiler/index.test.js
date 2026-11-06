@@ -124,7 +124,8 @@ test('emits intercepted mutations and targeted updates in the generated source',
   );
 
   assert.match(source, /count \+= 1; queueUpdate\(\{ count: true \}\);/);
-  assert.match(source, /rootNode\.querySelector\('\[data-wizz-id="1"\]'\)/);
+  assert.match(source, /__wizzTarget_\d+\.nodeValue = String\(count\);/);
+  assert.doesNotMatch(source, /querySelector/);
 });
 
 test('mounts, updates through events, and destroys against a minimal DOM', async () => {
