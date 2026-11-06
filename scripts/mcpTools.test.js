@@ -216,7 +216,7 @@ test('language_contract documents the version triple, language surface, and diag
   const { text } = await registry.call('language_contract', {});
   // The literal triple is pinned deliberately: a version bump fails this
   // test until the contract text has been reviewed against the compiler.
-  assert.match(text, /compiler 1.18.1, syntax 1.4.2, output 1.9.1/);
+  assert.match(text, /compiler 1\.20\.0, syntax 1\.4\.3, output 1\.10\.1/);
   assert.match(text, /export let/);
   assert.match(text, /onMount/);
   assert.match(text, /onDestroy/);
@@ -694,7 +694,7 @@ test('every documented silent limit compiles and generates the documented behavi
 
   // {#each}: in-place mutation schedules nothing; a const collection is
   // accepted.
-  assert.doesNotMatch(generated(component('let xs = [];\n  function add() { xs.push(1); }', '<ul on:click={add}>{#each xs as x}<li>{x}</li>{/each}</ul>')), /queueUpdate\(\{ xs/);
+  assert.doesNotMatch(generated(component('let xs = [];\n  function add() { xs.push(1); }', '<ul on:click={add}>{#each xs as x}<li>{x}</li>{/each}</ul>')), /__wizzQueueUpdate\(\{ xs/);
   assert.equal(compileCode(component('const xs = [];', '<ul>{#each xs as x}<li>{x}</li>{/each}</ul>')), null);
 
   // Dynamic attributes: non-property names are stringified, never removed.
@@ -709,28 +709,28 @@ test('every documented silent limit compiles and generates the documented behavi
 
   // Assignments nested in an expression schedule no update; bind: is a
   // plain attribute.
-  assert.doesNotMatch(generated(component('let a = 1;\n  let ok = 1;', '<button on:click={() => ok ? a = 2 : 0}>{a}</button>')), /queueUpdate\(\{ a/);
-  assert.doesNotMatch(generated(component('let a = 1;', '<button on:click={() => (a = 2)}>{a}</button>')), /queueUpdate\(\{ a/);
+  assert.doesNotMatch(generated(component('let a = 1;\n  let ok = 1;', '<button on:click={() => ok ? a = 2 : 0}>{a}</button>')), /__wizzQueueUpdate\(\{ a/);
+  assert.doesNotMatch(generated(component('let a = 1;', '<button on:click={() => (a = 2)}>{a}</button>')), /__wizzQueueUpdate\(\{ a/);
   assert.match(generated(component('let name = "";', '<input bind:value={name} />')), /setAttribute\("bind:value", String\(name\)\)/);
 });
 
 test('every documented working pattern compiles and is reactive', () => {
   // Derived value recomputed in a handler.
-  assert.match(generated(component("let done = false;\n  let label = 'Open';\n  function toggle() { done = !done; label = done ? 'Done' : 'Open'; }", '<button on:click={toggle}>{label}</button>')), /queueUpdate\(\{ label: true \}\)/);
+  assert.match(generated(component("let done = false;\n  let label = 'Open';\n  function toggle() { done = !done; label = done ? 'Done' : 'Open'; }", '<button on:click={toggle}>{label}</button>')), /__wizzQueueUpdate\(\{ label: true \}\)/);
   // Class toggling instead of a reactive {#if}.
   const classToggle = generated(component("let openClass = '';\n  function open() { openClass = ' open'; }", "<div on:click={open} class={'panel' + openClass}></div>"));
   assert.match(classToggle, /__wizzTarget_\d+\.setAttribute\("class", String\('panel' \+ openClass\)\)/);
   // Nested {#if} inside {:else} for chains.
   assert.equal(compileCode(component('let a = 1;', '<div>{#if a === 1}<b>a</b>{:else}{#if a === 2}<i>b</i>{:else}<u>c</u>{/if}{/if}</div>')), null);
   // Reassigning the collection.
-  assert.match(generated(component('let xs = [];\n  function add() { xs = [...xs, 1]; }', '<ul on:click={add}>{#each xs as x}<li>{x}</li>{/each}</ul>')), /queueUpdate\(\{ xs: true \}\)/);
+  assert.match(generated(component('let xs = [];\n  function add() { xs = [...xs, 1]; }', '<ul on:click={add}>{#each xs as x}<li>{x}</li>{/each}</ul>')), /__wizzQueueUpdate\(\{ xs: true \}\)/);
   // Event delegation with a data attribute on each row.
   assert.equal(compileCode(component("let rows = [];\n  let picked = '';\n  function pick(event) { picked = event.target.closest('[data-id]').dataset.id; }", '<ul on:click={pick}>{#each rows as row (row.id)}<li data-id={row.id} class={row.cls}>{row.name}</li>{/each}</ul>')), null);
   // Whole-value attribute expression.
   assert.equal(compileCode(component('let kind = "x";', "<div class={'card ' + kind}></div>")), null);
   // Two-way input through an inline arrow, and through a named setter.
-  assert.match(generated(component('let name = "";', '<input value={name} on:input={(e) => name = e.target.value} />')), /\(e\) => \{ name = e\.target\.value; queueUpdate\(\{ name: true \}\); \}/);
-  assert.match(generated(component('let name = "";\n  function setName(e) { name = e.target.value; }', '<input value={name} on:input={setName} />')), /function setName\(e\) \{ name = e\.target\.value; queueUpdate\(\{ name: true \}\);/);
+  assert.match(generated(component('let name = "";', '<input value={name} on:input={(e) => name = e.target.value} />')), /\(e\) => \{ name = e\.target\.value; __wizzQueueUpdate\(\{ name: true \}\); \}/);
+  assert.match(generated(component('let name = "";\n  function setName(e) { name = e.target.value; }', '<input value={name} on:input={setName} />')), /function setName\(e\) \{ name = e\.target\.value; __wizzQueueUpdate\(\{ name: true \}\);/);
   // Callback props instead of on: on a component tag.
   assert.match(generated(component("  import Card from './Card.wizz';\n  function select() {}", '<div><Card onSelect={select} /></div>')), /"onSelect": select/);
 });

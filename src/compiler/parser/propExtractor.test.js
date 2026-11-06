@@ -147,8 +147,8 @@ test('rejects malformed prop declarations', () => {
   assert.throws(() => extractProps('export'), /Unsupported export syntax/);
 });
 
-test('rejects reserved prop names including the generated closure names', () => {
-  for (const name of ['props', '__proto__', 'let', 'function', 'eval', 'arguments', 'static', 'yield']) {
+test('rejects reserved prop names', () => {
+  for (const name of ['__proto__', 'let', 'function', 'eval', 'arguments', 'static', 'yield']) {
     assert.throws(
       () => extractProps(`export let ${name} = 1;`),
       new RegExp(`'${name}' cannot be used as a prop name`),
@@ -167,7 +167,7 @@ test('rejects reserved prop names including the generated closure names', () => 
 
 test('exposes the reserved name table for tests and tooling', () => {
   assert.equal(RESERVED_PROP_NAMES instanceof Set, true);
-  assert.equal(RESERVED_PROP_NAMES.has('props'), true);
+  assert.equal(RESERVED_PROP_NAMES.has('props'), false, 'props is an ordinary name now that generated code is prefixed');
   assert.equal(RESERVED_PROP_NAMES.has('__proto__'), true);
 });
 

@@ -70,11 +70,11 @@ function generateUpdateFunction(templateAST, targets = collectUpdateTargets(temp
     || (node.consequent || []).some(hasEachBlock)
     || (node.alternate || []).some(hasEachBlock);
 
-  builder.add('function update(ctx, changed) {')
+  builder.add('function __wizzUpdate(__wizzCtx, __wizzChanged) {')
         .indent();
 
   if (hasEachBlock(templateAST)) {
-    builder.add('listUpdates.forEach((updateList) => updateList(changed));');
+    builder.add('__wizzLists.forEach((updateList) => updateList(__wizzChanged));');
   }
 
   // Emits one guarded write. Nodes inside an {#if} may not exist, and a skipped
@@ -82,7 +82,7 @@ function generateUpdateFunction(templateAST, targets = collectUpdateTargets(temp
   function emitWrite(node, dependencyName, write) {
     const target = targets.names.get(node);
     const guard = targets.conditional.has(node) ? `if (${target}) ` : '';
-    builder.add(`if (changed.${dependencyName}) {`)
+    builder.add(`if (__wizzChanged.${dependencyName}) {`)
       .indent()
       .add(`${guard}${target}${write}`)
       .dedent()
@@ -101,10 +101,10 @@ function generateUpdateFunction(templateAST, targets = collectUpdateTargets(temp
       if (node.componentId != null) {
         for (const attribute of node.attributes || []) {
           if (!attribute.dynamic || !attribute.dependencies?.length) continue;
-          const guard = attribute.dependencies.map((dependencyName) => `changed.${dependencyName}`).join(' || ');
+          const guard = attribute.dependencies.map((dependencyName) => `__wizzChanged.${dependencyName}`).join(' || ');
           builder.add(`if (${guard}) {`)
             .indent()
-            .add(`if (component_${node.componentId}) component_${node.componentId}.setProps({ ${JSON.stringify(attribute.name)}: ${attribute.value} });`)
+            .add(`if (__wizzComponent_${node.componentId}) __wizzComponent_${node.componentId}.setProps({ ${JSON.stringify(attribute.name)}: ${attribute.value} });`)
             .dedent()
             .add('}');
         }

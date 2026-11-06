@@ -20,9 +20,8 @@ const { CODES, compilerDiagnostic } = require('../diagnostics.js');
 
 const { tokenizeScript } = require('../scriptLexer.js');
 
-// Names that cannot be prop bindings: strict-mode reserved words, the
-// generated closure's own `props` parameter, and the object-literal prototype
-// key that must never appear as a prop.
+// Names that cannot be prop bindings: strict-mode reserved words and the
+// object-literal prototype key that must never appear as a prop.
 const RESERVED_PROP_NAMES = new Set([
   'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger',
   'default', 'delete', 'do', 'else', 'enum', 'export', 'extends', 'false',
@@ -30,7 +29,7 @@ const RESERVED_PROP_NAMES = new Set([
   'null', 'return', 'super', 'switch', 'this', 'throw', 'true', 'try',
   'typeof', 'var', 'void', 'while', 'with', 'yield', 'let', 'static',
   'implements', 'interface', 'package', 'private', 'protected', 'public',
-  'arguments', 'eval', 'props', '__proto__'
+  'arguments', 'eval', '__proto__'
 ]);
 
 // Prefix/binary operator keywords: an identifier after one of these continues

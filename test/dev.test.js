@@ -248,7 +248,7 @@ test('builds before serving generated output and supplies SPA fallback', async (
 
   const component = await fetch(`${url}/App.js`);
   assert.equal(component.status, 200);
-  assert.match(await component.text(), /^export default function mountComponent\(target, props = \{\}\)/m);
+  assert.match(await component.text(), /^export default function mountComponent\(__wizzHost, __wizzProps = \{\}, __wizzAnchor = null\)/m);
 
   const stylesheet = await fetch(`${url}/App.css`);
   assert.equal(stylesheet.status, 200);
@@ -533,11 +533,11 @@ test('serves server-rendered route documents with the state script as a sibling'
   const hydrateBuild = await fetch(`${url}/App.hydrate.js`);
   assert.equal(hydrateBuild.status, 200);
   assert.match(hydrateBuild.headers.get('content-type'), /^text\/javascript/);
-  assert.match(await hydrateBuild.text(), /^export function hydrateComponent\(target, props = \{\}, state = null\)/m);
+  assert.match(await hydrateBuild.text(), /^export function hydrateComponent\(__wizzHost, __wizzProps = \{\}, __wizzState = null\)/m);
 
   const serverBuild = await fetch(`${url}/App.server.js`);
   assert.equal(serverBuild.status, 200);
-  assert.match(await serverBuild.text(), /^export function renderComponent\(props = \{\}\)/m);
+  assert.match(await serverBuild.text(), /^export function renderComponent\(__wizzProps = \{\}\)/m);
 });
 
 test('server-renders component tags and blocks through the import graph', async (t) => {
@@ -573,7 +573,7 @@ test('server-renders component tags and blocks through the import graph', async 
   // Both server-side builds of the imported component are served.
   const childServerBuild = await fetch(`${url}/components/TestProps.server.js`);
   assert.equal(childServerBuild.status, 200);
-  assert.match(await childServerBuild.text(), /^export function renderComponent\(props = \{\}\)/m);
+  assert.match(await childServerBuild.text(), /^export function renderComponent\(__wizzProps = \{\}\)/m);
   const childHydrateBuild = await fetch(`${url}/components/TestProps.hydrate.js`);
   assert.equal(childHydrateBuild.status, 200);
 
