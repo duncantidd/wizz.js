@@ -278,6 +278,9 @@ function collectDeclaredNames(tokens, keywordIndex) {
   const names = [];
   let phase = 'pattern';
   let depth = 0;
+  // Depth of a destructuring default (`{ a = fallback }`), which reads names
+  // rather than binding them.
+  let defaultDepth = null;
   let index = keywordIndex + 1;
 
   while (index < tokens.length) {
@@ -290,9 +293,12 @@ function collectDeclaredNames(tokens, keywordIndex) {
       if (')]}'.includes(value)) {
         depth -= 1;
         if (depth < 0) break;
+        if (defaultDepth !== null && depth < defaultDepth) defaultDepth = null;
         index += 1;
         continue;
       }
+      if (value === ',' && depth === defaultDepth) defaultDepth = null;
+      if (value === '=' && depth > 0 && phase === 'pattern' && defaultDepth === null) defaultDepth = depth;
       if (depth === 0 && value === ';') break;
       if (depth === 0 && value === ',') {
         if (phase === 'initializer') phase = 'pattern'; // Next declarator in `let a = 1, b = 2;`.
@@ -307,7 +313,9 @@ function collectDeclaredNames(tokens, keywordIndex) {
     if (token.type === 'identifier' && depth === 0 && phase === 'pattern'
       && (token.value === 'of' || token.value === 'in')) break;
 
-    if (token.type === 'identifier' && phase === 'pattern') names.push(token.value);
+    // A name before `:` is a destructuring key, not a binding.
+    if (token.type === 'identifier' && phase === 'pattern' && defaultDepth === null
+      && !isPunctuator(tokens[nextSignificantIndex(tokens, index + 1)], ':')) names.push(token.value);
     index += 1;
   }
 
@@ -636,8 +644,8 @@ function interceptAssignments(rawScript, reactiveVars, persistentVars) {
     return {
       at: mutation.insertAt,
       text: mutation.semicolonTerminated
-        ? ` queueUpdate({ ${mutation.name}: true });${persistWrite}`
-        : `; queueUpdate({ ${mutation.name}: true });${persistWrite}`
+        ? ` __wizzQueueUpdate({ ${mutation.name}: true });${persistWrite}`
+        : `; __wizzQueueUpdate({ ${mutation.name}: true });${persistWrite}`
     };
   });
   insertions.sort((left, right) => right.at - left.at);
@@ -801,6 +809,7 @@ function findHandlerMutations(expression, names) {
 }
 
 module.exports = {
+  collectDeclaredNames,
   interceptAssignments,
   findReactiveMutations,
   interceptHandlerExpression,

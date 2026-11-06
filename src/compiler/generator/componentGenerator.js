@@ -10,6 +10,7 @@ const {
 } = require('./assignmentInterceptor');
 const { rewritePersistInitializers } = require('./persistInitializer');
 const { assertServerRenderable } = require('./serverGenerator');
+const { assertAuthorNames } = require('./reservedNames');
 const { generateHydrationFunction } = require('./hydrationGenerator');
 const { scopeCss } = require('../analyzer/cssScanner.js');
 const { VERSIONS } = require('../version.js');
@@ -269,6 +270,7 @@ function generateComponent(astPayload, options = {}) {
       componentIneligibilityReasons: options.componentIneligibilityReasons
     });
   }
+  assertAuthorNames(astPayload);
   const builder = new CodeBuilder();
       const componentImports = astPayload.imports || [];
   const props = astPayload.props || [];
@@ -384,76 +386,79 @@ function generateComponent(astPayload, options = {}) {
   // passed to the component tag; missing keys fall back to declared defaults.
   // Hydratable modules route both public entries through one mountInstance
   // closure; the default emission is unchanged.
+  // `__wizzAnchor` is the node a parent wants this root inserted before, so a
+  // child that mounts after its parent still lands at its template position.
+  const mountSignature = 'export default function mountComponent(__wizzHost, __wizzProps = {}, __wizzAnchor = null) {';
   if (hydratable) {
-    builder.add('export default function mountComponent(target, props = {}) {')
+    builder.add(mountSignature)
           .indent()
-          .add('return mountInstance(target, props, false, null, false);')
+          .add('return __wizzMountInstance(__wizzHost, __wizzProps, __wizzAnchor, false, null, false);')
           .dedent()
           .add('}')
           .add('')
-          .add('export function hydrateComponent(target, props = {}, state = null) {')
+          .add('export function hydrateComponent(__wizzHost, __wizzProps = {}, __wizzState = null) {')
           .indent()
-          .add('return mountInstance(target, props, true, state, false);')
+          .add('return __wizzMountInstance(__wizzHost, __wizzProps, null, true, __wizzState, false);')
           .dedent()
           .add('}')
           .add('')
           .add(headActive
-            ? 'export function hydrateRoot(rootNode, props = {}, state = null, headOwner = null) {'
-            : 'export function hydrateRoot(rootNode, props = {}, state = null) {')
+            ? 'export function hydrateRoot(__wizzRoot, __wizzProps = {}, __wizzState = null, __wizzOwnerPath = null) {'
+            : 'export function hydrateRoot(__wizzRoot, __wizzProps = {}, __wizzState = null) {')
           .indent()
-          .add('// Nested adoption entry: rootNode is already in the parent\'s DOM at')
+          .add('// Nested adoption entry: __wizzRoot is already in the parent\'s DOM at')
           .add('// the component tag\'s position, so a mismatch remounts inside it')
           .add('// and never detaches anything from the parent tree.')
           .add(headActive
-            ? 'return mountInstance(rootNode, props, true, state, true, headOwner);'
-            : 'return mountInstance(rootNode, props, true, state, true);')
+            ? 'return __wizzMountInstance(__wizzRoot, __wizzProps, null, true, __wizzState, true, __wizzOwnerPath);'
+            : 'return __wizzMountInstance(__wizzRoot, __wizzProps, null, true, __wizzState, true);')
           .dedent()
           .add('}')
           .add('')
           .add(headActive
-            ? 'function mountInstance(target, props, hydrate, state, adoptSelf, headOwner) {'
-            : 'function mountInstance(target, props, hydrate, state, adoptSelf) {')
+            ? 'function __wizzMountInstance(__wizzHost, __wizzProps, __wizzAnchor, __wizzHydrating, __wizzState, __wizzAdoptSelf, __wizzOwnerPath) {'
+            : 'function __wizzMountInstance(__wizzHost, __wizzProps, __wizzAnchor, __wizzHydrating, __wizzState, __wizzAdoptSelf) {')
           .indent();
   } else {
-    builder.add('export default function mountComponent(target, props = {}) {')
+    builder.add(mountSignature)
           .indent();
   }
 
       const reactiveVars = astPayload.script.filter(decl => decl.isReactive);
 
-      builder.add('let isMounted = false;');
+      builder.add('let __wizzMounted = false;');
       if (ownHead || ownStyle) {
         // Head nodes applied on mount (or adopted during hydration) and
         // released on destroy; null until the initialization block runs.
-        builder.add('let headNodes = null;');
+        builder.add('let __wizzOwnHead = null;');
       }
-      builder.add('let isDestroyed = false;');
-      builder.add('let batchScheduled = false;');
-      builder.add('let pendingChanges = {};');
-      builder.add('const mountHooks = [];');
-      builder.add('const destroyHooks = [];');
-      builder.add('function onMount(hook) { mountHooks.push(hook); }');
-      builder.add('function onDestroy(hook) { destroyHooks.push(hook); }');
-      builder.add('const trackedListeners = [];');
-      builder.add('function trackListener(node, eventName, handler) {')
+      builder.add('let __wizzDestroyed = false;');
+      builder.add('let __wizzBatched = false;');
+      builder.add('let __wizzPending = {};');
+      builder.add('const __wizzMountHooks = [];');
+      builder.add('const __wizzDestroyHooks = [];');
+      builder.add('function onMount(hook) { __wizzMountHooks.push(hook); }');
+      builder.add('function onDestroy(hook) { __wizzDestroyHooks.push(hook); }');
+      builder.add('const __wizzListeners = [];');
+      builder.add('function __wizzListen(node, eventName, handler) {')
                     .indent()
                     .add('node.addEventListener(eventName, handler);')
-                    .add('trackedListeners.push({ node, eventName, handler });')
+                    .add('__wizzListeners.push({ node, eventName, handler });')
                     .dedent()
                     .add('}');
-      builder.add('function queueUpdate(changed) {')
+      builder.add('function __wizzQueueUpdate(__wizzChanged) {')
                         .indent()
-                        .add('if (!isMounted) return;')
-                        .add('pendingChanges = { ...pendingChanges, ...changed };')
-                        .add('if (batchScheduled) return;')
-                        .add('batchScheduled = true;')
+                        .add('if (!__wizzMounted) return;')
+                        .add('__wizzPending = { ...__wizzPending, ...__wizzChanged };')
+                        .add('if (__wizzBatched) return;')
+                        .add('__wizzBatched = true;')
                         .add('queueMicrotask(() => {')
                             .indent()
-                            .add('batchScheduled = false;')
-                            .add('const changes = pendingChanges;')
-                            .add('pendingChanges = {};')
-                            .add('if (isDestroyed) return;')
-                            .add('update(ctx, changes);')
+                            .add('__wizzBatched = false;')
+                            .add('const __wizzBatch = __wizzPending;')
+                            .add('__wizzPending = {};')
+                            .add('if (__wizzDestroyed) return;')
+                            .add('__wizzUpdate(__wizzCtx, __wizzBatch);')
                         .dedent()
                         .add('});')
                         .dedent()
@@ -466,8 +471,8 @@ function generateComponent(astPayload, options = {}) {
   // order. `undefined` means "not provided", so the declared default applies.
   props.forEach(({ name, defaultValue }) => {
     builder.add(defaultValue === null
-      ? `let ${name} = props.${name};`
-      : `let ${name} = props.${name} !== undefined ? props.${name} : (${defaultValue});`);
+      ? `let ${name} = __wizzProps.${name};`
+      : `let ${name} = __wizzProps.${name} !== undefined ? __wizzProps.${name} : (${defaultValue});`);
   });
 
   if (astPayload.rawScript) {
@@ -502,13 +507,13 @@ function generateComponent(astPayload, options = {}) {
     builder.add('// --- Persistent State ---');
     builder.add('const __wizzPersistUnsubscribe = [];');
     for (const declaration of persistentVars) {
-      builder.add(`__wizzPersistUnsubscribe.push(__wizzPersistSubscribe(${JSON.stringify(declaration.storageKey)}, (value) => {`).indent();
-      builder.add(`if (Object.is(value, ${declaration.name})) return;`);
-      builder.add(`${declaration.name} = value;`);
-      builder.add(`queueUpdate({ ${declaration.name}: true });`);
+      builder.add(`__wizzPersistUnsubscribe.push(__wizzPersistSubscribe(${JSON.stringify(declaration.storageKey)}, (__wizzValue) => {`).indent();
+      builder.add(`if (Object.is(__wizzValue, ${declaration.name})) return;`);
+      builder.add(`${declaration.name} = __wizzValue;`);
+      builder.add(`__wizzQueueUpdate({ ${declaration.name}: true });`);
       builder.dedent().add('}));');
     }
-    builder.add('destroyHooks.push(() => { for (const unsubscribe of __wizzPersistUnsubscribe) unsubscribe(); });');
+    builder.add('__wizzDestroyHooks.push(() => { for (const __wizzStop of __wizzPersistUnsubscribe) __wizzStop(); });');
     if (hydratable) {
       // The adoption walk verifies the delivered markup by re-evaluating the
       // template's expressions, and the server rendered that markup from the
@@ -538,10 +543,10 @@ function generateComponent(astPayload, options = {}) {
     const seedableVars = reactiveVars.filter(decl => !decl.isProp);
     if (seedableVars.length > 0) {
       builder.add('\n// --- Initial State ---');
-      builder.add("if (hydrate && state && typeof state === 'object' && !Array.isArray(state)) {")
+      builder.add("if (__wizzHydrating && __wizzState && typeof __wizzState === 'object' && !Array.isArray(__wizzState)) {")
             .indent();
       seedableVars.forEach((declaration) => {
-        builder.add(`if (Object.prototype.hasOwnProperty.call(state, ${JSON.stringify(declaration.name)})) ${declaration.name} = state[${JSON.stringify(declaration.name)}];`);
+        builder.add(`if (Object.prototype.hasOwnProperty.call(__wizzState, ${JSON.stringify(declaration.name)})) ${declaration.name} = __wizzState[${JSON.stringify(declaration.name)}];`);
       });
       builder.dedent()
             .add('}');
@@ -551,7 +556,7 @@ function generateComponent(astPayload, options = {}) {
   // 3. Build the Context Object dynamically
   // We use getters so the create() function always reads the latest memory reference
   builder.add('\n// --- Framework Context ---');
-  builder.add('const ctx = {')
+  builder.add('const __wizzCtx = {')
         .indent();
   
   reactiveVars.forEach(decl => {
@@ -589,8 +594,8 @@ function generateComponent(astPayload, options = {}) {
   if (ownHead) {
     builder.add('');
     builder.add('// --- Head Creation ---');
-    builder.add('function createHeadNodes() {').indent();
-    builder.add('const nodes = [];');
+    builder.add('function __wizzCreateHead() {').indent();
+    builder.add('const __wizzNodes = [];');
 
     const emitHeadAttribute = (nodeRef, attribute) => {
       if (attribute.name.startsWith('on:')) return;
@@ -640,9 +645,9 @@ function generateComponent(astPayload, options = {}) {
         emitTitleContent(nodeRef, child);
       }
       (child.attributes || []).forEach((attribute) => emitHeadAttribute(nodeRef, attribute));
-      builder.add(`nodes.push(${nodeRef});`);
+      builder.add(`__wizzNodes.push(${nodeRef});`);
     }
-    builder.add('return nodes;');
+    builder.add('return __wizzNodes;');
     builder.dedent().add('}');
   }
 
@@ -653,14 +658,14 @@ function generateComponent(astPayload, options = {}) {
   if (ownStyle) {
     builder.add('');
     builder.add('// --- Style Creation ---');
-    builder.add('function createStyleNodes() {').indent();
-    builder.add('const nodes = [];');
-    builder.add(`const styleNode = document.createElement('style');`);
-    builder.add(`styleNode.setAttribute('data-wizz-style', ${JSON.stringify(astPayload.style.scope)});`);
-    builder.add(`styleNode.setAttribute('data-wizz-loc', ${styleLocLiteral});`);
-    builder.add(`styleNode.textContent = ${JSON.stringify(scopeCss(astPayload.style.css, astPayload.style.scope))};`);
-    builder.add('nodes.push(styleNode);');
-    builder.add('return nodes;');
+    builder.add('function __wizzCreateStyle() {').indent();
+    builder.add('const __wizzNodes = [];');
+    builder.add(`const __wizzStyleNode = document.createElement('style');`);
+    builder.add(`__wizzStyleNode.setAttribute('data-wizz-style', ${JSON.stringify(astPayload.style.scope)});`);
+    builder.add(`__wizzStyleNode.setAttribute('data-wizz-loc', ${styleLocLiteral});`);
+    builder.add(`__wizzStyleNode.textContent = ${JSON.stringify(scopeCss(astPayload.style.css, astPayload.style.scope))};`);
+    builder.add('__wizzNodes.push(__wizzStyleNode);');
+    builder.add('return __wizzNodes;');
     builder.dedent().add('}');
   }
 
@@ -692,26 +697,27 @@ function generateComponent(astPayload, options = {}) {
         : '// Apply before mounting children so their heads prepend in front of'
         + ' this one — the deepest component\'s title is what document.title reads.');
       builder.add(hydratePath
-        ? 'headNodes = adoptedHydration.headNodes || __wizzApplyHead(createHeadNodes(), ' + headLocLiteral + ');'
-        : `headNodes = __wizzApplyHead(createHeadNodes(), ${headLocLiteral});`);
+        ? '__wizzOwnHead = __wizzAdopted.__wizzOwnHead || __wizzApplyHead(__wizzCreateHead(), ' + headLocLiteral + ');'
+        : `__wizzOwnHead = __wizzApplyHead(__wizzCreateHead(), ${headLocLiteral});`);
     }
     if (ownStyle) {
-      builder.add(`const __wizzStyleNodes = __wizzApplyHead(createStyleNodes(), ${styleLocLiteral});`);
-      builder.add('headNodes = headNodes ? headNodes.concat(__wizzStyleNodes) : __wizzStyleNodes;');
+      builder.add(`const __wizzStyleNodes = __wizzApplyHead(__wizzCreateStyle(), ${styleLocLiteral});`);
+      builder.add('__wizzOwnHead = __wizzOwnHead ? __wizzOwnHead.concat(__wizzStyleNodes) : __wizzStyleNodes;');
     }
   };
   const hydrateCreateCall = headActive
-    ? 'const adoptedHydration = hydrate ? hydrateCreate(target, state, adoptSelf, headOwner) : null;'
-    : 'const adoptedHydration = hydrate ? hydrateCreate(target, state, adoptSelf) : null;';
+    ? 'const __wizzAdopted = __wizzHydrating ? __wizzHydrateCreate(__wizzHost, __wizzState, __wizzAdoptSelf, __wizzOwnerPath) : null;'
+    : 'const __wizzAdopted = __wizzHydrating ? __wizzHydrateCreate(__wizzHost, __wizzState, __wizzAdoptSelf) : null;';
+  const attachRoot = 'if (__wizzAnchor) __wizzHost.insertBefore(__wizzRoot, __wizzAnchor); else __wizzHost.appendChild(__wizzRoot);';
   if (!hydratable) {
-    builder.add('const rootNode = create(ctx);')
-          .add('const childComponents = rootNode.__wizzChildComponents;')
-          .add('const listUpdates = rootNode.__wizzListUpdates;')
-          .add('target.appendChild(rootNode);');
+    builder.add('const __wizzRoot = __wizzCreate(__wizzCtx);')
+          .add('const __wizzChildren = __wizzRoot.__wizzChildComponents;')
+          .add('const __wizzLists = __wizzRoot.__wizzListUpdates;')
+          .add(attachRoot);
     if (ownHead || ownStyle) {
       emitHeadApply(false);
     }
-    builder.add('rootNode.__wizzMountChildren();');
+    builder.add('__wizzRoot.__wizzMountChildren();');
   } else {
     builder.add(hydrateCreateCall);
     if (hydratable && persistentVars.length > 0) {
@@ -724,17 +730,17 @@ function generateComponent(astPayload, options = {}) {
         builder.add(`${declaration.name} = __wizzPersistHydration.${declaration.name};`);
       }
     }
-    builder.add('if (hydrate && !adoptedHydration) return mountComponent(target, props);')
-          .add('const rootNode = hydrate ? adoptedHydration.node : create(ctx);')
-          .add('const childComponents = hydrate ? adoptedHydration.childComponents : rootNode.__wizzChildComponents;')
-          .add('const listUpdates = hydrate ? adoptedHydration.listUpdates : rootNode.__wizzListUpdates;')
-          .add('if (!hydrate) {')
+    builder.add('if (__wizzHydrating && !__wizzAdopted) return __wizzMountInstance(__wizzHost, __wizzProps, null, false, null, false);')
+          .add('const __wizzRoot = __wizzHydrating ? __wizzAdopted.node : __wizzCreate(__wizzCtx);')
+          .add('const __wizzChildren = __wizzHydrating ? __wizzAdopted.__wizzChildren : __wizzRoot.__wizzChildComponents;')
+          .add('const __wizzLists = __wizzHydrating ? __wizzAdopted.__wizzLists : __wizzRoot.__wizzListUpdates;')
+          .add('if (!__wizzHydrating) {')
           .indent();
-    builder.add('target.appendChild(rootNode);');
+    builder.add(attachRoot);
     if (ownHead || ownStyle) {
       emitHeadApply(false);
     }
-    builder.add('rootNode.__wizzMountChildren();');
+    builder.add('__wizzRoot.__wizzMountChildren();');
     builder.dedent().add('} else {').indent();
     if (ownHead || ownStyle) {
       emitHeadApply(true);
@@ -743,9 +749,9 @@ function generateComponent(astPayload, options = {}) {
   }
 
   const initialChanges = reactiveVars.map(decl => `${decl.name}: true`).join(', ');
-      builder.add(`update(ctx, { ${initialChanges} });`)
-        .add('isMounted = true;')
-        .add('mountHooks.forEach((hook) => hook());');
+      builder.add(`__wizzUpdate(__wizzCtx, { ${initialChanges} });`)
+        .add('__wizzMounted = true;')
+        .add('__wizzMountHooks.forEach((hook) => hook());');
 
   // 7. Return the public API (e.g., a way to unmount/destroy the component)
   builder.add('\nreturn {')
@@ -758,22 +764,22 @@ function generateComponent(astPayload, options = {}) {
     // Object.is so identical updates never rerender the child. The local
     // names use the reserved `__wizz` prefix, which prop names cannot use,
     // so a prop can never shadow the accumulator.
-    builder.add('setProps(next) {')
+    builder.add('setProps(__wizzIncoming) {')
           .indent()
-          .add('if (isDestroyed) return;')
+          .add('if (__wizzDestroyed) return;')
           .add('const __wizzChanges = {};');
     props.forEach(({ name, defaultValue }) => {
-      builder.add(`if (${JSON.stringify(name)} in next) {`)
+      builder.add(`if (${JSON.stringify(name)} in __wizzIncoming) {`)
             .indent();
       if (defaultValue === null) {
-        builder.add(`if (!Object.is(${name}, next.${name})) {`)
+        builder.add(`if (!Object.is(${name}, __wizzIncoming.${name})) {`)
               .indent()
-              .add(`${name} = next.${name};`)
+              .add(`${name} = __wizzIncoming.${name};`)
               .add(`__wizzChanges.${name} = true;`)
               .dedent()
               .add('}');
       } else {
-        builder.add(`const __wizzNext = next.${name} !== undefined ? next.${name} : (${defaultValue});`)
+        builder.add(`const __wizzNext = __wizzIncoming.${name} !== undefined ? __wizzIncoming.${name} : (${defaultValue});`)
               .add(`if (!Object.is(${name}, __wizzNext)) {`)
               .indent()
               .add(`${name} = __wizzNext;`)
@@ -784,30 +790,30 @@ function generateComponent(astPayload, options = {}) {
       builder.dedent()
             .add('}');
     });
-    builder.add('if (Object.keys(__wizzChanges).length > 0) queueUpdate(__wizzChanges);')
+    builder.add('if (Object.keys(__wizzChanges).length > 0) __wizzQueueUpdate(__wizzChanges);')
           .dedent()
           .add('},');
   }
 
   builder.add('destroy() {')
         .indent()
-      .add('isDestroyed = true;')
-      .add('destroyHooks.forEach((hook) => hook());')
-      .add('childComponents.forEach((component) => component.destroy());');
+      .add('__wizzDestroyed = true;')
+      .add('__wizzDestroyHooks.forEach((hook) => hook());')
+      .add('__wizzChildren.forEach((component) => component.destroy());');
   if (ownHead || ownStyle) {
     // Released after the child cascade so a child's head returns to the
     // document before this component's is removed; shared styles survive
     // until their last holder releases.
-    builder.add('if (headNodes) __wizzReleaseHead(headNodes);');
+    builder.add('if (__wizzOwnHead) __wizzReleaseHead(__wizzOwnHead);');
   }
-  builder.add('trackedListeners.forEach(({ node, eventName, handler }) => node.removeEventListener(eventName, handler));');
+  builder.add('__wizzListeners.forEach(({ node, eventName, handler }) => node.removeEventListener(eventName, handler));');
   if (hydratable) {
     // A self-adopted root (nested hydration) belongs to the parent's tree;
     // the parent's destroy removes it, so the child must leave it in place.
     // Fresh mounts and top-level adoption own their root and remove it.
-    builder.add('if (!hydrate || !adoptSelf) target.removeChild(rootNode);');
+    builder.add('if (!__wizzHydrating || !__wizzAdoptSelf) __wizzHost.removeChild(__wizzRoot);');
   } else {
-    builder.add('target.removeChild(rootNode);');
+    builder.add('__wizzHost.removeChild(__wizzRoot);');
   }
   builder.dedent()
         .add('}')

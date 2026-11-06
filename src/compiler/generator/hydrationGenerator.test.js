@@ -173,18 +173,18 @@ test('emits an adoption walk verifying tags, ids, and text positionally', () => 
   const source = generateHydratable('<script>let count = 0;</script><main><p>static</p><p>Count: {count}</p></main>');
 
   // A top-level mount adopts the mount point's first element.
-  assert.match(source, /const rootNode = adoptSelf \? target : target\.firstElementChild;/);
-  assert.match(source, /__wizzNodeTag\(rootNode\) !== 'main'/);
-  assert.match(source, /__wizzStripComments\(rootNode\);/);
+  assert.match(source, /const __wizzRoot = __wizzAdoptSelf \? __wizzHost : __wizzHost\.firstElementChild;/);
+  assert.match(source, /__wizzNodeTag\(__wizzRoot\) !== 'main'/);
+  assert.match(source, /__wizzStripComments\(__wizzRoot\);/);
   // Comment stripping precedes the flattened child-count comparison.
-  assert.match(source, /!== rootNode\.childNodes\.length/);
+  assert.match(source, /!== __wizzRoot\.childNodes\.length/);
   // The reactive paragraph is verified by its analyzer-assigned id value.
   assert.match(source, /\.getAttribute\('data-wizz-id'\) !== "1"/);
   // Expression text is compared against the seeded runtime value.
   assert.match(source, /\.nodeValue !== String\(count\)/);
   // A single mismatch exit reports once, clears the target, and returns null.
-  assert.match(source, /console\.warn\('\[wizz\] hydration mismatch: ' \+ problems\.join\('; '\) \+ '\. Falling back to client rendering\.'\);/);
-  assert.match(source, /while \(target\.childNodes\.length > 0\) target\.removeChild\(target\.childNodes\[0\]\);/);
+  assert.match(source, /console\.warn\('\[wizz\] hydration mismatch: ' \+ __wizzProblems\.join\('; '\) \+ '\. Falling back to client rendering\.'\);/);
+  assert.match(source, /while \(__wizzHost\.childNodes\.length > 0\) __wizzHost\.removeChild\(__wizzHost\.childNodes\[0\]\);/);
   assert.match(source, /return null;/);
 });
 
@@ -199,7 +199,7 @@ test('emits the branch-aware walk for if blocks', () => {
   assert.match(source, /\} else \{/);
 });
 
-test('declares component-tag refs at hydrateCreate scope for tags inside branches', () => {
+test('declares component-tag refs at __wizzHydrateCreate scope for tags inside branches', () => {
   const source = generateHydratable(
     '<script>\nimport Counter from "./Counter.wizz";\nlet flag = true;\n</script><main>{#if flag}<Counter />{/if}</main>',
     { componentServerRenderable: { Counter: true } }
@@ -208,16 +208,16 @@ test('declares component-tag refs at hydrateCreate scope for tags inside branche
   // The ref is declared before the branch wrapper and only assigned inside
   // it: the adoption block after the walk references it at function scope,
   // so an inline `let` inside the branch would be out of scope there.
-  const hydrationStart = source.indexOf('function hydrateCreate(');
-  const declarationIndex = source.indexOf('let node_1 = null;', hydrationStart);
+  const hydrationStart = source.indexOf('function __wizzHydrateCreate(');
+  const declarationIndex = source.indexOf('let __wizzNode_1 = null;', hydrationStart);
   const branchIndex = source.indexOf('if (flag) {', hydrationStart);
-  const adoptionIndex = source.indexOf('.hydrateRoot(node_1,');
+  const adoptionIndex = source.indexOf('.hydrateRoot(__wizzNode_1,');
   assert.ok(declarationIndex !== -1, 'component ref declared at function scope');
   assert.ok(branchIndex !== -1 && adoptionIndex !== -1);
   assert.ok(declarationIndex < branchIndex, 'declaration precedes the branch wrapper');
   assert.ok(branchIndex < adoptionIndex, 'adoption follows the branch');
   // The in-branch assignment must not redeclare the ref.
-  assert.doesNotMatch(source.slice(branchIndex, adoptionIndex), /let node_1/);
+  assert.doesNotMatch(source.slice(branchIndex, adoptionIndex), /let __wizzNode_1/);
 });
 
 test('emits per-list machinery for each blocks', () => {
@@ -225,30 +225,30 @@ test('emits per-list machinery for each blocks', () => {
     '<script>let fruits = [{ id: 1, name: "apple" }];</script><ul>{#each fruits as fruit (fruit.id)}<li>{fruit.name}</li>{/each}</ul>'
   );
 
-  assert.match(source, /function hydrateList_1\(parentRef, startIndex\) \{/);
-  assert.match(source, /const key = fruit\.id;/);
-  assert.match(source, /if \(records_1\.has\(key\)\) problems\.push\('Each block keys must be unique\.'\);/);
+  assert.match(source, /function __wizzHydrateList_1\(__wizzParent, __wizzStart\) \{/);
+  assert.match(source, /const __wizzKey = fruit\.id;/);
+  assert.match(source, /if \(__wizzRecords_1\.has\(__wizzKey\)\) __wizzProblems\.push\('Each block keys must be unique\.'\);/);
   // The anchor is created during hydration: an empty text node cannot
   // survive HTML serialization.
-  assert.match(source, /anchor_1 = document\.parentNode\.createTextNode|anchor_1 = document\.createTextNode\(''\);/);
+  assert.match(source, /__wizzAnchor_1 = document\.parentNode\.createTextNode|__wizzAnchor_1 = document\.createTextNode\(''\);/);
   // Future client updates flow through the rebuilt records map.
-  assert.match(source, /listUpdates\.push\(\(changed\) => \{ if \(changed\.fruits\) hydrateUpdateList_1\(\); \}\);/);
+  assert.match(source, /__wizzLists\.push\(\(__wizzChanged\) => \{ if \(__wizzChanged\.fruits\) __wizzHydrateUpdateList_1\(\); \}\);/);
 });
 
 test('collects instrumented inline handlers for adoption', () => {
   const source = generateHydratable('<script>let name = "";</script><main><input value={name} on:input={(e) => name = e.target.value} /></main>');
-  assert.match(source, /pendingListeners\.push\(\[\w+, "input", \(e\) => \{ name = e\.target\.value; queueUpdate\(\{ name: true \}\); \}\]\);/);
+  assert.match(source, /__wizzPendingListeners\.push\(\[\w+, "input", \(e\) => \{ name = e\.target\.value; __wizzQueueUpdate\(\{ name: true \}\); \}\]\);/);
 });
 
 test('defers listener attachment until after the walk passes', () => {
   const source = generateHydratable('<script>function go() {}</script><main><button on:click={go}>go</button></main>');
 
   // The listener is collected during the walk...
-  assert.match(source, /pendingListeners\.push\(\[node_\d+, "click", go\]\);/);
+  assert.match(source, /__wizzPendingListeners\.push\(\[__wizzNode_\d+, "click", go\]\);/);
   // ...and attached only after the mismatch check.
-  const collectIndex = source.indexOf('pendingListeners.push');
-  const attachIndex = source.indexOf("pendingListeners.forEach((pending) => trackListener(");
-  const mismatchIndex = source.indexOf('if (problems.length > 0) {');
+  const collectIndex = source.indexOf('__wizzPendingListeners.push');
+  const attachIndex = source.indexOf("__wizzPendingListeners.forEach((pending) => __wizzListen(");
+  const mismatchIndex = source.indexOf('if (__wizzProblems.length > 0) {');
   assert.ok(collectIndex !== -1 && attachIndex !== -1 && mismatchIndex !== -1);
   assert.ok(collectIndex < mismatchIndex && mismatchIndex < attachIndex);
 });
@@ -614,13 +614,13 @@ function buildDeliveredHead(document, { titleText = 'P T', titleOwner = 'r', wit
 test('emits the head adoption walk only when head markup or component tags exist', () => {
   const headless = generateHydratable('<main><p>Hi</p></main>');
   assert.doesNotMatch(headless, /__wizzHeadOwner/);
-  assert.doesNotMatch(headless, /hydrateCreate\(target, state, adoptSelf, headOwner\)/);
+  assert.doesNotMatch(headless, /__wizzHydrateCreate\(__wizzHost, __wizzState, __wizzAdoptSelf, __wizzOwnerPath\)/);
   assert.doesNotMatch(headless, /__wizzFindHeadRun/);
 
   const withHead = generateHydratable('<wizz:head><title>T</title></wizz:head><main><p>Hi</p></main>');
-  assert.match(withHead, /function hydrateCreate\(target, state, adoptSelf, headOwner\) \{/);
+  assert.match(withHead, /function __wizzHydrateCreate\(__wizzHost, __wizzState, __wizzAdoptSelf, __wizzOwnerPath\) \{/);
   assert.match(withHead, /__wizzFindHeadRun\(\)/);
-  assert.match(withHead, /headNodes: __wizzHeadNodes \};/);
+  assert.match(withHead, /__wizzOwnHead: __wizzHeadNodes \};/);
 
   // A component tag threads the owner path even when the parent has no head
   // of its own — the child's delivered head must be attributable.
@@ -631,18 +631,28 @@ test('emits the head adoption walk only when head markup or component tags exist
   assert.match(withChild, /__wizzHeadOwner \+ "\/1"/);
 });
 
+test('emits list locals with the reserved prefix so author names cannot collide', () => {
+  const source = generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
+    '<script>let items = [{ id: 1 }];</script><ul>{#each items as row (row.id)}<li>{row.id}</li>{/each}</ul>'
+  ))), { hydratable: true });
+  const lists = source.slice(source.indexOf('function __wizzHydrateListItem_1'), source.indexOf('function update('));
+
+  assert.match(lists, /const __wizzItems = items;/);
+  assert.doesNotMatch(lists, /\bconst items\b|\bparentRef\b|\bnextRecords\b|\bseenKeys\b|\bstartIndex\b/);
+});
+
 test('captures an update target for every reactive node it adopts', () => {
   const source = generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
     '<script>let a = 1; let b = 2;</script><main title={a}><p>{#if a}<b>{a}</b>{/if}</p>{b}</main>'
   ))), { hydratable: true });
-  const hydration = source.slice(source.indexOf('function hydrateCreate'), source.indexOf('function update('));
+  const hydration = source.slice(source.indexOf('function __wizzHydrateCreate'), source.indexOf('function update('));
   const declared = source.match(/let (__wizzTarget_\d+(?:, __wizzTarget_\d+)*);/)[1].split(', ');
 
   assert.equal(declared.length, 3);
   for (const name of declared) {
     assert.match(hydration, new RegExp(`${name} = `), `${name} is captured by the walk`);
   }
-  assert.match(hydration, /__wizzTarget_1 = rootNode;/);
+  assert.match(hydration, /__wizzTarget_1 = __wizzRoot;/);
   // Hydratable modules share one declaration across create() and the walk.
   assert.equal(source.match(/let __wizzTarget_1\b/g).length, 1);
 });

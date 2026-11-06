@@ -99,7 +99,7 @@ function findElement(root, name) {
 test('counter fixture mounts, updates through events, and unmounts', async () => {
   const { source, document, target, component } = mountFixture('counter');
 
-  assert.match(source, /count \+= 1; queueUpdate\(\{ count: true \}\);/);
+  assert.match(source, /count \+= 1; __wizzQueueUpdate\(\{ count: true \}\);/);
 
   assert.equal(target.childNodes[0].name, 'main');
   const button = document.querySelector('[data-wizz-id="1"]');
@@ -118,7 +118,7 @@ test('counter fixture mounts, updates through events, and unmounts', async () =>
 test('inline-handlers fixture updates the DOM from assignments in inline arrow handlers', async () => {
   const { source, target, component } = mountFixture('inline-handlers');
 
-  assert.match(source, /\(event\) => \{ name = event\.target\.value; queueUpdate\(\{ name: true \}\); \}/);
+  assert.match(source, /\(event\) => \{ name = event\.target\.value; __wizzQueueUpdate\(\{ name: true \}\); \}/);
   const input = findElement(target, 'input');
   const button = findElement(target, 'button');
   const greeting = findElement(target, 'p');
@@ -154,7 +154,7 @@ test('profile fixture renders constants once and reactive state through events',
   button.dispatchEvent('click');
 
   // One event mutates two pieces of state; the scheduler coalesces both
-  // queueUpdate calls into one batch, and every dependent expression updates.
+  // __wizzQueueUpdate calls into one batch, and every dependent expression updates.
   await flushUpdates();
   assert.equal(heading.childNodes[0].nodeValue, 'Grace');
   assert.equal(paragraph.childNodes[2].nodeValue, '1');
@@ -180,7 +180,7 @@ test('lifecycle fixture runs mount hooks after mounting and destroy hooks before
 test('static fixture mounts without any reactive machinery', () => {
   const { source, target, component } = mountFixture('static');
 
-  // The queueUpdate dispatcher is always emitted; what matters is that no
+  // The __wizzQueueUpdate dispatcher is always emitted; what matters is that no
   // reactive targets or update lookups are generated for a stateless component.
   assert.doesNotMatch(source, /querySelector|data-wizz-id/);
   assert.doesNotMatch(source, /get \w+\(\) \{ return/);

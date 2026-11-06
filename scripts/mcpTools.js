@@ -692,6 +692,11 @@ Script boundary (inside <script>):
   lifecycle hooks (no import needed). onMount runs after the component is
   attached and its children mounted; onDestroy runs before teardown.
   Assignments inside statement-level hook callbacks are reactive.
+- Ordinary names are free at the top level of a script, including target,
+  props, state, update, and value. Reserved there (WIZZ-G025): names starting
+  with __wizz, onMount, onDestroy, document, console, queueMicrotask, Array,
+  Error, JSON, Map, Object, Set, and String. Inside a function or block any
+  name is allowed. Generated names are private: a script cannot read them.
 
 Template expressions ({...}) use a safe subset: identifiers, member access,
 integer and string literals, + - * /, strict equality (===), and

@@ -1165,3 +1165,310 @@ test('a failed adoption discards captured targets and the fallback captures its 
   component.destroy();
   assert.deepEqual(target.childNodes, []);
 });
+
+// --- List locals ---
+// The emitted list machinery runs beside author expressions, so its own locals
+// must not share a name with a collection, an item, or a variable a row reads.
+const listSource = (collection, item, keyed) => `<script>
+let ${collection} = [{ id: 1, text: "a" }];
+function grow() { ${collection} = [{ id: 1, text: "b" }, { id: 2, text: "c" }]; }
+</script><main><ul>{#each ${collection} as ${item}${keyed ? ` (${item}.id)` : ''}}<li>{${item}.text}</li>{/each}</ul><button on:click={grow}>g</button></main>`;
+
+const collidingNames = ['items', 'key', 'record', 'index', 'parentRef', 'startIndex', 'nextRecords', 'seenKeys'];
+
+for (const [mode, mount] of Object.entries(mountBothWays)) {
+  for (const keyed of [true, false]) {
+    const flavour = keyed ? 'keyed' : 'keyless';
+
+    for (const name of collidingNames) {
+      test(`${mode}: a ${flavour} collection named ${name} renders and updates`, async (t) => {
+        const { target, component } = await mount(t, listSource(name, 'row', keyed));
+        assert.deepEqual(elementsNamed(target, 'li').map(textOf), ['a']);
+
+        elementsNamed(target, 'button')[0].dispatchEvent('click');
+        await flushUpdates();
+
+        assert.deepEqual(elementsNamed(target, 'li').map(textOf), ['b', 'c']);
+        component.destroy();
+      });
+
+      test(`${mode}: a ${flavour} list item named ${name} renders and updates`, async (t) => {
+        const { target, component } = await mount(t, listSource('rows', name, keyed));
+        assert.deepEqual(elementsNamed(target, 'li').map(textOf), ['a']);
+
+        elementsNamed(target, 'button')[0].dispatchEvent('click');
+        await flushUpdates();
+
+        assert.deepEqual(elementsNamed(target, 'li').map(textOf), ['b', 'c']);
+        component.destroy();
+      });
+    }
+  }
+
+  for (const name of ['index', 'parentRef']) {
+    test(`${mode}: a row body reads the author's ${name}, not a generated local`, async (t) => {
+      const parentSource = `<script>\nlet ${name} = "outer";\nlet rows = [1, 2];\n</script>`
+        + `<main><ul>{#each rows as row}<li>{${name}}</li>{/each}</ul></main>`;
+      const { target, component } = await mount(t, parentSource);
+
+      assert.deepEqual(elementsNamed(target, 'li').map(textOf), ['outer', 'outer']);
+      component.destroy();
+    });
+  }
+}
+
+// --- Child position (issue #66) ---
+// Children mount after their parent is attached, so create() holds each tag's
+// place with a text node the child inserts before. A fresh mount must end up
+// with the same DOM hydration adopts from the server.
+const describeNode = (node) => (node.nodeType === 3
+  ? `text:${node.nodeValue}`
+  : { [node.tagName.toLowerCase()]: node.childNodes.map(describeNode) });
+
+const importCounter = 'import Counter from "./Counter.wizz";';
+
+test('issue #66 repro: a fresh-mounted child stays at its template position', async (t) => {
+  const parentSource = `<script>\n  ${importCounter}\n  let draft = "typed";\n</script>\n\n`
+    + '<main class="repro">\n  <Counter text="child" />\n  <input value={draft} aria-label="draft" />\n  <button>Clear</button>\n</main>\n';
+  const { target, component } = await mountBothWays['fresh mount'](t, parentSource, labelChildSource);
+  const [main] = elementsNamed(target, 'main');
+
+  assert.deepEqual(main.childNodes.filter((node) => node.nodeType === 1).map((node) => node.tagName), ['SPAN', 'INPUT', 'BUTTON']);
+  component.destroy();
+  assert.deepEqual(target.childNodes, []);
+});
+
+const orderTemplates = {
+  'a child first': `<script>\n${importCounter}\n</script><main><Counter /><p>after</p></main>`,
+  'a child last': `<script>\n${importCounter}\n</script><main><p>before</p><Counter /></main>`,
+  'a child between siblings': `<script>\n${importCounter}\n</script><main><p>a</p><Counter /><p>b</p></main>`,
+  'a child between text': `<script>\n${importCounter}\nlet count = 1;\n</script><main>before <Counter /> after {count}</main>`,
+  'adjacent children': `<script>\n${importCounter}\n</script><main><Counter /><Counter /><Counter /></main>`,
+  'a child with reactive props': `<script>\n${importCounter}\nlet text = "live";\n</script><main><Counter text={text} /><p>after</p></main>`,
+  'a child inside a taken branch': `<script>\n${importCounter}\nlet open = true;\n</script><main>{#if open}<Counter /><p>in</p>{/if}<p>out</p></main>`,
+  'a child in the else branch': `<script>\n${importCounter}\nlet open = false;\n</script><main>{#if open}<p>no</p>{:else}<Counter />{/if}<p>out</p></main>`,
+  'a child before a list': `<script>\n${importCounter}\nlet rows = [1, 2];\n</script><main><Counter /><ul>{#each rows as row}<li>{row}</li>{/each}</ul></main>`,
+  'a child beside list items': `<script>\n${importCounter}\nlet rows = [1, 2];\n</script><main><Counter />{#each rows as row}<li>{row}</li>{/each}<Counter /></main>`,
+  'a child nested in an element': `<script>\n${importCounter}\n</script><main><section><Counter /><i>x</i></section><p>y</p></main>`
+};
+
+for (const [name, parentSource] of Object.entries(orderTemplates)) {
+  test(`a fresh mount matches the hydrated DOM with ${name}`, async (t) => {
+    const child = '<script>\n  export let text = "child";\n</script>\n\n<span>{text}</span>\n';
+    const fresh = await mountBothWays['fresh mount'](t, parentSource, child);
+    const hydrated = await mountBothWays.hydration(t, parentSource, child);
+    // The list anchor is an empty text node on both paths.
+    const describeAll = (target) => JSON.stringify(target.childNodes.map(describeNode));
+
+    assert.equal(describeAll(fresh.target), describeAll(hydrated.target));
+    fresh.component.destroy();
+    hydrated.component.destroy();
+    assert.deepEqual(fresh.target.childNodes, []);
+  });
+}
+
+test('no placeholder stays in the DOM after children mount', async (t) => {
+  const { target, component } = await mountBothWays['fresh mount'](t, `<script>\n${importCounter}\n</script><main><Counter /><Counter /></main>`);
+  const [main] = elementsNamed(target, 'main');
+
+  assert.deepEqual(main.childNodes.map((node) => node.nodeType), [1, 1]);
+  component.destroy();
+});
+
+test('a grandchild keeps its position inside a positioned child', async (t) => {
+  const { document, freshClientModule } = await loadNestedModules(
+    t,
+    `<script>\n${importCounter}\n</script><main><Counter /><p>after</p></main>`,
+    '<section><h2>title</h2><em>rest</em></section>'
+  );
+  const target = document.makeElement('div');
+  const component = freshClientModule.default(target);
+
+  assert.deepEqual(target.childNodes.map(describeNode), [{
+    main: [{ section: [{ h2: ['text:title'] }, { em: ['text:rest'] }] }, { p: ['text:after'] }]
+  }]);
+  component.destroy();
+});
+
+test('reactive updates reach a positioned child and the siblings after it', async (t) => {
+  const parentSource = `<script>\n${importCounter}\nlet text = "one";\nfunction change() { text = "two"; }\n</script>`
+    + '<main><Counter text={text} /><p>{text}</p><button on:click={change}>go</button></main>';
+  const { target, component } = await mountBothWays['fresh mount'](t, parentSource, '<script>\n  export let text = "child";\n</script>\n\n<span>{text}</span>\n');
+  const [main] = elementsNamed(target, 'main');
+  elementsNamed(target, 'button')[0].dispatchEvent('click');
+  await flushUpdates();
+
+  assert.deepEqual(main.childNodes.map(describeNode), [{ span: ['text:two'] }, { p: ['text:two'] }, { button: ['text:go'] }]);
+  component.destroy();
+  assert.deepEqual(target.childNodes, []);
+});
+
+test('a hydration fallback restores template order', async (t) => {
+  const parentSource = `<script>\n${importCounter}\n</script><main><Counter /><p data-mark="x">after</p></main>`;
+  const { document, clientModule, warnings, render } = await loadNestedModules(t, parentSource, noChildSource);
+  const { html, state } = render();
+  const target = deliverMarkup(document, html);
+  elementsNamed(target, 'p')[0].childNodes[0].nodeValue = 'tampered';
+
+  const component = clientModule.hydrateComponent(target, {}, state);
+  assert.equal(warnings.length, 1);
+
+  assert.deepEqual(elementsNamed(target, 'main')[0].childNodes.map((node) => node.tagName), ['SPAN', 'P']);
+  component.destroy();
+});
+
+test('an author variable cannot collide with the mount position parameter', async (t) => {
+  const { target, component } = await mountBothWays['fresh mount'](t, '<script>\nlet anchor = "kept";\n</script><main>{anchor}</main>');
+
+  assert.equal(textOf(elementsNamed(target, 'main')[0]), 'kept');
+  component.destroy();
+});
+
+test('mounting without a position still appends to the target', async (t) => {
+  const { document, freshClientModule } = await loadNestedModules(t, '<main>one</main>', noChildSource);
+  const target = document.makeElement('div');
+  target.appendChild(document.makeElement('header'));
+
+  const component = freshClientModule.default(target);
+
+  assert.deepEqual(target.childNodes.map((node) => node.tagName), ['HEADER', 'MAIN']);
+  component.destroy();
+});
+
+test('a position argument inserts the root before that node', async (t) => {
+  const { document, freshClientModule } = await loadNestedModules(t, '<main>one</main>', noChildSource);
+  const target = document.makeElement('div');
+  const footer = document.makeElement('footer');
+  target.appendChild(footer);
+
+  const component = freshClientModule.default(target, {}, footer);
+
+  assert.deepEqual(target.childNodes.map((node) => node.tagName), ['MAIN', 'FOOTER']);
+  component.destroy();
+  assert.deepEqual(target.childNodes, [footer]);
+});
+
+// --- Author names (issue #65) ---
+// Author scripts run inside the generated factory and author expressions run
+// inside its nested functions, so no generated name may be an ordinary word.
+// `names` is every unprefixed identifier generated code has used.
+const names = [
+  'target', 'props', 'hydrate', 'state', 'adoptSelf', 'headOwner', 'isMounted', 'headNodes', 'isDestroyed',
+  'batchScheduled', 'pendingChanges', 'mountHooks', 'destroyHooks', 'trackedListeners', 'trackListener',
+  'queueUpdate', 'ctx', 'create', 'update', 'rootNode', 'childComponents', 'listUpdates', 'adoptedHydration',
+  'createHeadNodes', 'createStyleNodes', 'hydrateCreate', 'mountInstance', 'mountChildren', 'mountComponent',
+  'hydrateComponent', 'hydrateRoot', 'changed', 'changes', 'problems', 'pendingListeners', 'nodes', 'node',
+  'node_1', 'node_2', 'anchor_1', 'records_1', 'createItem_1', 'updateList_1', 'index_1', 'component_1',
+  'hydrateList_1', 'fresh_1_0', 'value', 'next', 'key', 'html', 'head', 'options', 'renderComponent',
+  'serializeInitialState', 'styleNode', 'hook', 'handler'
+];
+
+const reactiveSource = (name) => `<script>\nlet ${name} = "authored";\nfunction change() { ${name} = "changed"; }\n</script>`
+  + `<main title={${name}}>{${name}}<button on:click={change}>go</button></main>`;
+
+for (const [mode, mount] of Object.entries(mountBothWays)) {
+  for (const name of names) {
+    test(`${mode}: reactive state may be named ${name}`, async (t) => {
+      const { target, component } = await mount(t, reactiveSource(name));
+      const [main] = elementsNamed(target, 'main');
+      assert.equal(main.attributes.title, 'authored');
+      assert.equal(textOf(main), 'authored');
+
+      elementsNamed(target, 'button')[0].dispatchEvent('click');
+      await flushUpdates();
+
+      assert.equal(main.attributes.title, 'changed');
+      assert.equal(textOf(main), 'changed');
+      component.destroy();
+    });
+
+    test(`${mode}: a const and a function may be named ${name}`, async (t) => {
+      const constSource = `<script>\nconst ${name} = "authored";\n</script><main>{${name}}</main>`;
+      const constant = await mount(t, constSource);
+      assert.equal(textOf(elementsNamed(constant.target, 'main')[0]), 'authored');
+      constant.component.destroy();
+
+      const functionSource = `<script>\nlet hits = 0;\nfunction ${name}() { hits += 1; }\n</script><main><button on:click={${name}}>{hits}</button></main>`;
+      const { target, component } = await mount(t, functionSource);
+      const [button] = elementsNamed(target, 'button');
+      button.dispatchEvent('click');
+      await flushUpdates();
+      assert.equal(textOf(button), '1');
+      component.destroy();
+    });
+
+    test(`${mode}: a prop may be named ${name}`, async (t) => {
+      const source = `<script>\nexport let ${name} = "authored";\n</script><main>{${name}}</main>`;
+      const { target, component } = await mount(t, source);
+      assert.equal(textOf(elementsNamed(target, 'main')[0]), 'authored');
+
+      component.setProps({ [name]: 'changed' });
+      await flushUpdates();
+
+      assert.equal(textOf(elementsNamed(target, 'main')[0]), 'changed');
+      component.destroy();
+    });
+
+    test(`${mode}: persistent state may be named ${name}`, async (t) => {
+      const source = `<script>\nlet ${name} = persist("names-${name}-${mode.length}", "authored");\nfunction change() { ${name} = "changed"; }\n</script>`
+        + `<main>{${name}}<button on:click={change}>go</button></main>`;
+      const { target, component } = await mount(t, source);
+      const [main] = elementsNamed(target, 'main');
+      assert.equal(textOf(main), 'authored');
+
+      elementsNamed(target, 'button')[0].dispatchEvent('click');
+      await flushUpdates();
+
+      assert.equal(textOf(main), 'changed');
+      component.destroy();
+    });
+
+    test(`${mode}: a list and its rows may use ${name}`, async (t) => {
+      const asCollection = await mount(t, listSource(name, 'row', true));
+      elementsNamed(asCollection.target, 'button')[0].dispatchEvent('click');
+      await flushUpdates();
+      assert.deepEqual(elementsNamed(asCollection.target, 'li').map(textOf), ['b', 'c']);
+      asCollection.component.destroy();
+
+      const rowBody = `<script>\nlet ${name} = "outer";\nlet rows = [1, 2];\n</script><main><ul>{#each rows as row}<li>{${name}}</li>{/each}</ul></main>`;
+      const { target, component } = await mount(t, rowBody);
+      assert.deepEqual(elementsNamed(target, 'li').map(textOf), ['outer', 'outer']);
+      component.destroy();
+    });
+
+    test(`${mode}: head and child props may read ${name}`, async (t) => {
+      const source = `<script>\nimport Counter from "./Counter.wizz";\nlet ${name} = "authored";\n</script>`
+        + `<wizz:head><title>{${name}}</title></wizz:head><main><Counter text={${name}} /></main>`;
+      const { target, component } = await mount(t, source, labelChildSource);
+      assert.equal(textOf(elementsNamed(target, 'span')[0]), 'authored');
+      component.destroy();
+    });
+  }
+}
+
+test('a persistent value named value receives another instance\'s write', async (t) => {
+  const source = '<script>\nlet value = persist("names-shared", "a");\nfunction change() { value = "b"; }\n</script>'
+    + '<main>{value}<button on:click={change}>go</button></main>';
+  const { document, freshClientModule } = await loadNestedModules(t, source, noChildSource);
+  const firstTarget = document.makeElement('div');
+  const secondTarget = document.makeElement('div');
+  const first = freshClientModule.default(firstTarget);
+  const second = freshClientModule.default(secondTarget);
+
+  elementsNamed(firstTarget, 'button')[0].dispatchEvent('click');
+  await flushUpdates();
+
+  assert.equal(textOf(elementsNamed(secondTarget, 'main')[0]), 'b');
+  first.destroy();
+  second.destroy();
+});
+
+test('renderComponent keeps its html, head, and state result fields', async (t) => {
+  const source = '<script>\nlet html = "a";\nlet head = "b";\nlet state = "c";\nlet options = "d";\n</script>'
+    + '<wizz:head><title>{head}</title></wizz:head><main title={options}>{html}{state}</main>';
+  const { render } = await loadNestedModules(t, source, noChildSource);
+  const { html, state } = render();
+
+  assert.match(html, /<main title="d"/);
+  assert.deepEqual({ ...state }, { html: 'a', head: 'b', state: 'c', options: 'd' });
+});

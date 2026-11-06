@@ -100,7 +100,8 @@ const CODES = Object.freeze({
     voidWithChildren: 'WIZZ-G021',
     hydrationUnsupportedNode: 'WIZZ-G022',
     hydrationEachUnsupportedNode: 'WIZZ-G023',
-    persistSpanDrift: 'WIZZ-G024'
+    persistSpanDrift: 'WIZZ-G024',
+    reservedAuthorName: 'WIZZ-G025'
   })
 });
 

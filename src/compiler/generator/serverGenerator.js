@@ -1,5 +1,6 @@
 // src/compiler/generator/serverGenerator.js
 const { CodeBuilder } = require('./codeBuilder');
+const { assertAuthorNames } = require('./reservedNames');
 const { CODES, compilerDiagnostic } = require('../diagnostics.js');
 const { findReactiveMutations } = require('./assignmentInterceptor');
 const { rewritePersistInitializers } = require('./persistInitializer');
@@ -215,6 +216,7 @@ function assertServerRenderable(astPayload, options = {}) {
  */
 function generateServerComponent(astPayload, options = {}) {
   assertServerRenderable(astPayload, options);
+  assertAuthorNames(astPayload);
 
   const builder = new CodeBuilder();
   const props = astPayload.props || [];
@@ -298,8 +300,8 @@ function generateServerComponent(astPayload, options = {}) {
   builder.add('');
 
   builder.add(hasHeadMarkup
-    ? 'export function renderComponent(props = {}, options = {}) {'
-    : 'export function renderComponent(props = {}) {')
+    ? 'export function renderComponent(__wizzProps = {}, __wizzOptions = {}) {'
+    : 'export function renderComponent(__wizzProps = {}) {')
         .indent();
 
   if (hasHeadMarkup) {
@@ -307,13 +309,13 @@ function generateServerComponent(astPayload, options = {}) {
     // components receive a scoped owner path from their parent's generator.
     builder.add('// Head identity for this render: the page owns the root run; nested');
     builder.add('// components receive a scoped owner path from their parent.');
-    builder.add(`const __wizzHeadOwner = (options && typeof options.headOwner === 'string' && options.headOwner) || 'r';`);
+    builder.add(`const __wizzHeadOwner = (__wizzOptions && typeof __wizzOptions.headOwner === 'string' && __wizzOptions.headOwner) || 'r';`);
     // Scoped-style dedup accumulator, threaded down the render tree through
     // options.styleScopes: the page render creates one array and every child
     // renderComponent receives the same instance, so a component imported by
     // several pages (or rendered several times on one page) injects its style
     // exactly once per document.
-    builder.add(`const __wizzStyleScopes = (options && Array.isArray(options.styleScopes) && options.styleScopes) || [];`);
+    builder.add(`const __wizzStyleScopes = (__wizzOptions && Array.isArray(__wizzOptions.styleScopes) && __wizzOptions.styleScopes) || [];`);
     builder.add('');
   }
 
@@ -321,8 +323,8 @@ function generateServerComponent(astPayload, options = {}) {
   builder.add('// --- Props ---');
   props.forEach(({ name, defaultValue }) => {
     builder.add(defaultValue === null
-      ? `let ${name} = props.${name};`
-      : `let ${name} = props.${name} !== undefined ? props.${name} : (${defaultValue});`);
+      ? `let ${name} = __wizzProps.${name};`
+      : `let ${name} = __wizzProps.${name} !== undefined ? __wizzProps.${name} : (${defaultValue});`);
   });
   if (props.length > 0) builder.add('');
 
@@ -601,19 +603,19 @@ function generateServerComponent(astPayload, options = {}) {
   emitElement(builder, rootNode);
 
   builder.add('');
-  builder.add("const html = __wizzParts.join('');");
+  builder.add("const __wizzHtml = __wizzParts.join('');");
   if (hasHeadMarkup) {
-    builder.add("const head = __wizzHeadParts.join('');");
+    builder.add("const __wizzHead = __wizzHeadParts.join('');");
   }
   if (hasComponentTags) {
-    builder.add(`const state = { ${stateVars.map(declaration => declaration.name).join(', ')} };`);
-    builder.add('state.__wizz = { components: __wizzChildStates };');
-    builder.add('return { html, head, state };');
+    builder.add(`const __wizzState = { ${stateVars.map(declaration => declaration.name).join(', ')} };`);
+    builder.add('__wizzState.__wizz = { components: __wizzChildStates };');
+    builder.add('return { html: __wizzHtml, head: __wizzHead, state: __wizzState };');
   } else if (stateVars.length > 0) {
-    builder.add(`const state = { ${stateVars.map(declaration => declaration.name).join(', ')} };`);
-    builder.add(hasHeadMarkup ? 'return { html, head, state };' : 'return { html, state };');
+    builder.add(`const __wizzState = { ${stateVars.map(declaration => declaration.name).join(', ')} };`);
+    builder.add(hasHeadMarkup ? 'return { html: __wizzHtml, head: __wizzHead, state: __wizzState };' : 'return { html: __wizzHtml, state: __wizzState };');
   } else {
-    builder.add(hasHeadMarkup ? 'return { html, head, state: {} };' : 'return { html, state: {} };');
+    builder.add(hasHeadMarkup ? 'return { html: __wizzHtml, head: __wizzHead, state: {} };' : 'return { html: __wizzHtml, state: {} };');
   }
   builder.dedent().add('}');
 

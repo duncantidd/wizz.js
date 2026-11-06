@@ -52,7 +52,7 @@ The relevant payload fields are:
 | `script` | Parser | Finds reactive declarations for context getters and initial change flags. |
 | `template` | Parser | Drives DOM creation. |
 | `Expression.value` | Parser | Becomes the JavaScript expression evaluated during updates. |
-| `Expression.dependencies` | Dependency analyzer | Determines which `changed` flags should trigger each expression update. |
+| `Expression.dependencies` | Dependency analyzer | Determines which `__wizzChanged` flags should trigger each expression update. |
 | `data-wizz-id` attributes | ID assigner | Lets the hydration walk verify delivered elements. Updates never look nodes up by id. |
 
 Calling `generateComponent()` without the analyzer stages can still produce source, but dynamic expressions will not have the metadata required for targeted updates. In particular, `generateUpdateFunction()` reads `dependencies` to decide which writes to emit.
@@ -74,25 +74,25 @@ export default function mountComponent(target, props = {}) {
   // Developer logic is emitted here.
   let count = 0;
 
-  const ctx = {
+  const __wizzCtx = {
     get count() { return count; },
   };
 
-  function create(ctx) {
+  function __wizzCreate(__wizzCtx) {
     // Create elements and text nodes, then return the root element.
   }
 
-  function update(ctx, changed) {
-    // Update dynamic text when changed.count is true.
+  function __wizzUpdate(__wizzCtx, __wizzChanged) {
+    // Update dynamic text when __wizzChanged.count is true.
   }
 
-  const rootNode = create(ctx);
-  target.appendChild(rootNode);
-  update(ctx, { count: true });
+  const __wizzRoot = __wizzCreate(__wizzCtx);
+  target.appendChild(__wizzRoot);
+  __wizzUpdate(__wizzCtx, { count: true });
 
   return {
     destroy() {
-      target.removeChild(rootNode);
+      target.removeChild(__wizzRoot);
     }
   };
 }
@@ -115,20 +115,20 @@ With `options.extractedStyles` a linked stylesheet delivers the CSS: all three t
 - Dynamic attributes are interpolated as `name="escapeAttribute(String(expr))"`.
 - `{#if}` evaluates the test against render-time state and emits the taken branch between block markers; `{#each}` loops the initial collection with the item variable in scope; component tags namespace-import the child's `.server.js` build (`import * as __wizzServer_<Name> from "./<Name>.server.js"`) and embed its `renderComponent()` output at the tag position, collecting child state under `state.__wizz.components["<componentId>"]`.
 
-**Hydration — `hydrationGenerator.js`:** `generateHydrationFunction(templateAST)` emits a `hydrateCreate(target, state, adoptSelf)` function that `componentGenerator.js` embeds when `generateComponent(astPayload, { hydratable: true })` is requested. Hydratable modules export `hydrateComponent(target, props, state)` (adopting the mount point's first element child) and `hydrateRoot(rootNode, props, state)` (adopting the *given* node — the nested-adoption entry); all entries route through a shared `mountInstance()` closure that seeds reactive non-prop bindings from the serialized state (`Object.prototype.hasOwnProperty.call` + bracket access, so a hostile `__proto__` key cannot pollute; props are never seeded) and adopts the server root instead of creating one. The adoption walk verifies positionally against the AST:
+**Hydration — `hydrationGenerator.js`:** `generateHydrationFunction(templateAST)` emits a `__wizzHydrateCreate(target, state, adoptSelf)` function that `componentGenerator.js` embeds when `generateComponent(astPayload, { hydratable: true })` is requested. Hydratable modules export `hydrateComponent(target, props, state)` (adopting the mount point's first element child) and `hydrateRoot(__wizzRoot, props, state)` (adopting the *given* node — the nested-adoption entry); all entries route through a shared `__wizzMountInstance()` closure that seeds reactive non-prop bindings from the serialized state (`Object.prototype.hasOwnProperty.call` + bracket access, so a hostile `__proto__` key cannot pollute; props are never seeded) and adopts the server root instead of creating one. The adoption walk verifies positionally against the AST:
 
 - The mount point's `firstElementChild` (or the given node, when self-adopting) becomes the root; its lowercased tag must match the template.
 - Each element's comments (the delivery markers) are stripped first, then the remaining `childNodes.length` must equal the flattened AST child count exactly.
 - Text children verify `nodeType === 3` and their `nodeValue` against the escaped-decoded literal; expression children verify against `String(<raw expression>)` evaluated in the seeded factory scope.
 - `{#if}` re-evaluates the same test the server evaluated against seeded state and walks only the taken branch; `{#each}` adopts each item root positionally, rebuilds the records map with key-aware update closures (so client list updates mutate the adopted nodes), and creates only the list anchor — an empty text node cannot survive HTML serialization.
-- Imported component tags verify only that the position holds an element; the child is adopted after the walk passes through the child's own `hydrateRoot(childNode, props, state)` with the state slice under `__wizz.components`. Component-tag walk refs are declared at `hydrateCreate` scope so tags inside branches stay addressable.
+- Imported component tags verify only that the position holds an element; the child is adopted after the walk passes through the child's own `hydrateRoot(childNode, props, state)` with the state slice under `__wizz.components`. Component-tag walk refs are declared at `__wizzHydrateCreate` scope so tags inside branches stay addressable.
 - `data-wizz-id` values are read from the AST attribute, never from a walk counter.
 - Event listeners are collected during the walk and attached only after it passes.
-- When the component (or a rendered child) declares `<wizz:head>`, `hydrateCreate(target, state, adoptSelf, headOwner)` also adopts the delivered head: the page filters the marker-delimited run (`<!--wizz:head-start-->…<!--wizz:head-end-->` injected by the dev server before `</head>`) to nodes tagged with its owner path (`'r'`), nested children scan `document.head` for their `'r/<componentId>'` slice (the parent's claim removes delivery tags first, so the filters cannot collide). Verification compares each node against compile-time expectation structures `{ tag, text, attrs: [[name, value]], flags: [[name, ''|null]] }` — pair arrays, not attribute objects, so a hostile key cannot pollute prototypes and no DOM is created. Success claims the slice (`__wizzClaimHead`: ownership re-tagged `data-wizz-head`, delivery tags consumed, claimed titles moved to the head front — the position `document.title` reads), consumes the markers, and returns `headNodes` for destroy-time release. Any mismatch — wrong tag, text, attribute, boolean presence, count, or unclaimed leftover delivery tags — joins the same single-warning fallback: claimed head nodes released, the delivered run (or, for a nested adoption, the component's own slice via `__wizzStripOwnedHeadSlice`) stripped, then a fresh head applied. Scoped styles ride the same adoption path without slice claims: because style tags carry no delivery tag, the leftover-run check ignores them, and the hydrate path re-applies its stylesheet through `__wizzApplyHead`, which finds the delivered copy by scope and refcounts it — server-delivered styles are adopted, never duplicated, and a fallback's fresh mount adopts the delivered copy too.
+- When the component (or a rendered child) declares `<wizz:head>`, `__wizzHydrateCreate(target, state, adoptSelf, headOwner)` also adopts the delivered head: the page filters the marker-delimited run (`<!--wizz:head-start-->…<!--wizz:head-end-->` injected by the dev server before `</head>`) to nodes tagged with its owner path (`'r'`), nested children scan `document.head` for their `'r/<componentId>'` slice (the parent's claim removes delivery tags first, so the filters cannot collide). Verification compares each node against compile-time expectation structures `{ tag, text, attrs: [[name, value]], flags: [[name, ''|null]] }` — pair arrays, not attribute objects, so a hostile key cannot pollute prototypes and no DOM is created. Success claims the slice (`__wizzClaimHead`: ownership re-tagged `data-wizz-head`, delivery tags consumed, claimed titles moved to the head front — the position `document.title` reads), consumes the markers, and returns `headNodes` for destroy-time release. Any mismatch — wrong tag, text, attribute, boolean presence, count, or unclaimed leftover delivery tags — joins the same single-warning fallback: claimed head nodes released, the delivered run (or, for a nested adoption, the component's own slice via `__wizzStripOwnedHeadSlice`) stripped, then a fresh head applied. Scoped styles ride the same adoption path without slice claims: because style tags carry no delivery tag, the leftover-run check ignores them, and the hydrate path re-applies its stylesheet through `__wizzApplyHead`, which finds the delivered copy by scope and refcounts it — server-delivered styles are adopted, never duplicated, and a fallback's fresh mount adopts the delivered copy too.
 
 Any mismatch produces exactly one `console.warn('[wizz] hydration mismatch: … Falling back to client rendering.')`, clears the mount point, and returns `null`; the factory then falls back to a full client `mountComponent()` call. For a nested adoption (`hydrateRoot`), the fallback clears and remounts **inside the given node**, so the parent tree is never detached and never fails. Dynamic attributes other than `data-wizz-id` are not verified — the initial `update()` pass converges them from the seeded state. Known boundary: CRLF-authored templates fail strict text verification and fall back rather than hydrating.
 
-`ctx` currently exposes getter access to each reactive declaration and is passed to both lifecycle functions. It establishes the framework context boundary and ensures a getter reads the current local binding; the present generated expression code evaluates directly in the factory closure rather than reading through `ctx`.
+`__wizzCtx` currently exposes getter access to each reactive declaration and is passed to both lifecycle functions. It establishes the framework context boundary and ensures a getter reads the current local binding; the present generated expression code evaluates directly in the factory closure rather than reading through `__wizzCtx`.
 
 ## Component Props
 
@@ -150,7 +150,7 @@ let count = props.count;
 **Reactive updates:** the parent's `update()` delivers changes through the child instance:
 
 ```js
-if (changed.start) {
+if (__wizzChanged.start) {
   if (component_1) component_1.setProps({ "start": start });
 }
 ```
@@ -176,9 +176,9 @@ The constructor initializes an empty `lines` array and `indentLevel` of zero. A 
 Adds one string line at the current indentation level and returns `this`, enabling fluent emission:
 
 ```js
-builder.add('function create() {')
+builder.add('function __wizzCreate() {')
   .indent()
-  .add('return node_1;')
+  .add('return __wizzNode_1;')
   .dedent()
   .add('}');
 ```
@@ -197,7 +197,7 @@ Joins accumulated lines with `\n` and returns the final source string. It does n
 
 **Exports:** `generateCreateFunction(templateAST, componentImports)`, `collectComponentRefNames(templateAST, componentImports)`
 
-`generateCreateFunction()` emits a `function create(ctx) { ... }` declaration that builds the static structure of the component using native DOM APIs. It does not mount the result; it returns the constructed root node to the component wrapper. `collectComponentRefNames()` is the component-generator helper that lists the factory-scope reference names for tags with reactive props.
+`generateCreateFunction()` emits a `function __wizzCreate(__wizzCtx) { ... }` declaration that builds the static structure of the component using native DOM APIs. It does not mount the result; it returns the constructed root node to the component wrapper. `collectComponentRefNames()` is the component-generator helper that lists the factory-scope reference names for tags with reactive props.
 
 #### Root Selection
 
@@ -211,20 +211,22 @@ when no top-level element exists.
 
 #### `walk(node, parentVarName)`
 
-The nested walker emits one local variable per AST node, named sequentially as `node_1`, `node_2`, and so on. It stores the correspondence in `nodeVariables`, which is maintained as generation-time bookkeeping for AST-to-variable associations.
+The nested walker emits one local variable per AST node, named sequentially as `__wizzNode_1`, `__wizzNode_2`, and so on. It stores the correspondence in `nodeVariables`, which is maintained as generation-time bookkeeping for AST-to-variable associations.
 
 For each supported node type, it emits:
 
 | AST node | Generated DOM operation |
 | --- | --- |
 | `Element` | `document.createElement(name)` plus attribute assignment |
-| Imported component tag | Invokes the imported component's mount function with its parent element |
+| Imported component tag | Holds its position with an empty text node, then mounts the component before that node and removes it |
 | `Text` | `document.createTextNode(value)` |
 | `Expression` | `document.createTextNode(String(expression))` |
 
-Every generated child is appended to `parentVarName` immediately after creation. The recursive traversal then creates descendants in source order. This produces the same child-node indexing that `updateGenerator.js` later uses for reactive text updates.
+Every generated child is appended to `parentVarName` immediately after creation, and the recursive traversal then creates descendants in source order.
 
-For attributes, a normal value produces `setAttribute(name, value)`. A parser-produced boolean attribute has `value: null` and produces `setAttribute(name, "")`, matching HTML's presence-based boolean attribute representation. Dynamic values such as `value={name}` are evaluated during creation and on every change to their reactive dependencies. `value`, `checked`, and `disabled` are assigned as DOM properties; other dynamic names are assigned with `setAttribute()`. An explicit event directive such as `on:click={handleClick}` emits `trackListener(node, "click", handleClick)` instead of an inline attribute, so the listener retains access to the component factory's local state and functions. Event directive values may be any non-empty JavaScript listener expression, including an arrow function that receives the native event: `on:click={(event) => increment(event.detail)}`. The generator embeds this expression as the listener. The one transform is mutation interception: the component generator runs each handler through `interceptHandlerExpression()` (see `assignmentInterceptor.js`) and passes the results in as `handlerSources`, a `WeakMap` keyed by attribute object; an attribute without an entry emits its raw value. `trackListener()` is a factory-scope helper that calls `addEventListener()` and records the node, event name, and handler in a `trackedListeners` registry so `destroy()` can remove every listener the framework attached.
+Component tags mount later, through `__wizzMountChildren()`, because a child's head must apply after its parent's and its `onMount` hooks need the tree attached. To keep template order, `create()` appends an empty text node at the tag's position and passes it as the child's third mount argument. The child inserts its root before that node, and the parent removes the node straight after, so a fresh mount produces the same DOM hydration adopts.
+
+For attributes, a normal value produces `setAttribute(name, value)`. A parser-produced boolean attribute has `value: null` and produces `setAttribute(name, "")`, matching HTML's presence-based boolean attribute representation. Dynamic values such as `value={name}` are evaluated during creation and on every change to their reactive dependencies. `value`, `checked`, and `disabled` are assigned as DOM properties; other dynamic names are assigned with `setAttribute()`. An explicit event directive such as `on:click={handleClick}` emits `__wizzListen(node, "click", handleClick)` instead of an inline attribute, so the listener retains access to the component factory's local state and functions. Event directive values may be any non-empty JavaScript listener expression, including an arrow function that receives the native event: `on:click={(event) => increment(event.detail)}`. The generator embeds this expression as the listener. The one transform is mutation interception: the component generator runs each handler through `interceptHandlerExpression()` (see `assignmentInterceptor.js`) and passes the results in as `handlerSources`, a `WeakMap` keyed by attribute object; an attribute without an entry emits its raw value. `__wizzListen()` is a factory-scope helper that calls `addEventListener()` and records the node, event name, and handler in a `__wizzListeners` registry so `destroy()` can remove every listener the framework attached.
 
 Names, text content, and attribute values are embedded with `JSON.stringify()`. That is important for correct generated JavaScript when source contains quotes, backslashes, or newlines; they are emitted as valid string literals rather than interpolated unsafely into source code.
 
@@ -242,7 +244,7 @@ Expressions create text nodes from `String(expression)` during initial DOM const
 
 **Export:** `generateUpdateFunction(templateAST)`
 
-`generateUpdateFunction()` emits `function update(ctx, changed) { ... }`. The generated function walks no AST at runtime. Instead, this generator walks the analyzed AST at build time and writes direct DOM operations for every known reactive interpolation.
+`generateUpdateFunction()` emits `function __wizzUpdate(__wizzCtx, __wizzChanged) { ... }`. The generated function walks no AST at runtime. Instead, this generator walks the analyzed AST at build time and writes direct DOM operations for every known reactive interpolation.
 
 #### `walk(node)`
 
@@ -255,29 +257,35 @@ Every node `update()` writes to, meaning an element with a reactive attribute or
 ```js
 let __wizzTarget_1;
 
-function create(ctx) {
+function __wizzCreate(__wizzCtx) {
   // ...
-  const node_5 = document.createTextNode(String(count + 1));
-  __wizzTarget_1 = node_5;
+  const __wizzNode_5 = document.createTextNode(String(count + 1));
+  __wizzTarget_1 = __wizzNode_5;
   // ...
 }
 
-function update(ctx, changed) {
-  if (changed.count) {
+function __wizzUpdate(__wizzCtx, __wizzChanged) {
+  if (__wizzChanged.count) {
     __wizzTarget_1.nodeValue = String(count + 1);
   }
 }
 ```
 
-Each generated block checks one property of `changed` and writes `String(expression)` to the captured node. An expression with several dependencies gets a block for each one, so a change to any referenced variable recalculates the whole expression.
+Each generated block checks one property of `__wizzChanged` and writes `String(expression)` to the captured node. An expression with several dependencies gets a block for each one, so a change to any referenced variable recalculates the whole expression.
 
 Writes never look a node up, because neither lookup is reliable at runtime. `data-wizz-id` values restart at `1` in every component, so a subtree query can match an element inside a child component. A template child index stops matching the DOM beside child components (which mount after their siblings), untaken branches, and list items.
 
 Nodes inside `{#if}` are returned in `conditional`, and their writes carry an `if (__wizzTarget_N)` guard because an untaken branch never assigns the variable. The guard is emitted only there, so other writes stay unconditional. A future reactive `{#if}` must clear these variables when it tears a branch down.
 
-Each bodies are not targets: list records hold and update their own nodes. The variables keep no extra memory alive after `destroy()`, because the closure's `rootNode` already references the same subtree.
+Each bodies are not targets: list records hold and update their own nodes. The variables keep no extra memory alive after `destroy()`, because the closure's `__wizzRoot` already references the same subtree.
 
 Templates with no reactive content generate an empty `update()` body and declare no target variables.
+
+### `reservedNames.js` - Author Name Check
+
+Author scripts run inside the generated factory, and author expressions run inside its nested functions. Every name the generators declare there, in the client, hydratable, and server targets, therefore carries the reserved `__wizz` prefix, so an author variable can neither collide with one (a module that fails to load) nor be shadowed by one (a wrong value at runtime). Any new generated local must use the prefix too.
+
+A few names cannot be renamed. `assertAuthorNames()` rejects them with `WIZZ-G025` when declared at the top level of a script, or used as a prop or import name: the `__wizz` prefix, `onMount`, `onDestroy`, and the globals generated code reads inside the factory. Imports are also checked against the module's own exports. Declarations are read from script tokens, so a name inside a function or block stays allowed. If generated factory code starts reading another global, add it to `FACTORY_GLOBALS`.
 
 ### `serverGenerator.js` - HTML String Renderer Emitter
 
@@ -289,7 +297,7 @@ Templates with no reactive content generate an empty `update()` body and declare
 
 **Export:** `generateHydrationFunction(templateAST)`
 
-`generateHydrationFunction(templateAST, componentImports, headBlock, options)` emits the `hydrateCreate(target, state, adoptSelf, headOwner)` function and its local helpers (`__wizzNodeTag`, `__wizzStripComments`, `__wizzDescribe`, plus the per-list adoption machinery and `__wizzReadSlice` when the template renders components). The walk mirrors `create()`'s pre-order over the flattened if/each sequence and verifies each position against the template AST, deferring event listeners until the walk passes and funneling every mismatch through one `console.warn` before clearing the mount point and returning `null`. It is embedded by `componentGenerator.js` only when `hydratable: true` is requested; the walk closes over the factory scope so expression verification re-evaluates the author's own expressions against seeded state.
+`generateHydrationFunction(templateAST, componentImports, headBlock, options)` emits the `__wizzHydrateCreate(target, state, adoptSelf, headOwner)` function and its local helpers (`__wizzNodeTag`, `__wizzStripComments`, `__wizzDescribe`, plus the per-list adoption machinery and `__wizzReadSlice` when the template renders components). The walk mirrors `create()`'s pre-order over the flattened if/each sequence and verifies each position against the template AST, deferring event listeners until the walk passes and funneling every mismatch through one `console.warn` before clearing the mount point and returning `null`. It is embedded by `componentGenerator.js` only when `hydratable: true` is requested; the walk closes over the factory scope so expression verification re-evaluates the author's own expressions against seeded state.
 
 ### `../scriptLexer.js` - Script Tokenizer (compiler-root utility)
 
@@ -307,12 +315,12 @@ The one lexical ambiguity the lexer resolves is `/`: it starts a regular express
 
 **Exports:** `interceptAssignments(rawScript, reactiveVars, persistentVars)`, `findReactiveMutations(rawScript, names)`, `interceptHandlerExpression(expression, reactiveVars, persistentVars)`, `findHandlerMutations(expression, names)`, `normalizeHandlerExpression(expression)`
 
-`interceptAssignments()` preserves the component's script source while adding a `queueUpdate({ name: true })` call after each supported mutation of a reactive variable. The optional third argument lists persistent variables as `{ name, storageKey }` pairs: mutations of those names additionally emit `__wizzPersistWrite("key", name)` after the notification, so the new value reaches storage and every subscribed mount. For example:
+`interceptAssignments()` preserves the component's script source while adding a `__wizzQueueUpdate({ name: true })` call after each supported mutation of a reactive variable. The optional third argument lists persistent variables as `{ name, storageKey }` pairs: mutations of those names additionally emit `__wizzPersistWrite("key", name)` after the notification, so the new value reaches storage and every subscribed mount. For example:
 
 ```js
 count += 1;
 // becomes
-count += 1; queueUpdate({ count: true });
+count += 1; __wizzQueueUpdate({ count: true });
 ```
 
 It is syntax-aware: `scriptLexer.js` tokenizes the script, and rewrites are decided on the token stream with a context stack. A mutation is rewritten when it begins a statement inside the component top level, a block, a function or arrow body, or a switch body — including arrow-function callbacks such as `onMount(() => { count = 1 })` that older compiler versions left untouched. Function and arrow parameters shadow component state, so mutations of parameter names inside their own body (`items.map(count => { count = 1; })`) are left alone. Block-scoped `let`, `const`, and `var` declarations shadow the same way: a mutation of a locally declared name never notifies the dispatcher, while component-scope declarations are the reactive state itself. For-loop header declarations shadow the braced body that follows. Statements that omit semicolons are handled through automatic semicolon insertion: the statement ends at a newline after a completed operand, and the notification is inserted with a leading `;` when needed.
@@ -321,7 +329,7 @@ It is syntax-aware: `scriptLexer.js` tokenizes the script, and rewrites are deci
 
 Assignments are not rewritten in expression position: inside parentheses that are not function bodies (`if (count = 1)`, call arguments), inside object literals and class field initializers, inside template `${}` interpolations, in unbraced `if`/`else`/`while`/`do` statement bodies, or as a chained assignment beyond the first target. Property chains such as `user.name = "Ada"` and `items[0] = "x"` rewrite with the root reactive name, matching how reactive objects are re-read on update. Supported mutations use `=`, the compound assignment family, and prefix or postfix `++`/`--`, and the original assignment text is preserved rather than reconstructed.
 
-Whenever the extent of a statement cannot be established confidently (unbalanced nesting, an unpaired ternary `:`, an unpaired backtick), the surrounding source passes through untransformed. A missed interception is acceptable, corrupted output is not. The component wrapper provides `queueUpdate()` before executing developer logic; it calls `update()` only after initial mounting completes, which makes initialization assignments safe because DOM creation reads their final values directly.
+Whenever the extent of a statement cannot be established confidently (unbalanced nesting, an unpaired ternary `:`, an unpaired backtick), the surrounding source passes through untransformed. A missed interception is acceptable, corrupted output is not. The component wrapper provides `__wizzQueueUpdate()` before executing developer logic; it calls `update()` only after initial mounting completes, which makes initialization assignments safe because DOM creation reads their final values directly.
 
 **Inline `on:` handlers.** `interceptHandlerExpression()` applies the same rewrite to a directive value. `normalizeHandlerExpression()` first accepts only a function literal that spans the whole value — `function (...) { ... }`, a block-bodied arrow, or an expression-bodied arrow (with optional `async`, a bare or parenthesized parameter list) — and rewrites an expression body into a block body, `(e) => name = e.target.value` becoming `(e) => { name = e.target.value }`, so the body is a statement the scanner can instrument. Dropping the expression body's value is unobservable because `addEventListener()` ignores listener return values. Everything else returns `null` and is emitted untouched: handler references and calls, a value that is itself an assignment (it would run at mount), a sequence whose first element is the arrow (`(e) => a = 1, b`, where a block would swallow `b`), a body beginning with `function`, `class`, or `let` (those become declarations as statements), and unbalanced heads. A trailing `//` comment moves the closing brace to a new line. Handlers without a statement-level reactive mutation come back byte-identical, so their generated output never changes. Parameters shadow reactive names as in the script. `findHandlerMutations()` is the read-only counterpart: the component generator uses it to reject inline mutations of props with `WIZZ-G015`.
 
@@ -336,22 +344,22 @@ Whenever the extent of a statement cannot be established confidently (unbalanced
 A `let name = persist(key, default)` declaration is an ordinary reactive variable with a storage key attached. The machinery is emitted only when at least one declaration is persistent — components without one are byte-identical apart from the version stamp — and the three runtime helpers are emitted per-module (like the head helpers, via `Function.prototype.toString`) while the bus they share is a `globalThis.__wizzStateBus` singleton, so one bus serves every module on the page.
 
 - `__wizzPersistRead(key, fallback)` reads `localStorage` defensively: absent storage or a stored `null` yields the fallback, `JSON.parse` failure (corrupted or hostile entry) yields the fallback, and the stored value replaces the variable wholesale — never merged, which keeps hostile stored objects away from any merge vector.
-- `__wizzPersistWrite(key, value)` is appended to every intercepted statement mutation of a persistent variable (after `queueUpdate`, both the semicolon-terminated and automatic-semicolon forms). It writes `JSON.stringify(value)` through a guarded `setItem` (quota or private-mode failures leave the in-memory state intact), posts `{ key, value }` on the bus's BroadcastChannel when one exists, and delivers same-tab so instances sharing the key converge within the writing tab.
+- `__wizzPersistWrite(key, value)` is appended to every intercepted statement mutation of a persistent variable (after `__wizzQueueUpdate`, both the semicolon-terminated and automatic-semicolon forms). It writes `JSON.stringify(value)` through a guarded `setItem` (quota or private-mode failures leave the in-memory state intact), posts `{ key, value }` on the bus's BroadcastChannel when one exists, and delivers same-tab so instances sharing the key converge within the writing tab.
 - `__wizzPersistSubscribe(key, callback)` registers the mount's callback in the bus's per-key registry and returns an unsubscribe; the mount pushes one subscription per persistent key and unregisters all of them in a destroy hook. The subscription callback applies the value with an `Object.is` guard — a component's own write does not echo back into it — then assigns and queues an update.
 
-The bus opens one `BroadcastChannel('wizz-state')` per page for cross-tab delivery, with a `storage` event listener as the no-BroadcastChannel fallback (a tab's own storage event never fires for its own write, and a removed key leaves mounted state alone until the next mount reads storage). Node-style channels are `unref`ed so an idle bus never holds a process open. During hydration, persistent variables are seeded from the serialized snapshot like every other reactive var — the delivered markup was rendered from that state, and the adoption walk verifies by re-evaluating expressions, so the walk's checks match the delivery by construction (verifying against the storage-read value instead made every stored value that differed from the default fail the walk and fall back). The captured storage-read values are restored as soon as the walk returns — client storage stays the mounted truth — and because the emitted initial `update()` pass runs unconditionally after adoption, hydrated markup shows the stored value on the first pass with no extra sync machinery. Branch selection stays a mount-time choice (`create()`/`hydrateCreate()` pick the `{#if}` branch; `update()` carries no branch machinery), so an adopted branch whose test reads a persistent var keeps the delivered branch. Server modules rewrite the marker to `(default)` and emit no persistence machinery at all: the server has no storage, the default is what renders, and hydration hands the client initializer the real value.
+The bus opens one `BroadcastChannel('wizz-state')` per page for cross-tab delivery, with a `storage` event listener as the no-BroadcastChannel fallback (a tab's own storage event never fires for its own write, and a removed key leaves mounted state alone until the next mount reads storage). Node-style channels are `unref`ed so an idle bus never holds a process open. During hydration, persistent variables are seeded from the serialized snapshot like every other reactive var — the delivered markup was rendered from that state, and the adoption walk verifies by re-evaluating expressions, so the walk's checks match the delivery by construction (verifying against the storage-read value instead made every stored value that differed from the default fail the walk and fall back). The captured storage-read values are restored as soon as the walk returns — client storage stays the mounted truth — and because the emitted initial `update()` pass runs unconditionally after adoption, hydrated markup shows the stored value on the first pass with no extra sync machinery. Branch selection stays a mount-time choice (`create()`/`__wizzHydrateCreate()` pick the `{#if}` branch; `update()` carries no branch machinery), so an adopted branch whose test reads a persistent var keeps the delivered branch. Server modules rewrite the marker to `(default)` and emit no persistence machinery at all: the server has no storage, the default is what renders, and hydration hands the client initializer the real value.
 
 ### Update Scheduling
 
-`queueUpdate()` does not call `update()` synchronously. Each call merges its flags into a pending set (`{ ...pendingChanges, ...changed }`), and if no flush is scheduled it schedules exactly one `queueMicrotask` flush. The flush hands all merged flags to a single `update()` pass and clears the pending set. An event handler that assigns several reactive variables therefore produces one DOM update with one combined `changed` object, not one update per assignment. Because the flush runs on a microtask, the DOM settles before the browser paints.
+`__wizzQueueUpdate()` does not call `update()` synchronously. Each call merges its flags into a pending set (`{ ...pendingChanges, ...changed }`), and if no flush is scheduled it schedules exactly one `queueMicrotask` flush. The flush hands all merged flags to a single `update()` pass and clears the pending set. An event handler that assigns several reactive variables therefore produces one DOM update with one combined `__wizzChanged` object, not one update per assignment. Because the flush runs on a microtask, the DOM settles before the browser paints.
 
-Scheduling is per component: the scheduler state (`batchScheduled`, `pendingChanges`) lives in each factory closure. Calls before mounting completes return immediately, so initialization assignments never schedule; creation and the initial synchronous `update()` render their final values. `destroy()` sets `isDestroyed`, and a flush that fires after destroy returns without calling `update()`, so a pending batch never touches a torn-down component.
+Scheduling is per component: the scheduler state (`__wizzBatched`, `__wizzPending`) lives in each factory closure. Calls before mounting completes return immediately, so initialization assignments never schedule; creation and the initial synchronous `update()` render their final values. `destroy()` sets `__wizzDestroyed`, and a flush that fires after destroy returns without calling `update()`, so a pending batch never touches a torn-down component.
 
 ### Lifecycle Hooks
 
-The factory emits two registration functions that component scripts call directly, with no import: `onMount(hook)` pushes to `mountHooks` and `onDestroy(hook)` pushes to `destroyHooks`. Both are function declarations hoisted above the developer logic, so registration works from any statement in the script.
+The factory emits two registration functions that component scripts call directly, with no import: `onMount(hook)` pushes to `__wizzMountHooks` and `onDestroy(hook)` pushes to `__wizzDestroyHooks`. Both are function declarations hoisted above the developer logic, so registration works from any statement in the script.
 
-Mount hooks run once at the end of initialization, after `target.appendChild(rootNode)`, child-component mounting, the initial synchronous `update()`, and `isMounted = true`. Because hooks run with `isMounted` already set, an assignment inside a hook schedules a batched update that renders on the following microtask. Destroy hooks run at the start of `destroy()`, after `isDestroyed = true` but before child components are destroyed, tracked listeners are removed, and the root node is removed, so cleanup code still sees the attached DOM; any state assignment a destroy hook makes schedules a batch whose flush is skipped by the `isDestroyed` guard.
+Mount hooks run once at the end of initialization, after the root is attached to `target`, child-component mounting, the initial synchronous `update()`, and `__wizzMounted = true`. Because hooks run with `__wizzMounted` already set, an assignment inside a hook schedules a batched update that renders on the following microtask. Destroy hooks run at the start of `destroy()`, after `__wizzDestroyed = true` but before child components are destroyed, tracked listeners are removed, and the root node is removed, so cleanup code still sees the attached DOM; any state assignment a destroy hook makes schedules a batch whose flush is skipped by the `__wizzDestroyed` guard.
 
 Hooks must be registered while the factory body executes (the script's top level or code it calls during setup); a registration after mounting or after destroy is pushed but never invoked. `onMount` and `onDestroy` are provided by the generated closure, so the assignment interceptor reports neither as a reactive variable and never touches the registration statements themselves. State mutations inside hook callbacks — including inline arrow bodies such as `onMount(() => { status = "ready"; })` — are intercepted at statement level and schedule batched updates like any other mutation.
 
@@ -359,18 +367,18 @@ Hooks must be registered while the factory body executes (the script's top level
 
 **Export:** `generateComponent(astPayload, options = {})`
 
-`generateComponent()` is the public composition layer. It creates a `CodeBuilder`, emits the factory function, delegates DOM and update function bodies to their dedicated generators, then emits mounting and teardown code. With `options.hydratable: true` it first gates the payload through `assertServerRenderable()` and switches to a triple-export emission (`mountComponent`, `hydrateComponent`, `hydrateRoot`) routed through a shared `mountInstance()` closure (see [Server Rendering and Hydration](#server-rendering-and-hydration)); without the flag the emission is byte-identical to the single-argument call.
+`generateComponent()` is the public composition layer. It creates a `CodeBuilder`, emits the factory function, delegates DOM and update function bodies to their dedicated generators, then emits mounting and teardown code. With `options.hydratable: true` it first gates the payload through `assertServerRenderable()` and switches to a triple-export emission (`mountComponent`, `hydrateComponent`, `hydrateRoot`) routed through a shared `__wizzMountInstance()` closure (see [Server Rendering and Hydration](#server-rendering-and-hydration)); without the flag the emission is byte-identical to the single-argument call.
 
 Its generated factory has these phases:
 
 1. **Version header:** emits the self-identification comment from `../version.js` before any imports.
 2. **Read-only prop check:** when the payload declares props, runs `findReactiveMutations()` over the script and throws a located `SyntaxError` for any statement-level mutation of a prop name.
-3. **Factory signature:** emits `export default function mountComponent(target, props = {}) {` (hydratable modules add the `hydrateComponent`/`hydrateRoot` exports and open the shared `mountInstance(target, props, hydrate, state, adoptSelf)` closure instead).
-4. **Developer logic:** emits the prop bindings (`let name = props.name !== undefined ? props.name : (default);` in declaration order), a guarded `queueUpdate()` dispatcher, sends `rawScript` and reactive declaration names through `interceptAssignments()`, then writes the resulting source line by line into the factory closure. Recognized mutations update mounted components, while initialization-time mutations are safe because they run before `isMounted` is set. Hydratable modules then seed non-prop reactive bindings from the verified state object.
+3. **Factory signature:** emits `export default function mountComponent(target, props = {}, __wizzAnchor = null) {` (hydratable modules add the `hydrateComponent`/`hydrateRoot` exports and open the shared `__wizzMountInstance(target, props, __wizzAnchor, hydrate, state, adoptSelf)` closure instead).
+4. **Developer logic:** emits the prop bindings (`let name = props.name !== undefined ? props.name : (default);` in declaration order), a guarded `__wizzQueueUpdate()` dispatcher, sends `rawScript` and reactive declaration names through `interceptAssignments()`, then writes the resulting source line by line into the factory closure. Recognized mutations update mounted components, while initialization-time mutations are safe because they run before `__wizzMounted` is set. Hydratable modules then seed non-prop reactive bindings from the verified state object.
 5. **Framework context:** filters `astPayload.script` for reactive declarations and emits a getter for each name. Props are reactive declarations, so they get context getters too. `const` declarations and function declarations do not become context getters.
 6. **DOM creation:** inserts the source from `generateCreateFunction(astPayload.template, componentImports, handlerSources)` (the instrumented inline handlers collected by `collectHandlerSources()`, which also rejects prop mutations in handlers), preceded by a `let component_<id> = null;` declaration for every imported component tag with reactive props — the factory-scope reference shared by `create()` (which assigns the instance at mount) and `update()` (which delivers prop changes). Hydratable modules insert `generateHydrationFunction()`'s adoption walk immediately after.
 7. **Reactivity engine:** inserts the source from `generateUpdateFunction(astPayload.template)`, which routes reactive prop attributes to `component_<id>.setProps(...)` instead of DOM writes.
-8. **Initialization:** calls `create(ctx)` (or adopts via `hydrateCreate(target, state, adoptSelf, headOwner)` on the hydrate path, falling back to a client mount on mismatch — nested adoptions fall back *inside* the given node), appends the returned root node to `target`, applies the component's head (fresh mounts build head nodes via `createHeadNodes()` and prepend them through `__wizzApplyHead`; hydrated mounts take the adopted `headNodes` from the adoption walk or apply fresh ones), mounts child components (hydrated children are adopted through the child's own `hydrateRoot`, threaded the owner path `'r/<componentId>'` on the head path), invokes `update(ctx, changed)` with every reactive variable set to `true`, then sets `isMounted` to `true`. Creation renders every expression initially; this first update establishes the regular reactive update path before intercepted mutations can trigger it.
+8. **Initialization:** calls `__wizzCreate(__wizzCtx)` (or adopts via `__wizzHydrateCreate(target, state, adoptSelf, headOwner)` on the hydrate path, falling back to a client mount on mismatch — nested adoptions fall back *inside* the given node), appends the returned root node to `target`, applies the component's head (fresh mounts build head nodes via `createHeadNodes()` and prepend them through `__wizzApplyHead`; hydrated mounts take the adopted `headNodes` from the adoption walk or apply fresh ones), mounts child components (hydrated children are adopted through the child's own `hydrateRoot`, threaded the owner path `'r/<componentId>'` on the head path), invokes `__wizzUpdate(__wizzCtx, __wizzChanged)` with every reactive variable set to `true`, then sets `__wizzMounted` to `true`. Creation renders every expression initially; this first update establishes the regular reactive update path before intercepted mutations can trigger it.
 9. **Public API:** returns `{ setProps?, destroy() }`. `setProps(next)` exists only when the component declares props and applies parent-supplied values as described under "Component Props". `destroy()` marks the component destroyed — cancelling any pending scheduled update — runs destroy hooks, destroys mounted child components (releasing their adopted heads through the child cascade), releases the component's own head nodes via `__wizzReleaseHead`, removes every tracked event listener, and removes the root node from `target`.
 
 A component's head machinery is emitted only under the `headActive` gate — the component declares its own `<wizz:head>` or `<wizz:style>`, or (for hydratable modules) it renders head-declaring children whose delivered slices must be attributable. Otherwise the module is byte-identical apart from the header stamp. When active, the module carries six flush-left helpers plus a module-level owner sequence:
@@ -383,7 +391,7 @@ A component's head machinery is emitted only under the `headActive` gate — the
 
 A styled component also emits a `createStyleNodes()` factory building its scoped `<style>` node (scope and location attributes set, CSS through the shared `scopeCss` pass). In the hydrate path the factory runs before `__wizzApplyHead`, so the fresh node acts as a probe: when adoption finds the server-delivered stylesheet by scope, the probe is discarded and the delivered copy is refcounted instead.
 
-The initial `changed` object is derived from reactive script declarations, for example `{ count: true, user: true }`. When no reactive declarations exist, it is emitted as `{  }`; `update()` remains safe because it has no dependency guards to satisfy.
+The initial `__wizzChanged` object is derived from reactive script declarations, for example `{ count: true, user: true }`. When no reactive declarations exist, it is emitted as `{  }`; `update()` remains safe because it has no dependency guards to satisfy.
 
 ## Current Runtime Boundaries
 

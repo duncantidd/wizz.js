@@ -81,7 +81,8 @@ const CORPUS = [
   ['WIZZ-G015', 'generator', "<script>export let title = 'a';\ntitle = 'b';</script><main>{title}</main>"],
   ['WIZZ-G017', 'server', "<script>let __wizzCount = 0;</script><main>{__wizzCount}</main>"],
   ['WIZZ-G020', 'server', "<script>import Card from '../components/Card.wizz';</script><main><Card /></main>"],
-  ['WIZZ-G021', 'server', '<main><img src="a.png">text</img></main>']
+  ['WIZZ-G021', 'server', '<main><img src="a.png">text</img></main>'],
+  ['WIZZ-G025', 'generator', '<script>let document = 1;</script><main>x</main>']
 ];
 
 for (const [expectedCode, target, source] of CORPUS) {
