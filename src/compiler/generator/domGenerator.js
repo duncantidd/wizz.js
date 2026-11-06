@@ -64,9 +64,11 @@ function collectComponentRefNames(templateAST, componentImports = []) {
  * @param {Array} [componentImports] - Imported component descriptors.
  * @param {WeakMap<Object, string>} [handlerSources] - Instrumented `on:`
  *   handler sources keyed by attribute; absent entries emit the raw value.
+ * @param {Map<Object, string>} [updateTargets] - update() target variables by
+ *   AST node (`collectUpdateTargets().names`); create() assigns each one.
  * @returns {string} The generated JavaScript string.
  */
-function generateCreateFunction(templateAST, componentImports = [], handlerSources = new WeakMap()) {
+function generateCreateFunction(templateAST, componentImports = [], handlerSources = new WeakMap(), updateTargets = new Map()) {
   const builder = new CodeBuilder();
   let nodeCounter = 0;
   const importedComponents = new Set(componentImports.map((component) => component.name));
@@ -261,6 +263,8 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
     } else if (node.type === 'Expression') {
       builder.add(`const ${varName} = document.createTextNode(String(${node.value}));`);
     }
+
+    if (updateTargets.has(node)) builder.add(`${updateTargets.get(node)} = ${varName};`);
 
     // If this node has a parent, append it immediately
     if (parentVarName && varName) {

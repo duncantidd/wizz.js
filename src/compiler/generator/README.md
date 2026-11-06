@@ -53,9 +53,9 @@ The relevant payload fields are:
 | `template` | Parser | Drives DOM creation. |
 | `Expression.value` | Parser | Becomes the JavaScript expression evaluated during updates. |
 | `Expression.dependencies` | Dependency analyzer | Determines which `changed` flags should trigger each expression update. |
-| `data-wizz-id` attributes | ID assigner | Lets generated update code locate the correct parent DOM element. |
+| `data-wizz-id` attributes | ID assigner | Lets the hydration walk verify delivered elements. Updates never look nodes up by id. |
 
-Calling `generateComponent()` without the analyzer stages can still produce source, but dynamic expressions will not have the metadata required for targeted updates. In particular, `generateUpdateFunction()` reads both `dependencies` and `data-wizz-id` values.
+Calling `generateComponent()` without the analyzer stages can still produce source, but dynamic expressions will not have the metadata required for targeted updates. In particular, `generateUpdateFunction()` reads `dependencies` to decide which writes to emit.
 
 ## Generated Module Contract
 
@@ -246,27 +246,38 @@ Expressions create text nodes from `String(expression)` during initial DOM const
 
 #### `walk(node)`
 
-The nested walker handles `Root`, `Element`, and `IfBlock` nodes (conditional branches exist in the DOM after mount, so their reactive content participates in updates). For each element, it reads the `data-wizz-id` attribute assigned by the analyzer, then iterates its immediate children with their `childIndex`. Imported component tags are recognized by their analyzer-assigned `componentId` and take a separate path: each reactive prop attribute emits one guarded `setProps()` call instead of a DOM attribute write.
+The nested walker starts at the root element `create()` renders and handles `Element`, `Expression`, and `IfBlock` nodes (a branch taken at mount stays in the DOM, so its reactive content participates in updates). Imported component tags are recognized by their analyzer-assigned `componentId` and take a separate path: each reactive prop attribute emits one guarded `setProps()` call instead of a DOM attribute write.
 
-When a child is an expression with a non-empty `dependencies` array, it emits one guarded update block per dependency:
+#### `collectUpdateTargets(templateAST)`
+
+Every node `update()` writes to, meaning an element with a reactive attribute or a reactive expression, gets a factory-scope variable named `__wizzTarget_N`. `create()` assigns it from the node it builds, the hydration walk assigns it from the node it adopts, and `update()` reads it:
 
 ```js
-if (changed.count) {
-  const target_1 = rootNode.getAttribute('data-wizz-id') === '1' ? rootNode : rootNode.querySelector('[data-wizz-id="1"]');
-  target_1.childNodes[1].nodeValue = String(count + 1);
+let __wizzTarget_1;
+
+function create(ctx) {
+  // ...
+  const node_5 = document.createTextNode(String(count + 1));
+  __wizzTarget_1 = node_5;
+  // ...
+}
+
+function update(ctx, changed) {
+  if (changed.count) {
+    __wizzTarget_1.nodeValue = String(count + 1);
+  }
 }
 ```
 
-Each generated block:
+Each generated block checks one property of `changed` and writes `String(expression)` to the captured node. An expression with several dependencies gets a block for each one, so a change to any referenced variable recalculates the whole expression.
 
-1. checks the specific property in the `changed` object;
-2. looks up the expression's parent element by `data-wizz-id`;
-3. uses the source-order child index to target the exact text node; and
-4. assigns `String(expression)` to `nodeValue`.
+Writes never look a node up, because neither lookup is reliable at runtime. `data-wizz-id` values restart at `1` in every component, so a subtree query can match an element inside a child component. A template child index stops matching the DOM beside child components (which mount after their siblings), untaken branches, and list items.
 
-`String()` ensures numeric expression results become valid text-node content. For an expression with several dependencies, a block is emitted for each one, so a change to any referenced reactive variable recalculates the complete expression.
+Nodes inside `{#if}` are returned in `conditional`, and their writes carry an `if (__wizzTarget_N)` guard because an untaken branch never assigns the variable. The guard is emitted only there, so other writes stay unconditional. A future reactive `{#if}` must clear these variables when it tears a branch down.
 
-Templates with no reactive expressions generate an empty `update()` body and no `rootNode.querySelector()` calls. The AST walk remains recursive so expressions nested beneath arbitrary elements are emitted.
+Each bodies are not targets: list records hold and update their own nodes. The variables keep no extra memory alive after `destroy()`, because the closure's `rootNode` already references the same subtree.
+
+Templates with no reactive content generate an empty `update()` body and declare no target variables.
 
 ### `serverGenerator.js` - HTML String Renderer Emitter
 
@@ -383,7 +394,6 @@ The generated output is intentionally small and uses direct DOM APIs. Its curren
 - Prop bindings are read-only at statement level; expression-position mutations of a prop name (`if (name = x)`, call arguments) pass through undetected, the same documented boundary the assignment interceptor has for reactive state.
 - Dynamic expressions are supported as direct text-node children and as brace-valued attributes. `value`, `checked`, and `disabled` use property assignment; other dynamic attributes use HTML attributes.
 - Explicit event directives use `on:<event>={handler}` and compile to native `addEventListener()` bindings. A handler may be a component-local identifier or any non-empty JavaScript listener expression, such as `(event) => increment(event.detail)`; reactive assignments inside inline handlers are intercepted like script mutations. Inline event attributes are not supported.
-- Generated updates assume the analyzer gave every reactive expression's parent element a `data-wizz-id`. Skipping `assignNodeIds()` can yield a lookup for `data-wizz-id="null"` if dependencies are present without an ID.
 - The update function queries the document each time a dependency changes and assumes the target still exists. The current output has no null-target guard or caching layer.
 - Repeated dependencies generate separate guards by expression dependency. Updates are batched per microtask with merged flags, but there is no granularity below a component: one changed dependency re-runs every guard that references it in a single pass.
 - Lifecycle hook callbacks registered after mounting or destroy never fire.

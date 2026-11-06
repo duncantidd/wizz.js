@@ -53,9 +53,12 @@ const PROPERTY_ATTRIBUTES = new Set(['value', 'checked', 'disabled']);
  * @param {Object} [options] - Generation options; `options.filePath` is
  *   accepted for symmetry with the other generators (head locations are
  *   compared from the delivered markup, not re-derived).
+ * @param {Map<Object, string>} [updateTargets] - update() target variables by
+ *   AST node (`collectUpdateTargets().names`); the walk assigns each one from
+ *   the node it adopts, matching create().
  * @returns {string} The hydration section source for the factory closure.
  */
-function generateHydrationFunction(templateAST, componentImports = [], headBlock = null, options = {}, styleBlock = null) {
+function generateHydrationFunction(templateAST, componentImports = [], headBlock = null, options = {}, styleBlock = null, updateTargets = new Map()) {
   const builder = new CodeBuilder();
   let referenceCounter = 0;
   const nextReference = () => `node_${++referenceCounter}`;
@@ -301,6 +304,12 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     builder.add('  }');
   }
 
+  // Hands a verified node to update(). A failed walk abandons this closure for a
+  // fresh mount, so a target captured before the failure is never read.
+  function emitTargetCapture(ref, templateNode) {
+    if (updateTargets.has(templateNode)) builder.add(`    ${updateTargets.get(templateNode)} = ${ref};`);
+  }
+
   function emitExpressionChild(child, parentRef, cursorRef) {
     const ref = nextReference();
     builder.add('  if (problems.length === 0) {');
@@ -310,6 +319,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     builder.add(`    if (!${ref} || ${ref}.nodeType !== 3 || ${ref}.nodeValue !== String(${child.value})) {`);
     builder.add(`      problems.push('expected expression text at index ' + ${cursorRef} + ' of <' + __wizzNodeTag(${parentRef}) + '>, found ' + __wizzDescribe(${ref}));`);
     builder.add('    }');
+    emitTargetCapture(ref, child);
     builder.add(`    ${cursorRef} += 1;`);
     builder.add('  }');
   }
@@ -322,6 +332,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     builder.add(`    if (__wizzNodeTag(${ref}) !== '${elementNode.name.toLowerCase()}') {`);
     builder.add(`      problems.push('expected <${elementNode.name}> at index ' + ${cursorRef} + ' of <' + __wizzNodeTag(${parentRef}) + '>, found ' + __wizzDescribe(${ref}));`);
     builder.add('    }');
+    emitTargetCapture(ref, elementNode);
     builder.add(`    ${cursorRef} += 1;`);
     builder.add('  }');
     emitDataWizzIdCheck(ref, elementNode);
@@ -617,6 +628,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
   }
 
   const componentAdoptions = [];
+  emitTargetCapture('rootNode', rootNode);
   emitDataWizzIdCheck('rootNode', rootNode);
   emitListenerCollection('rootNode', rootNode);
   walkChildren(rootNode, 'rootNode');

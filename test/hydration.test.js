@@ -84,6 +84,14 @@ function createEnhancedDocument() {
         return this.childNodes.find((node) => node.nodeType === 1) ?? null;
       },
       appendChild(node) { this.childNodes.push(node); },
+      // Moves a node already in this parent, as list reconciliation relies on.
+      insertBefore(node, referenceNode) {
+        const currentIndex = this.childNodes.indexOf(node);
+        if (currentIndex !== -1) this.childNodes.splice(currentIndex, 1);
+        const index = referenceNode ? this.childNodes.indexOf(referenceNode) : this.childNodes.length;
+        this.childNodes.splice(index, 0, node);
+        node.parentNode = this;
+      },
       removeChild(node) {
         const index = this.childNodes.indexOf(node);
         if (index !== -1) this.childNodes.splice(index, 1);
@@ -470,6 +478,14 @@ async function loadNestedModules(t, parentSource, childSource) {
   });
   fs.writeFileSync(path.join(projectDirectory, 'client.js'), clientSource);
 
+  // The plain (non-hydratable) client module gives fresh-mount coverage of the
+  // same template: no adoption walk, create() alone captures the update targets.
+  const { source: freshClientSource } = compile(parentSource, {
+    filePath: 'test/nested/Page.wizz',
+    componentServerRenderable: { Counter: true }
+  });
+  fs.writeFileSync(path.join(projectDirectory, 'fresh-client.js'), freshClientSource);
+
   const bust = `?test=${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const serverModule = await import(`${pathToFileURL(path.join(projectDirectory, 'server.js')).href}${bust}`);
 
@@ -478,6 +494,7 @@ async function loadNestedModules(t, parentSource, childSource) {
   global.document = document;
   t.after(() => { global.document = originalDocument; });
   const clientModule = await import(`${pathToFileURL(path.join(projectDirectory, 'client.js')).href}${bust}`);
+  const freshClientModule = await import(`${pathToFileURL(path.join(projectDirectory, 'fresh-client.js')).href}${bust}`);
 
   const metricsBefore = { ...document.metrics };
   const warnings = [];
@@ -488,6 +505,7 @@ async function loadNestedModules(t, parentSource, childSource) {
   return {
     document,
     clientModule,
+    freshClientModule,
     metricsBefore,
     warnings,
     render() {
@@ -915,6 +933,235 @@ test('Card-shaped markup with pre-family and empty elements adopts without fallb
   assert.equal(deliveredRoot.childNodes[5].name, 'span');
   assert.deepEqual(deliveredRoot.childNodes[5].childNodes, []);
 
+  component.destroy();
+  assert.deepEqual(target.childNodes, []);
+});
+
+// --- Update targets (issue #63) ---
+// update() writes through references captured by create() or the adoption
+// walk. It used to look targets up with querySelector('[data-wizz-id="N"]') and
+// childNodes[templateIndex]: the first crossed into child components, which
+// number their own elements from 1 too, and the second assumed template
+// positions match DOM positions, which fails beside late-mounted children,
+// untaken branches, and list items.
+const labelChildSource = '<script>\n  export let text = "child";\n</script>\n\n<span class="label">{text}</span>\n';
+const noChildSource = '<script>\n  let label = "child";\n</script>\n\n<span>{label}</span>\n';
+
+const mountBothWays = {
+  'fresh mount': async (t, parentSource, childSource = noChildSource) => {
+    const modules = await loadNestedModules(t, parentSource, childSource);
+    const target = modules.document.makeElement('div');
+    const component = modules.freshClientModule.default(target);
+    return { ...modules, target, component };
+  },
+  hydration: async (t, parentSource, childSource = noChildSource) => {
+    const modules = await loadNestedModules(t, parentSource, childSource);
+    const { html, state } = modules.render();
+    const target = deliverMarkup(modules.document, html);
+    const component = modules.clientModule.hydrateComponent(target, {}, state);
+    assert.deepEqual(modules.warnings, [], 'the delivered tree adopts cleanly');
+    return { ...modules, target, component, html };
+  }
+};
+
+const elementsNamed = (root, name, found = []) => {
+  for (const child of root.childNodes || []) {
+    if (typeof child.tagName === 'string' && child.tagName.toLowerCase() === name) found.push(child);
+    elementsNamed(child, name, found);
+  }
+  return found;
+};
+const textOf = (node) => (node.childNodes || []).filter((child) => child.nodeType === 3).map((child) => child.nodeValue).join('');
+
+test('issue #63 repro: a hydrated parent writes to its own input, not the child span', async (t) => {
+  const parentSource = '<script>\n  import Counter from "./Counter.wizz";\n  let draft = "typed";\n  function clear() {\n    draft = "";\n  }\n</script>\n\n'
+    + '<main class="repro">\n  <Counter text="child" />\n  <input value={draft} aria-label="draft" />\n  <button on:click={clear}>Clear</button>\n</main>\n';
+  const { target, component } = await mountBothWays.hydration(t, parentSource, labelChildSource);
+
+  const [input] = elementsNamed(target, 'input');
+  const [span] = elementsNamed(target, 'span');
+  const [button] = elementsNamed(target, 'button');
+  assert.equal(span.attributes['data-wizz-id'], input.attributes['data-wizz-id'], 'both templates stamp the same id');
+  button.dispatchEvent('click');
+  await flushUpdates();
+
+  assert.equal(input.value, '');
+  assert.equal('value' in span, false, 'the child span never receives the parent write');
+  component.destroy();
+});
+
+for (const [mode, mount] of Object.entries(mountBothWays)) {
+  test(`${mode}: a nested child with colliding ids never captures parent writes`, async (t) => {
+    const parentSource = '<script>\nimport Counter from "./Counter.wizz";\nlet tab = "Parser";\nfunction pick() { tab = "Analyzer"; }\n</script>'
+      + '<main><section><Counter /></section><nav><button on:click={pick}>{tab}</button></nav></main>';
+    const { target, component } = await mount(t, parentSource);
+    const [span] = elementsNamed(target, 'span');
+    const [button] = elementsNamed(target, 'button');
+    assert.equal(span.attributes['data-wizz-id'], button.attributes['data-wizz-id'], 'both templates stamp the same id');
+
+    button.dispatchEvent('click');
+    await flushUpdates();
+
+    assert.equal(textOf(button), 'Analyzer');
+    assert.equal(textOf(span), 'child');
+    component.destroy();
+    assert.deepEqual(target.childNodes, []);
+  });
+
+  test(`${mode}: a parent attribute write skips a colliding nested child`, async (t) => {
+    const parentSource = '<script>\nimport Counter from "./Counter.wizz";\nlet tone = "calm";\nfunction heat() { tone = "hot"; }\n</script>'
+      + '<main><section><Counter /></section><p title={tone}>x</p><button on:click={heat}>go</button></main>';
+    const { target, component } = await mount(t, parentSource);
+    const [p] = elementsNamed(target, 'p');
+    const [span] = elementsNamed(target, 'span');
+    elementsNamed(target, 'button')[0].dispatchEvent('click');
+    await flushUpdates();
+
+    assert.equal(p.attributes.title, 'hot');
+    assert.equal(span.attributes.title, undefined);
+    component.destroy();
+  });
+
+  test(`${mode}: reactive text beside a child component updates its own text node`, async (t) => {
+    const parentSource = '<script>\nimport Counter from "./Counter.wizz";\nlet count = 0;\nfunction inc() { count += 1; }\n</script>'
+      + '<main><Counter />{count}<button on:click={inc}>+</button></main>';
+    const { target, component } = await mount(t, parentSource);
+    const [main] = elementsNamed(target, 'main');
+    const [button] = elementsNamed(target, 'button');
+
+    button.dispatchEvent('click');
+    await flushUpdates();
+    button.dispatchEvent('click');
+    await flushUpdates();
+
+    assert.equal(textOf(main), '2');
+    assert.equal(textOf(button), '+');
+    component.destroy();
+  });
+
+  test(`${mode}: reactive text after an untaken branch updates its own text node`, async (t) => {
+    const parentSource = '<script>\nlet show = false;\nlet count = 0;\nfunction inc() { count += 1; }\n</script>'
+      + '<main>{#if show}<p>hidden</p>{/if}{count}<button on:click={inc}>+</button></main>';
+    const { target, component } = await mount(t, parentSource);
+    const [button] = elementsNamed(target, 'button');
+    button.dispatchEvent('click');
+    await flushUpdates();
+
+    assert.equal(textOf(elementsNamed(target, 'main')[0]), '1');
+    assert.equal(textOf(button), '+');
+    component.destroy();
+  });
+
+  test(`${mode}: reactive text after a list keeps its node as the list resizes`, async (t) => {
+    const parentSource = '<script>\nlet rows = ["a"];\nlet count = 0;\nfunction grow() { rows = ["a", "b", "c"]; count += 1; }\nfunction shrink() { rows = []; count += 1; }\n</script>'
+      + '<main><ul>{#each rows as row}<li>{row}</li>{/each}{count}</ul><button on:click={grow}>g</button><em on:click={shrink}>s</em></main>';
+    const { target, component } = await mount(t, parentSource);
+    const [ul] = elementsNamed(target, 'ul');
+
+    elementsNamed(target, 'button')[0].dispatchEvent('click');
+    await flushUpdates();
+    assert.equal(elementsNamed(ul, 'li').length, 3);
+    assert.equal(textOf(ul), '1');
+
+    elementsNamed(target, 'em')[0].dispatchEvent('click');
+    await flushUpdates();
+    assert.equal(elementsNamed(ul, 'li').length, 0);
+    assert.equal(textOf(ul), '2');
+    component.destroy();
+  });
+
+  test(`${mode}: reactive content in an untaken branch mounts without throwing and stays inert`, async (t) => {
+    const parentSource = '<script>\nlet show = false;\nlet count = 0;\nfunction inc() { count += 1; }\n</script>'
+      + '<main>{#if show}<p title={count}>{count}</p>{:else}<i>none</i>{/if}<button on:click={inc}>{count}</button></main>';
+    const { target, component } = await mount(t, parentSource);
+    const [button] = elementsNamed(target, 'button');
+    button.dispatchEvent('click');
+    await flushUpdates();
+
+    assert.equal(textOf(button), '1', 'a skipped branch write must not abort the rest of the pass');
+    assert.equal(elementsNamed(target, 'p').length, 0);
+    component.destroy();
+  });
+
+  test(`${mode}: a reactive expression placed directly in a taken branch updates`, async (t) => {
+    const parentSource = '<script>\nlet show = true;\nlet count = 0;\nfunction inc() { count += 1; }\n</script>'
+      + '<main><p>{#if show}{count}{:else}off{/if}</p><button on:click={inc}>+</button></main>';
+    const { target, component } = await mount(t, parentSource);
+    elementsNamed(target, 'button')[0].dispatchEvent('click');
+    await flushUpdates();
+
+    assert.equal(textOf(elementsNamed(target, 'p')[0]), '1');
+    component.destroy();
+  });
+
+  test(`${mode}: an author variable cannot collide with the generated target names`, async (t) => {
+    const parentSource = '<script>\nlet target_1 = "a";\nfunction change() { target_1 = "c"; }\n</script>'
+      + '<main title={target_1}>{target_1}<button on:click={change}>go</button></main>';
+    const { target, component } = await mount(t, parentSource);
+    const [main] = elementsNamed(target, 'main');
+    elementsNamed(target, 'button')[0].dispatchEvent('click');
+    await flushUpdates();
+
+    assert.equal(main.attributes.title, 'c');
+    assert.equal(textOf(main), 'c');
+    component.destroy();
+  });
+
+  test(`${mode}: a write queued before destroy never reaches the torn-down nodes`, async (t) => {
+    const parentSource = '<script>\nlet count = 0;\nfunction inc() { count += 1; }\n</script>'
+      + '<main><p>{count}</p><button on:click={inc}>+</button></main>';
+    const { target, component } = await mount(t, parentSource);
+    const [p] = elementsNamed(target, 'p');
+    elementsNamed(target, 'button')[0].dispatchEvent('click');
+    component.destroy();
+    await flushUpdates();
+
+    assert.equal(textOf(p), '0');
+    assert.deepEqual(target.childNodes, []);
+  });
+}
+
+test('two mounts of one component keep separate update targets', async (t) => {
+  const parentSource = '<script>\nlet count = 0;\nfunction inc() { count += 1; }\n</script>'
+    + '<main><p>{count}</p><button on:click={inc}>+</button></main>';
+  const { document, freshClientModule } = await loadNestedModules(t, parentSource, noChildSource);
+  const firstTarget = document.makeElement('div');
+  const secondTarget = document.makeElement('div');
+  const first = freshClientModule.default(firstTarget);
+  const second = freshClientModule.default(secondTarget);
+
+  elementsNamed(firstTarget, 'button')[0].dispatchEvent('click');
+  await flushUpdates();
+  assert.equal(textOf(elementsNamed(firstTarget, 'p')[0]), '1');
+  assert.equal(textOf(elementsNamed(secondTarget, 'p')[0]), '0');
+
+  first.destroy();
+  elementsNamed(secondTarget, 'button')[0].dispatchEvent('click');
+  await flushUpdates();
+  assert.equal(textOf(elementsNamed(secondTarget, 'p')[0]), '1');
+  second.destroy();
+});
+
+test('a failed adoption discards captured targets and the fallback captures its own', async (t) => {
+  const parentSource = '<script>\nimport Counter from "./Counter.wizz";\nlet tab = "Parser";\nfunction pick() { tab = "Analyzer"; }\n</script>'
+    + '<main><section><Counter /></section><nav><button on:click={pick}>{tab}</button></nav></main>';
+  const { document, clientModule, warnings, render } = await loadNestedModules(t, parentSource, noChildSource);
+  const { html, state } = render();
+  const target = deliverMarkup(document, html);
+  const [staleMain] = elementsNamed(target, 'main');
+  const [staleButton] = elementsNamed(target, 'button');
+  staleButton.setAttribute('data-wizz-id', '999');
+
+  const component = clientModule.hydrateComponent(target, {}, state);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /expected data-wizz-id="1" on <button>/);
+  assert.notEqual(target.childNodes[0], staleMain, 'the fallback recreated the tree');
+
+  const [freshButton] = elementsNamed(target, 'button');
+  freshButton.dispatchEvent('click');
+  await flushUpdates();
+  assert.equal(textOf(freshButton), 'Analyzer');
+  assert.equal(textOf(staleButton), 'Parser');
   component.destroy();
   assert.deepEqual(target.childNodes, []);
 });
