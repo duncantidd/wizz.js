@@ -32,6 +32,32 @@ function createFrom(template) {
   return create({});
 }
 
+test('assigns update targets from the nodes it creates, in branches too', () => {
+  const paragraph = { type: 'Element', name: 'p', attributes: [], children: [] };
+  const text = { type: 'Expression', value: 'count', dependencies: ['count'] };
+  const source = generateCreateFunction({
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'main',
+      attributes: [],
+      children: [paragraph, { type: 'IfBlock', test: 'open', consequent: [text], alternate: null }]
+    }]
+  }, [], new WeakMap(), new Map([[paragraph, '__wizzTarget_1'], [text, '__wizzTarget_2']]));
+
+  assert.match(source, /const (node_\d+) = document\.createElement\("p"\);\n\s*__wizzTarget_1 = \1;/);
+  assert.match(source, /const (node_\d+) = document\.createTextNode\(String\(count\)\);\n\s*__wizzTarget_2 = \1;/);
+});
+
+test('assigns no targets by default', () => {
+  const source = generateCreateFunction({
+    type: 'Root',
+    children: [{ type: 'Element', name: 'main', attributes: [], children: [] }]
+  });
+
+  assert.doesNotMatch(source, /__wizzTarget/);
+});
+
 test('generates create() code that builds a nested DOM tree', () => {
   const root = createFrom({
     type: 'Root',

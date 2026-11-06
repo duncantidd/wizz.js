@@ -95,10 +95,13 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // script functions, so their assignments schedule updates (output patch),
   // and an inline handler mutating a prop fails with the read-only
   // diagnostic WIZZ-G015 (syntax patch: enforcement of a documented rule).
+  // compiler 1.18.1 / output 1.9.1: update() writes through captured node
+  // references instead of querying by id and child index (output patch: same
+  // module surface, corrected write targets).
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.18.0',
+    compiler: '1.18.1',
     syntax: '1.4.2',
-    output: '1.9.0'
+    output: '1.9.1'
   });
 });
 

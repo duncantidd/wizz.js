@@ -216,7 +216,7 @@ test('language_contract documents the version triple, language surface, and diag
   const { text } = await registry.call('language_contract', {});
   // The literal triple is pinned deliberately: a version bump fails this
   // test until the contract text has been reviewed against the compiler.
-  assert.match(text, /compiler 1\.18\.0, syntax 1\.4\.2, output 1\.9\.0/);
+  assert.match(text, /compiler 1.18.1, syntax 1.4.2, output 1.9.1/);
   assert.match(text, /export let/);
   assert.match(text, /onMount/);
   assert.match(text, /onDestroy/);
@@ -719,7 +719,7 @@ test('every documented working pattern compiles and is reactive', () => {
   assert.match(generated(component("let done = false;\n  let label = 'Open';\n  function toggle() { done = !done; label = done ? 'Done' : 'Open'; }", '<button on:click={toggle}>{label}</button>')), /queueUpdate\(\{ label: true \}\)/);
   // Class toggling instead of a reactive {#if}.
   const classToggle = generated(component("let openClass = '';\n  function open() { openClass = ' open'; }", "<div on:click={open} class={'panel' + openClass}></div>"));
-  assert.match(classToggle, /target_\d+\.setAttribute\("class", String\('panel' \+ openClass\)\)/);
+  assert.match(classToggle, /__wizzTarget_\d+\.setAttribute\("class", String\('panel' \+ openClass\)\)/);
   // Nested {#if} inside {:else} for chains.
   assert.equal(compileCode(component('let a = 1;', '<div>{#if a === 1}<b>a</b>{:else}{#if a === 2}<i>b</i>{:else}<u>c</u>{/if}{/if}</div>')), null);
   // Reassigning the collection.

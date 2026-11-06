@@ -631,6 +631,22 @@ test('emits the head adoption walk only when head markup or component tags exist
   assert.match(withChild, /__wizzHeadOwner \+ "\/1"/);
 });
 
+test('captures an update target for every reactive node it adopts', () => {
+  const source = generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
+    '<script>let a = 1; let b = 2;</script><main title={a}><p>{#if a}<b>{a}</b>{/if}</p>{b}</main>'
+  ))), { hydratable: true });
+  const hydration = source.slice(source.indexOf('function hydrateCreate'), source.indexOf('function update('));
+  const declared = source.match(/let (__wizzTarget_\d+(?:, __wizzTarget_\d+)*);/)[1].split(', ');
+
+  assert.equal(declared.length, 3);
+  for (const name of declared) {
+    assert.match(hydration, new RegExp(`${name} = `), `${name} is captured by the walk`);
+  }
+  assert.match(hydration, /__wizzTarget_1 = rootNode;/);
+  // Hydratable modules share one declaration across create() and the walk.
+  assert.equal(source.match(/let __wizzTarget_1\b/g).length, 1);
+});
+
 test('adopts the delivered head run, claims it, and consumes the markers', async () => {
   const componentSource = '<wizz:head><title>P {t}</title><meta content={d}></wizz:head><main><p>{m}</p></main><script>\nlet t = "T";\nlet d = "D";\nlet m = "M";\n</' + 'script>';
   const document = createDocument();

@@ -1,7 +1,7 @@
 const { CodeBuilder } = require('./codeBuilder');
 const { CODES, compilerDiagnostic } = require('../diagnostics.js');
 const { generateCreateFunction, collectComponentRefNames } = require('./domGenerator');
-const { generateUpdateFunction } = require('./updateGenerator');
+const { generateUpdateFunction, collectUpdateTargets } = require('./updateGenerator');
 const {
   interceptAssignments,
   findReactiveMutations,
@@ -563,13 +563,21 @@ function generateComponent(astPayload, options = {}) {
 
   // 4. Inject the generated DOM create() function
   builder.add('\n// --- DOM Creation ---');
-      const createCode = generateCreateFunction(astPayload.template, componentImports, handlerSources);
+  const updateTargets = collectUpdateTargets(astPayload.template);
+      const createCode = generateCreateFunction(astPayload.template, componentImports, handlerSources, updateTargets.names);
 
   // Component instances with reactive props live in factory-scope references
   // shared by create() (which assigns them) and update() (which reads them).
   const componentRefNames = collectComponentRefNames(astPayload.template, componentImports);
   componentRefNames.forEach((refName) => builder.add(`let ${refName} = null;`));
   if (componentRefNames.length > 0) builder.add('');
+
+  // update() writes through these variables, assigned by create() or the
+  // hydration walk. They add no retention: rootNode already holds the subtree.
+  if (updateTargets.names.size > 0) {
+    builder.add(`let ${[...updateTargets.names.values()].join(', ')};`);
+    builder.add('');
+  }
 
   createCode.split('\n').forEach(line => builder.add(line));
 
@@ -660,13 +668,13 @@ function generateComponent(astPayload, options = {}) {
   // block rides along so the run machinery activates for styled-only
   // components (their delivered stylesheet must not strand the run markers).
   if (hydratable) {
-    const hydrationCode = generateHydrationFunction(astPayload.template, componentImports, astPayload.head, { ...options, handlerSources }, ownStyle ? astPayload.style : null);
+    const hydrationCode = generateHydrationFunction(astPayload.template, componentImports, astPayload.head, { ...options, handlerSources }, ownStyle ? astPayload.style : null, updateTargets.names);
     hydrationCode.split('\n').forEach(line => builder.add(line));
   }
 
   // 5. Inject the generated Reactivity Engine update() function
   builder.add('\n// --- Reactivity Engine ---');
-  const updateCode = generateUpdateFunction(astPayload.template);
+  const updateCode = generateUpdateFunction(astPayload.template, updateTargets);
   updateCode.split('\n').forEach(line => builder.add(line));
 
   // 6. Mount the component to the DOM. Hydration adopts the server-rendered
