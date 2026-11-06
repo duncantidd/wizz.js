@@ -221,10 +221,10 @@ test('rejects non-object state in serializeInitialState', async () => {
 
 test('does not intercept reactive assignments in the server script', async () => {
   // The last top-level assignment is the value the template renders: without
-  // interception there is no queueUpdate emission in the module source.
+  // interception there is no __wizzQueueUpdate emission in the module source.
   const moduleSource = generateServer('<script>let count = 0; count = 5;</script><p>{count}</p>');
 
-  assert.doesNotMatch(moduleSource, /queueUpdate/);
+  assert.doesNotMatch(moduleSource, /__wizzQueueUpdate/);
   const { html } = await renderSource('<script>let count = 0; count = 5;</script><p>{count}</p>');
   assert.equal(html, '<p data-wizz-id="1">5</p>');
 });
@@ -623,7 +623,7 @@ test('renders dynamic head attributes with boolean presence semantics', async ()
 test('head-free component-free server modules keep their previous output shape', async () => {
   const { moduleSource, ...rendered } = await renderSource('<main><p>Hi</p></main>');
 
-  assert.ok(moduleSource.includes('renderComponent(props = {})'));
+  assert.ok(moduleSource.includes('renderComponent(__wizzProps = {})'));
   assert.ok(!moduleSource.includes('__wizzHeadParts'));
   assert.ok(!moduleSource.includes('__wizzHeadOwner'));
   assert.ok(!('head' in rendered));
@@ -740,7 +740,7 @@ test('style-only components turn on the head machinery', async () => {
     '<main><p>Hi</p></main><wizz:style>p { color: red }</wizz:style>'
   );
 
-  assert.ok(moduleSource.includes('renderComponent(props = {}, options = {})'));
+  assert.ok(moduleSource.includes('renderComponent(__wizzProps = {}, __wizzOptions = {})'));
   assert.ok('head' in rendered);
   assert.ok(rendered.head.includes('<style'));
 });
@@ -818,7 +818,7 @@ test('server modules rewrite persist markers and omit all persistence machinery'
   assert.doesNotMatch(moduleSource, /BroadcastChannel/);
   // Server scripts stay un-intercepted: mutations do not notify anything.
   assert.match(moduleSource, /clicks \+= 1;/);
-  assert.doesNotMatch(moduleSource, /queueUpdate/);
+  assert.doesNotMatch(moduleSource, /__wizzQueueUpdate/);
 });
 
 // --- Delivered element end tags (hydration alignment) ---

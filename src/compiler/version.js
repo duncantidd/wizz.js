@@ -107,9 +107,9 @@
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.19.0',
-  syntax: '1.4.2',
-  output: '1.10.0'
+  compiler: '1.20.0',
+  syntax: '1.4.3',
+  output: '1.10.1'
 });
 
 module.exports = { VERSIONS };

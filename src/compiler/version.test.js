@@ -101,11 +101,14 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // emitted list locals carry the __wizz prefix so author names cannot collide
   // with them (output patch). compiler 1.19.0 / output 1.10.0: mountComponent
   // takes an optional anchor so children mount at their template position
-  // (output minor: additive surface).
+  // (output minor: additive surface). compiler 1.20.0 / syntax 1.4.3 / output
+  // 1.10.1: generated locals carry the __wizz prefix so any ordinary author name
+  // works (output patch), and WIZZ-G025 rejects the names that cannot be freed
+  // (syntax patch: those names never worked, and the catalog grows additively).
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.19.0',
-    syntax: '1.4.2',
-    output: '1.10.0'
+    compiler: '1.20.0',
+    syntax: '1.4.3',
+    output: '1.10.1'
   });
 });
 
@@ -122,7 +125,7 @@ test('the version table is frozen so callers cannot mutate the contract', () => 
     'use strict';
     VERSIONS.syntax = '9.9.9';
   }, TypeError);
-  assert.equal(VERSIONS.syntax, '1.4.2');
+  assert.equal(VERSIONS.syntax, '1.4.3');
 });
 
 test('the compiler major version leads or matches every contract major version', () => {

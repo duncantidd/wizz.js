@@ -61,7 +61,7 @@ const PROPERTY_ATTRIBUTES = new Set(['value', 'checked', 'disabled']);
 function generateHydrationFunction(templateAST, componentImports = [], headBlock = null, options = {}, styleBlock = null, updateTargets = new Map()) {
   const builder = new CodeBuilder();
   let referenceCounter = 0;
-  const nextReference = () => `node_${++referenceCounter}`;
+  const nextReference = () => `__wizzNode_${++referenceCounter}`;
   let listCounter = 0;
 
   const rootNode = templateAST.children.find(node => node.type === 'Element');
@@ -82,8 +82,8 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
   builder.add("  return typeof node.tagName === 'string' ? node.tagName.toLowerCase() : null;");
   builder.add('}');
   builder.add('function __wizzStripComments(node) {');
-  builder.add('  for (let i = node.childNodes.length - 1; i >= 0; i--) {');
-  builder.add('    if (node.childNodes[i].nodeType === 8) node.removeChild(node.childNodes[i]);');
+  builder.add('  for (let __wizzI = node.childNodes.length - 1; __wizzI >= 0; __wizzI--) {');
+  builder.add('    if (node.childNodes[__wizzI].nodeType === 8) node.removeChild(node.childNodes[__wizzI]);');
   builder.add('  }');
   builder.add('}');
   builder.add('function __wizzDescribe(node) {');
@@ -97,29 +97,29 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
   // state is author-influenced data, so every level is guarded with
   // hasOwnProperty before access.
   if (componentTagsExist(templateAST, importedNames)) {
-    builder.add('function __wizzReadSlice(state, key) {');
-    builder.add("  if (!state || typeof state !== 'object' || Array.isArray(state)) return {};");
-    builder.add('  const __wizz = state.__wizz;');
+    builder.add('function __wizzReadSlice(__wizzState, key) {');
+    builder.add("  if (!__wizzState || typeof __wizzState !== 'object' || Array.isArray(__wizzState)) return {};");
+    builder.add('  const __wizz = __wizzState.__wizz;');
     builder.add("  if (!__wizz || typeof __wizz !== 'object' || !Object.prototype.hasOwnProperty.call(__wizz, 'components')) return {};");
-    builder.add('  const components = __wizz.components;');
-    builder.add("  if (!components || typeof components !== 'object' || !Object.prototype.hasOwnProperty.call(components, key)) return {};");
-    builder.add('  const slice = components[key];');
-    builder.add("  return (slice && typeof slice === 'object' && !Array.isArray(slice)) ? slice : {};");
+    builder.add('  const __wizzSlices = __wizz.components;');
+    builder.add("  if (!__wizz.components || typeof __wizz.components !== 'object' || !Object.prototype.hasOwnProperty.call(__wizz.components, key)) return {};");
+    builder.add('  const __wizzSlice = __wizzSlices[key];');
+    builder.add("  return (__wizzSlice && typeof __wizzSlice === 'object' && !Array.isArray(__wizzSlice)) ? __wizzSlice : {};");
     builder.add('}');
   }
 
   builder.add(headActive
-    ? 'function hydrateCreate(target, state, adoptSelf, headOwner) {'
-    : 'function hydrateCreate(target, state, adoptSelf) {');
+    ? 'function __wizzHydrateCreate(__wizzHost, __wizzState, __wizzAdoptSelf, __wizzOwnerPath) {'
+    : 'function __wizzHydrateCreate(__wizzHost, __wizzState, __wizzAdoptSelf) {');
   if (headActive) {
     // Identity of the head slice this walk adopts: pages own the root run;
     // nested components receive their scoped owner path from the parent.
-    builder.add("  const __wizzHeadOwner = headOwner || 'r';");
+    builder.add("  const __wizzHeadOwner = __wizzOwnerPath || 'r';");
   }
-  builder.add('  const problems = [];');
-  builder.add('  const pendingListeners = [];');
-  builder.add('  const childComponents = [];');
-  builder.add('  const listUpdates = [];');
+  builder.add('  const __wizzProblems = [];');
+  builder.add('  const __wizzPendingListeners = [];');
+  builder.add('  const __wizzChildren = [];');
+  builder.add('  const __wizzLists = [];');
 
   // Component-tag refs are declared at hydrateCreate scope up front: the
   // adoption block after the walk references them at function scope, but a
@@ -156,7 +156,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     builder.add('  let __wizzHeadNodes = null;');
     builder.add('  let __wizzRun = null;');
     builder.add('  let __wizzOwn = null;');
-    builder.add('  if (!adoptSelf) {').indent();
+    builder.add('  if (!__wizzAdoptSelf) {').indent();
     builder.add('    __wizzRun = __wizzFindHeadRun();');
     builder.add('    if (__wizzRun) {');
     builder.add("      __wizzOwn = __wizzRun.nodes.filter((node) => node.getAttribute && node.getAttribute('data-wizz-head-id') === __wizzHeadOwner);");
@@ -219,36 +219,36 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
       });
       builder.add('    ];');
       builder.add('    if (__wizzOwn.length !== __wizzExpected.length) {');
-      builder.add("      problems.push('expected ' + __wizzExpected.length + ' head nodes, found ' + __wizzOwn.length);");
+      builder.add("      __wizzProblems.push('expected ' + __wizzExpected.length + ' head nodes, found ' + __wizzOwn.length);");
       builder.add('    } else {').indent();
       builder.add('      let __wizzHeadOk = true;');
-      builder.add('      for (let i = 0; i < __wizzExpected.length; i++) {').indent();
-      builder.add('        const __wizzGot = __wizzOwn[i];');
-      builder.add('        const __wizzWant = __wizzExpected[i];');
-      builder.add("        if (__wizzNodeTag(__wizzGot) !== __wizzExpected[i].tag) {");
-      builder.add("          problems.push('expected head node ' + i + ' to be <' + __wizzExpected[i].tag + '>, found ' + __wizzDescribe(__wizzGot));");
+      builder.add('      for (let __wizzI = 0; __wizzI < __wizzExpected.length; __wizzI++) {').indent();
+      builder.add('        const __wizzGot = __wizzOwn[__wizzI];');
+      builder.add('        const __wizzWant = __wizzExpected[__wizzI];');
+      builder.add("        if (__wizzNodeTag(__wizzGot) !== __wizzExpected[__wizzI].tag) {");
+      builder.add("          __wizzProblems.push('expected head node ' + __wizzI + ' to be <' + __wizzExpected[__wizzI].tag + '>, found ' + __wizzDescribe(__wizzGot));");
       builder.add('          __wizzHeadOk = false;');
       builder.add('          break;');
       builder.add('        }');
       // Title text and empty void elements compare through textContent.
-      builder.add("        if ((__wizzGot.textContent || '') !== __wizzExpected[i].text) {");
-      builder.add("          problems.push('head node ' + i + ' text mismatch');");
+      builder.add("        if ((__wizzGot.textContent || '') !== __wizzExpected[__wizzI].text) {");
+      builder.add("          __wizzProblems.push('head node ' + __wizzI + ' text mismatch');");
       builder.add('          __wizzHeadOk = false;');
       builder.add('          break;');
       builder.add('        }');
-      builder.add('        for (let a = 0; a < __wizzExpected[i].attrs.length; a++) {').indent();
-      builder.add('          const __wizzAttr = __wizzExpected[i].attrs[a];');
+      builder.add('        for (let __wizzA = 0; __wizzA < __wizzExpected[__wizzI].attrs.length; __wizzA++) {').indent();
+      builder.add('          const __wizzAttr = __wizzExpected[__wizzI].attrs[__wizzA];');
       builder.add("          if (__wizzGot.getAttribute(__wizzAttr[0]) !== __wizzAttr[1]) {");
-      builder.add("            problems.push('head node ' + i + ' attribute ' + __wizzAttr[0] + ' mismatch');");
+      builder.add("            __wizzProblems.push('head node ' + __wizzI + ' attribute ' + __wizzAttr[0] + ' mismatch');");
       builder.add('            __wizzHeadOk = false;');
       builder.add('            break;');
       builder.add('          }');
       builder.dedent().add('        }');
       builder.add('        if (!__wizzHeadOk) break;');
-      builder.add('        for (let f = 0; f < (__wizzExpected[i].flags || []).length; f++) {').indent();
-      builder.add('          const __wizzFlag = __wizzExpected[i].flags[f];');
+      builder.add('        for (let __wizzF = 0; __wizzF < (__wizzExpected[__wizzI].flags || []).length; __wizzF++) {').indent();
+      builder.add('          const __wizzFlag = __wizzExpected[__wizzI].flags[__wizzF];');
       builder.add("          if ((__wizzGot.getAttribute(__wizzFlag[0]) !== null) !== (__wizzFlag[1] !== null)) {");
-      builder.add("            problems.push('head node ' + i + ' attribute ' + __wizzFlag[0] + ' mismatch');");
+      builder.add("            __wizzProblems.push('head node ' + __wizzI + ' attribute ' + __wizzFlag[0] + ' mismatch');");
       builder.add('            __wizzHeadOk = false;');
       builder.add('            break;');
       builder.add('          }');
@@ -267,11 +267,11 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
   // The mount point's first element is adopted as the component root; a
   // self-adopted root (nested hydration) is the given node itself, which is
   // already in the parent's DOM at the component's position.
-  builder.add('  const rootNode = adoptSelf ? target : target.firstElementChild;');
-  builder.add('  if (!rootNode) {');
-  builder.add(`    problems.push('expected root <${rootNode.name}>, found nothing');`);
-  builder.add(`  } else if (__wizzNodeTag(rootNode) !== '${rootNode.name.toLowerCase()}') {`);
-  builder.add(`    problems.push('expected root <${rootNode.name}>, found ' + __wizzDescribe(rootNode));`);
+  builder.add('  const __wizzRoot = __wizzAdoptSelf ? __wizzHost : __wizzHost.firstElementChild;');
+  builder.add('  if (!__wizzRoot) {');
+  builder.add(`    __wizzProblems.push('expected root <${rootNode.name}>, found nothing');`);
+  builder.add(`  } else if (__wizzNodeTag(__wizzRoot) !== '${rootNode.name.toLowerCase()}') {`);
+  builder.add(`    __wizzProblems.push('expected root <${rootNode.name}>, found ' + __wizzDescribe(__wizzRoot));`);
   builder.add('  }');
 
   const expectedTextLiteral = (value) => JSON.stringify(JSON.stringify(value));
@@ -279,26 +279,26 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
   function emitDataWizzIdCheck(ref, elementNode) {
     const idAttribute = (elementNode.attributes || []).find(attribute => attribute.name === 'data-wizz-id');
     if (!idAttribute) return;
-    builder.add(`  if (problems.length === 0 && ${ref}.getAttribute('data-wizz-id') !== ${JSON.stringify(idAttribute.value)}) {`);
-    builder.add(`    problems.push('expected data-wizz-id="${idAttribute.value}" on <${elementNode.name}>, found ' + JSON.stringify(${ref}.getAttribute('data-wizz-id')));`);
+    builder.add(`  if (__wizzProblems.length === 0 && ${ref}.getAttribute('data-wizz-id') !== ${JSON.stringify(idAttribute.value)}) {`);
+    builder.add(`    __wizzProblems.push('expected data-wizz-id="${idAttribute.value}" on <${elementNode.name}>, found ' + JSON.stringify(${ref}.getAttribute('data-wizz-id')));`);
     builder.add('  }');
   }
 
   function emitListenerCollection(ref, elementNode) {
     for (const attribute of elementNode.attributes || []) {
       if (!attribute.name.startsWith('on:')) continue;
-      builder.add('  if (problems.length === 0) {');
-      builder.add(`    pendingListeners.push([${ref}, ${JSON.stringify(attribute.name.slice(3))}, ${options.handlerSources?.get(attribute) ?? attribute.value}]);`);
+      builder.add('  if (__wizzProblems.length === 0) {');
+      builder.add(`    __wizzPendingListeners.push([${ref}, ${JSON.stringify(attribute.name.slice(3))}, ${options.handlerSources?.get(attribute) ?? attribute.value}]);`);
       builder.add('  }');
     }
   }
 
   function emitTextChild(child, parentRef, cursorRef) {
     const ref = nextReference();
-    builder.add('  if (problems.length === 0) {');
+    builder.add('  if (__wizzProblems.length === 0) {');
     builder.add(`    const ${ref} = ${parentRef}.childNodes[${cursorRef}];`);
     builder.add(`    if (!${ref} || ${ref}.nodeType !== 3 || ${ref}.nodeValue !== ${JSON.stringify(child.value)}) {`);
-    builder.add(`      problems.push('expected text ' + ${expectedTextLiteral(child.value)} + ' at index ' + ${cursorRef} + ' of <' + __wizzNodeTag(${parentRef}) + '>, found ' + __wizzDescribe(${ref}));`);
+    builder.add(`      __wizzProblems.push('expected text ' + ${expectedTextLiteral(child.value)} + ' at index ' + ${cursorRef} + ' of <' + __wizzNodeTag(${parentRef}) + '>, found ' + __wizzDescribe(${ref}));`);
     builder.add('    }');
     builder.add(`    ${cursorRef} += 1;`);
     builder.add('  }');
@@ -312,12 +312,12 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
 
   function emitExpressionChild(child, parentRef, cursorRef) {
     const ref = nextReference();
-    builder.add('  if (problems.length === 0) {');
+    builder.add('  if (__wizzProblems.length === 0) {');
     builder.add(`    const ${ref} = ${parentRef}.childNodes[${cursorRef}];`);
     // The delivered markup escaped this expression's output; the browser's
     // parser has decoded it again, so compare against the raw runtime value.
     builder.add(`    if (!${ref} || ${ref}.nodeType !== 3 || ${ref}.nodeValue !== String(${child.value})) {`);
-    builder.add(`      problems.push('expected expression text at index ' + ${cursorRef} + ' of <' + __wizzNodeTag(${parentRef}) + '>, found ' + __wizzDescribe(${ref}));`);
+    builder.add(`      __wizzProblems.push('expected expression text at index ' + ${cursorRef} + ' of <' + __wizzNodeTag(${parentRef}) + '>, found ' + __wizzDescribe(${ref}));`);
     builder.add('    }');
     emitTargetCapture(ref, child);
     builder.add(`    ${cursorRef} += 1;`);
@@ -327,10 +327,10 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
   function emitElementChild(elementNode, parentRef, cursorRef) {
     const ref = nextReference();
     builder.add(`  let ${ref} = null;`);
-    builder.add('  if (problems.length === 0) {');
+    builder.add('  if (__wizzProblems.length === 0) {');
     builder.add(`    ${ref} = ${parentRef}.childNodes[${cursorRef}];`);
     builder.add(`    if (__wizzNodeTag(${ref}) !== '${elementNode.name.toLowerCase()}') {`);
-    builder.add(`      problems.push('expected <${elementNode.name}> at index ' + ${cursorRef} + ' of <' + __wizzNodeTag(${parentRef}) + '>, found ' + __wizzDescribe(${ref}));`);
+    builder.add(`      __wizzProblems.push('expected <${elementNode.name}> at index ' + ${cursorRef} + ' of <' + __wizzNodeTag(${parentRef}) + '>, found ' + __wizzDescribe(${ref}));`);
     builder.add('    }');
     emitTargetCapture(ref, elementNode);
     builder.add(`    ${cursorRef} += 1;`);
@@ -352,10 +352,10 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     // The ref was pre-allocated at function scope (see componentRefs above);
     // here it is only assigned at the tag's child position.
     const ref = componentRefs.get(componentNode);
-    builder.add('  if (problems.length === 0) {');
+    builder.add('  if (__wizzProblems.length === 0) {');
     builder.add(`    ${ref} = ${parentRef}.childNodes[${cursorRef}];`);
     builder.add(`    if (!${ref} || ${ref}.nodeType !== 1) {`);
-    builder.add(`      problems.push('expected <${componentNode.name}> at index ' + ${cursorRef} + ' of <' + __wizzNodeTag(${parentRef}) + '>, found ' + __wizzDescribe(${ref}));`);
+    builder.add(`      __wizzProblems.push('expected <${componentNode.name}> at index ' + ${cursorRef} + ' of <' + __wizzNodeTag(${parentRef}) + '>, found ' + __wizzDescribe(${ref}));`);
     builder.add('    }');
     builder.add(`    ${cursorRef} += 1;`);
     builder.add('  }');
@@ -367,7 +367,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     // render-time state; re-evaluating it against the seeded state selects
     // the same branch, so the flattened positions align. (A nondeterministic
     // author script can diverge here; the walk then falls back cleanly.)
-    builder.add('  if (problems.length === 0) {').indent();
+    builder.add('  if (__wizzProblems.length === 0) {').indent();
     builder.add(`    if (${node.test}) {`).indent();
     (node.consequent || []).forEach(child => emitFlattenedChild(child, parentRef, cursorRef));
     builder.dedent();
@@ -383,8 +383,8 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
   function emitEachBlock(node, parentRef, cursorRef) {
     const listId = ++listCounter;
     emitListMachinery(listId, node);
-    builder.add('  if (problems.length === 0) {');
-    builder.add(`    ${cursorRef} += hydrateList_${listId}(${parentRef}, ${cursorRef});`);
+    builder.add('  if (__wizzProblems.length === 0) {');
+    builder.add(`    ${cursorRef} += __wizzHydrateList_${listId}(${parentRef}, ${cursorRef});`);
     builder.add('  }');
   }
 
@@ -399,11 +399,11 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
    */
   function emitListMachinery(listId, node) {
     const itemVar = node.item;
-    const recordsRef = `records_${listId}`;
-    const anchorRef = `anchor_${listId}`;
+    const recordsRef = `__wizzRecords_${listId}`;
+    const anchorRef = `__wizzAnchor_${listId}`;
     const contentNodes = node.children.filter((child) => child.type !== 'Text' || child.value.trim() !== '');
     const itemRoot = contentNodes[0];
-    const keylessIndex = `index_${listId}`;
+    const keylessIndex = `__wizzIndex_${listId}`;
 
     const itemVars = new Map();
 
@@ -414,11 +414,11 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     // text is re-evaluated per item exactly as the server rendered it.
     // Author expressions run in this scope, so its parameters and the list
     // functions' locals below carry the reserved `__wizz` prefix.
-    builder.add(`  function hydrateListItem_${listId}(${itemVar}, __wizzParent, __wizzIndex) {`).indent();
-    const rootVar = `node_${listId}_root`;
+    builder.add(`  function __wizzHydrateListItem_${listId}(${itemVar}, __wizzParent, __wizzIndex) {`).indent();
+    const rootVar = `__wizzNode_${listId}_root`;
     builder.add(`    const ${rootVar} = __wizzParent.childNodes[__wizzIndex];`);
     builder.add(`    if (!${rootVar} || ${rootVar}.nodeType !== 1 || __wizzNodeTag(${rootVar}) !== '${itemRoot.name.toLowerCase()}') {`).indent();
-    builder.add(`      problems.push('expected <${itemRoot.name}> at index ' + __wizzIndex + ' of <' + __wizzNodeTag(__wizzParent) + '>, found ' + __wizzDescribe(${rootVar}));`);
+    builder.add(`      __wizzProblems.push('expected <${itemRoot.name}> at index ' + __wizzIndex + ' of <' + __wizzNodeTag(__wizzParent) + '>, found ' + __wizzDescribe(${rootVar}));`);
     builder.add('      return null;');
     builder.dedent().add('    }');
     itemVars.set(itemRoot, rootVar);
@@ -426,11 +426,11 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     const walkItemNode = (listNode, parentVar) => {
       builder.add(`    __wizzStripComments(${parentVar});`);
       (listNode.children || []).forEach((child, childIndex) => {
-        const childVar = `node_${listId}_${childIndex}_${itemVars.size}`;
+        const childVar = `__wizzNode_${listId}_${childIndex}_${itemVars.size}`;
         if (child.type === 'Element') {
           builder.add(`    const ${childVar} = ${parentVar}.childNodes[${childIndex}];`);
           builder.add(`    if (!${childVar} || ${childVar}.nodeType !== 1 || __wizzNodeTag(${childVar}) !== '${child.name.toLowerCase()}') {`).indent();
-          builder.add(`      problems.push('expected <${child.name}> at index ${childIndex} of <' + __wizzNodeTag(${parentVar}) + '>, found ' + __wizzDescribe(${childVar}));`);
+          builder.add(`      __wizzProblems.push('expected <${child.name}> at index ${childIndex} of <' + __wizzNodeTag(${parentVar}) + '>, found ' + __wizzDescribe(${childVar}));`);
           builder.add('      return null;');
           builder.dedent().add('    }');
           itemVars.set(child, childVar);
@@ -439,14 +439,14 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
         }
         if (child.type === 'Text') {
           builder.add(`    if (!${parentVar}.childNodes[${childIndex}] || ${parentVar}.childNodes[${childIndex}].nodeType !== 3 || ${parentVar}.childNodes[${childIndex}].nodeValue !== ${JSON.stringify(child.value)}) {`).indent();
-          builder.add(`      problems.push('expected text at index ${childIndex} of <' + __wizzNodeTag(${parentVar}) + '>, found ' + __wizzDescribe(${parentVar}.childNodes[${childIndex}]));`);
+          builder.add(`      __wizzProblems.push('expected text at index ${childIndex} of <' + __wizzNodeTag(${parentVar}) + '>, found ' + __wizzDescribe(${parentVar}.childNodes[${childIndex}]));`);
           builder.add('      return null;');
           builder.dedent().add('    }');
           return;
         }
         if (child.type === 'Expression') {
           builder.add(`    if (!${parentVar}.childNodes[${childIndex}] || ${parentVar}.childNodes[${childIndex}].nodeType !== 3 || ${parentVar}.childNodes[${childIndex}].nodeValue !== String(${child.value})) {`).indent();
-          builder.add(`      problems.push('expected expression text at index ${childIndex} of <' + __wizzNodeTag(${parentVar}) + '>, found ' + __wizzDescribe(${parentVar}.childNodes[${childIndex}]));`);
+          builder.add(`      __wizzProblems.push('expected expression text at index ${childIndex} of <' + __wizzNodeTag(${parentVar}) + '>, found ' + __wizzDescribe(${parentVar}.childNodes[${childIndex}]));`);
           builder.add('      return null;');
           builder.dedent().add('    }');
           return;
@@ -488,9 +488,9 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     // Fresh item creation for items the client adds after hydration; the
     // emission mirrors the browser target's createItem.
     const freshVars = new Map();
-    builder.add(`  function hydrateCreateFreshItem_${listId}(${itemVar}) {`).indent();
+    builder.add(`  function __wizzCreateFreshItem_${listId}(${itemVar}) {`).indent();
     const buildFreshNode = (listNode, listParentName) => {
-      const varName = `fresh_${listId}_${freshVars.size}`;
+      const varName = `__wizzFresh_${listId}_${freshVars.size}`;
       freshVars.set(listNode, varName);
       if (listNode.type === 'Element') {
         builder.add(`    const ${varName} = document.createElement(${JSON.stringify(listNode.name)});`);
@@ -536,7 +536,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     builder.dedent().add('    };');
     builder.dedent().add('  }');
 
-    builder.add(`  function hydrateUpdateList_${listId}() {`).indent();
+    builder.add(`  function __wizzHydrateUpdateList_${listId}() {`).indent();
     builder.add(`    const __wizzItems = ${node.collection};`);
     builder.add('    const __wizzNext = new Map();');
     builder.add('    const __wizzSeen = new Set();');
@@ -546,7 +546,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     builder.add('      __wizzSeen.add(__wizzKey);');
     builder.add(`      let __wizzRecord = ${recordsRef}.get(__wizzKey);`);
     builder.add(`      if (__wizzRecord) __wizzRecord.update(${itemVar});`);
-    builder.add(`      else __wizzRecord = hydrateCreateFreshItem_${listId}(${itemVar});`);
+    builder.add(`      else __wizzRecord = __wizzCreateFreshItem_${listId}(${itemVar});`);
     builder.add(`      ${anchorRef}.parentNode.insertBefore(__wizzRecord.node, ${anchorRef});`);
     builder.add('      __wizzNext.set(__wizzKey, __wizzRecord);');
     builder.dedent().add('    });');
@@ -555,14 +555,14 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     builder.add(`    __wizzNext.forEach((__wizzRecord, __wizzKey) => ${recordsRef}.set(__wizzKey, __wizzRecord));`);
     builder.dedent().add('  }');
 
-    builder.add(`  function hydrateList_${listId}(__wizzParent, __wizzStart) {`).indent();
+    builder.add(`  function __wizzHydrateList_${listId}(__wizzParent, __wizzStart) {`).indent();
     builder.add(`    const __wizzItems = ${node.collection};`);
     builder.add('    let __wizzIndex = __wizzStart;');
     builder.add(`    __wizzItems.forEach((${itemVar}${node.key ? '' : `, ${keylessIndex}`}) => {`).indent();
-    builder.add('      if (problems.length > 0) return;');
+    builder.add('      if (__wizzProblems.length > 0) return;');
     builder.add(node.key ? `      const __wizzKey = ${itemVar}.${node.key};` : `      const __wizzKey = ${keylessIndex};`);
-    builder.add(`      if (${recordsRef}.has(__wizzKey)) problems.push('Each block keys must be unique.');`);
-    builder.add(`      const __wizzRecord = hydrateListItem_${listId}(${itemVar}, __wizzParent, __wizzIndex);`);
+    builder.add(`      if (${recordsRef}.has(__wizzKey)) __wizzProblems.push('Each block keys must be unique.');`);
+    builder.add(`      const __wizzRecord = __wizzHydrateListItem_${listId}(${itemVar}, __wizzParent, __wizzIndex);`);
     builder.add('      if (__wizzRecord) {');
     builder.add(`        ${recordsRef}.set(__wizzKey, __wizzRecord);`);
     builder.add('        __wizzIndex += 1;');
@@ -572,7 +572,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     // HTML serialization, so hydration creates it after the adopted run.
     builder.add(`    ${anchorRef} = document.createTextNode('');`);
     builder.add(`    __wizzParent.insertBefore(${anchorRef}, __wizzParent.childNodes[__wizzIndex] || null);`);
-    builder.add(`    listUpdates.push((changed) => { if (changed.${node.collection}) hydrateUpdateList_${listId}(); });`);
+    builder.add(`    __wizzLists.push((__wizzChanged) => { if (__wizzChanged.${node.collection}) __wizzHydrateUpdateList_${listId}(); });`);
     // The created anchor occupies a real child position of the parent (and
     // shifts any following siblings), so the consumed count includes it.
     builder.add('    return __wizzIndex - __wizzStart + 1;');
@@ -583,7 +583,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     const children = elementNode.children || [];
     // Hydration markers are stripped before anything else so the remaining
     // childNodes align one-to-one with the flattened template children.
-    builder.add('  if (problems.length === 0) {');
+    builder.add('  if (__wizzProblems.length === 0) {');
     builder.add(`    __wizzStripComments(${parentRef});`);
     builder.add('  }');
     const cursorRef = nextReference();
@@ -622,18 +622,18 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
 
     // Every template position was consumed: the flattened child count must
     // match exactly, including the empty run an untaken branch leaves behind.
-    builder.add('  if (problems.length === 0) {');
+    builder.add('  if (__wizzProblems.length === 0) {');
     builder.add(`    if (${cursorRef} !== ${parentRef}.childNodes.length) {`);
-    builder.add(`      problems.push('expected ' + ${cursorRef} + ' child nodes in <' + __wizzNodeTag(${parentRef}) + '>, found ' + ${parentRef}.childNodes.length);`);
+    builder.add(`      __wizzProblems.push('expected ' + ${cursorRef} + ' child nodes in <' + __wizzNodeTag(${parentRef}) + '>, found ' + ${parentRef}.childNodes.length);`);
     builder.add('    }');
     builder.add('  }');
   }
 
   const componentAdoptions = [];
-  emitTargetCapture('rootNode', rootNode);
-  emitDataWizzIdCheck('rootNode', rootNode);
-  emitListenerCollection('rootNode', rootNode);
-  walkChildren(rootNode, 'rootNode');
+  emitTargetCapture('__wizzRoot', rootNode);
+  emitDataWizzIdCheck('__wizzRoot', rootNode);
+  emitListenerCollection('__wizzRoot', rootNode);
+  walkChildren(rootNode, '__wizzRoot');
 
   // Component adoption runs only after the whole walk passes: a mismatching
   // parent falls back to a full client render, which mounts its own children.
@@ -641,13 +641,13 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     const componentNode = adoption.node;
     const idLiteral = JSON.stringify(String(componentNode.componentId));
     const headOwnerArg = headActive ? `, __wizzHeadOwner + ${JSON.stringify(`/${componentNode.componentId}`)}` : '';
-    builder.add('  if (problems.length === 0) {').indent();
-    builder.add(`    const __wizzSlice_${componentNode.componentId} = __wizzReadSlice(state, ${idLiteral});`);
+    builder.add('  if (__wizzProblems.length === 0) {').indent();
+    builder.add(`    const __wizzSlice_${componentNode.componentId} = __wizzReadSlice(__wizzState, ${idLiteral});`);
     builder.add(`    const __wizzChild_${componentNode.componentId} = __wizzHydrate_${componentNode.name}.hydrateRoot(${adoption.ref}, ${buildComponentPropsSource(componentNode)}, __wizzSlice_${componentNode.componentId}${headOwnerArg});`);
-    builder.add(`    childComponents.push(__wizzChild_${componentNode.componentId});`);
+    builder.add(`    __wizzChildren.push(__wizzChild_${componentNode.componentId});`);
     const hasReactiveProps = (componentNode.attributes || []).some((attribute) => attribute.dynamic && attribute.dependencies?.length > 0);
     if (hasReactiveProps) {
-      builder.add(`    component_${componentNode.componentId} = __wizzChild_${componentNode.componentId};`);
+      builder.add(`    __wizzComponent_${componentNode.componentId} = __wizzChild_${componentNode.componentId};`);
     }
     builder.dedent().add('  }');
   }
@@ -661,10 +661,10 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
   // check treats an absent attribute as claimed — the loose `!= null` covers
   // both the DOM's null and the test shims' undefined.
   if (headActive) {
-    builder.add('  if (problems.length === 0 && __wizzRun) {').indent();
+    builder.add('  if (__wizzProblems.length === 0 && __wizzRun) {').indent();
     builder.add("    const __wizzLeftover = __wizzRun.nodes.filter((node) => node.getAttribute && node.getAttribute('data-wizz-head-id') != null);");
     builder.add('    if (__wizzLeftover.length > 0) {');
-    builder.add("      problems.push(__wizzLeftover.length + ' delivered head nodes were never claimed');");
+    builder.add("      __wizzProblems.push(__wizzLeftover.length + ' delivered head nodes were never claimed');");
     builder.add('    } else {');
     builder.add('      __wizzRun.startMarker.parentNode.removeChild(__wizzRun.startMarker);');
     builder.add('      __wizzRun.endMarker.parentNode.removeChild(__wizzRun.endMarker);');
@@ -672,27 +672,27 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     builder.dedent().add('  }');
   }
 
-  builder.add('  if (problems.length > 0) {').indent();
-  builder.add("    console.warn('[wizz] hydration mismatch: ' + problems.join('; ') + '. Falling back to client rendering.');");
+  builder.add('  if (__wizzProblems.length > 0) {').indent();
+  builder.add("    console.warn('[wizz] hydration mismatch: ' + __wizzProblems.join('; ') + '. Falling back to client rendering.');");
   if (headActive) {
     // A failed adoption must leave no head fragments behind: the fresh mount
     // re-applies this component's head, so adopted slices are released and
     // unclaimed delivery remains are stripped — the whole run for a page,
     // only the component's own slice for a nested remount.
     builder.add('    if (__wizzHeadNodes) __wizzReleaseHead(__wizzHeadNodes);');
-    builder.add('    if (!adoptSelf) {');
+    builder.add('    if (!__wizzAdoptSelf) {');
     builder.add('      if (__wizzRun) __wizzStripHeadRun();');
     builder.add('    } else {');
     builder.add('      __wizzStripOwnedHeadSlice(__wizzHeadOwner);');
     builder.add('    }');
   }
-  builder.add('    while (target.childNodes.length > 0) target.removeChild(target.childNodes[0]);');
+  builder.add('    while (__wizzHost.childNodes.length > 0) __wizzHost.removeChild(__wizzHost.childNodes[0]);');
   builder.add('    return null;');
   builder.dedent().add('  }');
-  builder.add('  pendingListeners.forEach((pending) => trackListener(pending[0], pending[1], pending[2]));');
+  builder.add('  __wizzPendingListeners.forEach((pending) => __wizzListen(pending[0], pending[1], pending[2]));');
   builder.add(headActive
-    ? '  return { node: rootNode, childComponents, listUpdates, headNodes: __wizzHeadNodes };'
-    : '  return { node: rootNode, childComponents, listUpdates };');
+    ? '  return { node: __wizzRoot, __wizzChildren, __wizzLists, __wizzOwnHead: __wizzHeadNodes };'
+    : '  return { node: __wizzRoot, __wizzChildren, __wizzLists };');
   builder.dedent().add('}');
 
   return builder.generate();

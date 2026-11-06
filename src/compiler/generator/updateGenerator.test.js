@@ -6,7 +6,7 @@ const { generateUpdateFunction, collectUpdateTargets } = require('./updateGenera
 // component instances, and the __wizzTarget_N variables create() would assign.
 function createUpdate(template, scope = {}) {
   const names = Object.keys(scope);
-  return new Function(...names, `${generateUpdateFunction(template)}\nreturn update;`)(
+  return new Function(...names, `${generateUpdateFunction(template)}\nreturn __wizzUpdate;`)(
     ...names.map((name) => scope[name])
   );
 }
@@ -71,7 +71,7 @@ test('emits no target writes for templates without reactive content', () => {
   const source = generateUpdateFunction(root(element('p', [{ type: 'Text', value: 'Static' }])));
 
   assert.doesNotMatch(source, /__wizzTarget|querySelector/);
-  assert.doesNotThrow(() => new Function(`${source}\nreturn update;`));
+  assert.doesNotThrow(() => new Function(`${source}\nreturn __wizzUpdate;`));
 });
 
 test('writes through captured targets and never queries the DOM', () => {
@@ -82,7 +82,7 @@ test('writes through captured targets and never queries the DOM', () => {
 
   assert.match(source, /__wizzTarget_1\.setAttribute/);
   assert.match(source, /__wizzTarget_2\.nodeValue = String\(count\);/);
-  assert.doesNotMatch(source, /querySelector|childNodes|rootNode|data-wizz-id/);
+  assert.doesNotMatch(source, /querySelector|childNodes|__wizzRoot|data-wizz-id/);
 });
 
 test('guards writes inside a branch and only those', () => {
@@ -186,7 +186,7 @@ test('routes reactive prop changes to component instances through setProps', () 
         children: []
       }]
     }]
-  }, { count: 9, component_1: instance });
+  }, { count: 9, __wizzComponent_1: instance });
 
   update({}, { count: true });
   update({}, { other: true });
@@ -212,7 +212,7 @@ test('skips setProps when the instance has not mounted or the attribute is stati
         children: []
       }]
     }]
-  }, { count: 2, component_1: null });
+  }, { count: 2, __wizzComponent_1: null });
 
   // No mounted instance: the null guard makes this a no-op instead of a crash.
   assert.doesNotThrow(() => update({}, { count: true }));
@@ -257,7 +257,7 @@ test('emits setProps for component tags inside conditional branches', () => {
         alternate: null
       }]
     }]
-  }, { count: 5, component_1: instance });
+  }, { count: 5, __wizzComponent_1: instance });
 
   update({}, { count: true });
 

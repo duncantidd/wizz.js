@@ -10,21 +10,21 @@ const {
 } = require('./assignmentInterceptor');
 
 // Executes an intercepted script the way a component factory would: with a
-// queueUpdate dispatcher in scope, and captures the notifications it sends.
+// __wizzQueueUpdate dispatcher in scope, and captures the notifications it sends.
 function runScript(script, names) {
   const notifications = [];
-  const execute = new Function('queueUpdate', script);
+  const execute = new Function('__wizzQueueUpdate', script);
   execute((changes) => notifications.push(changes));
   return notifications;
 }
 
 function assertValidJs(script) {
-  assert.doesNotThrow(() => new Function('queueUpdate', script), `Generated invalid JS: ${script}`);
+  assert.doesNotThrow(() => new Function('__wizzQueueUpdate', script), `Generated invalid JS: ${script}`);
 }
 
 test('intercepts simple assignments', () => {
   const input = `count = 5;`;
-  const expected = `count = 5; queueUpdate({ count: true });`;
+  const expected = `count = 5; __wizzQueueUpdate({ count: true });`;
   assert.equal(interceptAssignments(input, ['count']), expected);
 });
 
@@ -35,13 +35,13 @@ test('ignores initial let declarations', () => {
 
 test('intercepts compound assignments and increment and decrement operators', () => {
   const input = `count += 1;\ntotal--;\n++count;`;
-  const expected = `count += 1; queueUpdate({ count: true });\ntotal--; queueUpdate({ total: true });\n++count; queueUpdate({ count: true });`;
+  const expected = `count += 1; __wizzQueueUpdate({ count: true });\ntotal--; __wizzQueueUpdate({ total: true });\n++count; __wizzQueueUpdate({ count: true });`;
   assert.equal(interceptAssignments(input, ['count', 'total']), expected);
 });
 
 test('intercepts object property mutations to trigger the root object', () => {
   const input = `user.name = "Ada";`;
-  const expected = `user.name = "Ada"; queueUpdate({ user: true });`;
+  const expected = `user.name = "Ada"; __wizzQueueUpdate({ user: true });`;
   assert.equal(interceptAssignments(input, ['user']), expected);
 });
 
@@ -56,7 +56,7 @@ test('preserves assignments in strings, comments, and template literals', () => 
     'const message = "count = 5;";',
     '// count = 5;',
     'const label = `count = 5;`;',
-    'count = "a;b"; queueUpdate({ count: true });'
+    'count = "a;b"; __wizzQueueUpdate({ count: true });'
   ].join('\n');
 
   assert.equal(interceptAssignments(input, ['count']), expected);
@@ -74,21 +74,21 @@ test('leaves reactive identifier reads without mutations unchanged', () => {
 
 test('supports reactive names containing dollar signs', () => {
   const input = '$count = 1;';
-  const expected = '$count = 1; queueUpdate({ $count: true });';
+  const expected = '$count = 1; __wizzQueueUpdate({ $count: true });';
 
   assert.equal(interceptAssignments(input, ['$count']), expected);
 });
 
 test('leaves for-loop headers untouched while still intercepting body mutations', () => {
   const input = 'for (count = 0; count < 10; count++) { total += count; }';
-  const expected = 'for (count = 0; count < 10; count++) { total += count; queueUpdate({ total: true }); }';
+  const expected = 'for (count = 0; count < 10; count++) { total += count; __wizzQueueUpdate({ total: true }); }';
 
   assert.equal(interceptAssignments(input, ['count', 'total']), expected);
 });
 
 test('leaves arrow-function default parameters untouched', () => {
   const input = 'const render = (count = 1) => {};\ncount = 2;';
-  const expected = 'const render = (count = 1) => {};\ncount = 2; queueUpdate({ count: true });';
+  const expected = 'const render = (count = 1) => {};\ncount = 2; __wizzQueueUpdate({ count: true });';
 
   assert.equal(interceptAssignments(input, ['count']), expected);
 });
@@ -101,7 +101,7 @@ test('preserves regular expression literals that resemble assignments', () => {
 
 test('rewrites statements containing regex literals at their true end', () => {
   const input = 'x = /a;b/.test(s);';
-  const expected = 'x = /a;b/.test(s); queueUpdate({ x: true });';
+  const expected = 'x = /a;b/.test(s); __wizzQueueUpdate({ x: true });';
 
   assert.equal(interceptAssignments(input, ['x']), expected);
 });
@@ -114,7 +114,7 @@ test('preserves regex literals passed as call arguments', () => {
 
 test('preserves division while intercepting an outer assignment', () => {
   const input = 'average = total / count;';
-  const expected = 'average = total / count; queueUpdate({ average: true });';
+  const expected = 'average = total / count; __wizzQueueUpdate({ average: true });';
 
   assert.equal(interceptAssignments(input, ['average', 'total', 'count']), expected);
 });
@@ -128,15 +128,15 @@ test('preserves regex literals after return statements', () => {
 test('still intercepts statement mutations inside function and block bodies', () => {
   assert.equal(
     interceptAssignments('function increment() { count += 1; }', ['count']),
-    'function increment() { count += 1; queueUpdate({ count: true }); }'
+    'function increment() { count += 1; __wizzQueueUpdate({ count: true }); }'
   );
   assert.equal(
     interceptAssignments('if (!name) { name = "friend"; }', ['name']),
-    'if (!name) { name = "friend"; queueUpdate({ name: true }); }'
+    'if (!name) { name = "friend"; __wizzQueueUpdate({ name: true }); }'
   );
   assert.equal(
     interceptAssignments('if (ready) { count = 1; }', ['count']),
-    'if (ready) { count = 1; queueUpdate({ count: true }); }'
+    'if (ready) { count = 1; __wizzQueueUpdate({ count: true }); }'
   );
 });
 
@@ -156,84 +156,84 @@ test('intercepts mutations inside arrow-function callbacks passed as arguments',
   // Previously a documented scanner boundary: parentheses hid these bodies.
   assert.equal(
     interceptAssignments('onMount(() => { count = 1 });', ['count']),
-    'onMount(() => { count = 1; queueUpdate({ count: true }); });'
+    'onMount(() => { count = 1; __wizzQueueUpdate({ count: true }); });'
   );
   assert.equal(
     interceptAssignments('setTimeout(() => { count = 1 }, 100);', ['count']),
-    'setTimeout(() => { count = 1; queueUpdate({ count: true }); }, 100);'
+    'setTimeout(() => { count = 1; __wizzQueueUpdate({ count: true }); }, 100);'
   );
   assert.equal(
     interceptAssignments('button.addEventListener("click", () => { total += 1 });', ['total']),
-    'button.addEventListener("click", () => { total += 1; queueUpdate({ total: true }); });'
+    'button.addEventListener("click", () => { total += 1; __wizzQueueUpdate({ total: true }); });'
   );
 });
 
 test('intercepts mutations in async arrows and handlers with parameters', () => {
   assert.equal(
     interceptAssignments('saveButton.onclick = async () => { status = "saved"; };', ['status']),
-    'saveButton.onclick = async () => { status = "saved"; queueUpdate({ status: true }); };'
+    'saveButton.onclick = async () => { status = "saved"; __wizzQueueUpdate({ status: true }); };'
   );
   assert.equal(
     interceptAssignments('input.addEventListener("input", (event) => { name = event.target.value; });', ['name']),
-    'input.addEventListener("input", (event) => { name = event.target.value; queueUpdate({ name: true }); });'
+    'input.addEventListener("input", (event) => { name = event.target.value; __wizzQueueUpdate({ name: true }); });'
   );
 });
 
 test('intercepts mutations in object method shorthand, getters, and setters', () => {
   assert.equal(
     interceptAssignments('const api = { bump() { count += 1; } };', ['count']),
-    'const api = { bump() { count += 1; queueUpdate({ count: true }); } };'
+    'const api = { bump() { count += 1; __wizzQueueUpdate({ count: true }); } };'
   );
   assert.equal(
     interceptAssignments('const box = { get label() { return label; }, set label(value) { label = value; } };', ['label']),
-    'const box = { get label() { return label; }, set label(value) { label = value; queueUpdate({ label: true }); } };'
+    'const box = { get label() { return label; }, set label(value) { label = value; __wizzQueueUpdate({ label: true }); } };'
   );
 });
 
 test('intercepts mutations in class methods but not class field initializers', () => {
   assert.equal(
     interceptAssignments('class Counter { increment() { count += 1; } }', ['count']),
-    'class Counter { increment() { count += 1; queueUpdate({ count: true }); } }'
+    'class Counter { increment() { count += 1; __wizzQueueUpdate({ count: true }); } }'
   );
   // A class field named like a reactive variable defines an instance property;
   // rewriting inside the class body would be a syntax error.
   assert.equal(interceptAssignments('class Counter { count = 1; }', ['count']), 'class Counter { count = 1; }');
   assert.equal(
     interceptAssignments('class Counter { handler = () => { count = 1; }; }', ['count']),
-    'class Counter { handler = () => { count = 1; queueUpdate({ count: true }); }; }'
+    'class Counter { handler = () => { count = 1; __wizzQueueUpdate({ count: true }); }; }'
   );
 });
 
 test('intercepts mutations in async functions, generators, and IIFEs', () => {
   assert.equal(
     interceptAssignments('async function load() { count = await fetchCount(); }', ['count']),
-    'async function load() { count = await fetchCount(); queueUpdate({ count: true }); }'
+    'async function load() { count = await fetchCount(); __wizzQueueUpdate({ count: true }); }'
   );
   assert.equal(
     interceptAssignments('function* sequence() { step = yield nextStep(); }', ['step']),
-    'function* sequence() { step = yield nextStep(); queueUpdate({ step: true }); }'
+    'function* sequence() { step = yield nextStep(); __wizzQueueUpdate({ step: true }); }'
   );
   assert.equal(
     interceptAssignments('(function () { count = 1; })();', ['count']),
-    '(function () { count = 1; queueUpdate({ count: true }); })();'
+    '(function () { count = 1; __wizzQueueUpdate({ count: true }); })();'
   );
 });
 
 test('intercepts mutations in switch cases, do-while bodies, and try blocks', () => {
   assert.equal(
     interceptAssignments('switch (mode) { case "fast": count = 1; break; default: count = 2; }', ['count']),
-    'switch (mode) { case "fast": count = 1; queueUpdate({ count: true }); break; default: count = 2; queueUpdate({ count: true }); }'
+    'switch (mode) { case "fast": count = 1; __wizzQueueUpdate({ count: true }); break; default: count = 2; __wizzQueueUpdate({ count: true }); }'
   );
   assert.equal(
     interceptAssignments('do { count = 1; } while (ready);', ['count']),
-    'do { count = 1; queueUpdate({ count: true }); } while (ready);'
+    'do { count = 1; __wizzQueueUpdate({ count: true }); } while (ready);'
   );
   assert.equal(
     interceptAssignments('try { count = 1; } catch (error) { count = 2; } finally { count = 3; }', ['count']),
     [
-      'try { count = 1; queueUpdate({ count: true }); }',
-      ' catch (error) { count = 2; queueUpdate({ count: true }); }',
-      ' finally { count = 3; queueUpdate({ count: true }); }'
+      'try { count = 1; __wizzQueueUpdate({ count: true }); }',
+      ' catch (error) { count = 2; __wizzQueueUpdate({ count: true }); }',
+      ' finally { count = 3; __wizzQueueUpdate({ count: true }); }'
     ].join('')
   );
 });
@@ -241,40 +241,40 @@ test('intercepts mutations in switch cases, do-while bodies, and try blocks', ()
 test('intercepts mutations in for-of bodies and nested functions', () => {
   assert.equal(
     interceptAssignments('for (const item of items) { total += 1; }', ['total']),
-    'for (const item of items) { total += 1; queueUpdate({ total: true }); }'
+    'for (const item of items) { total += 1; __wizzQueueUpdate({ total: true }); }'
   );
   assert.equal(
     interceptAssignments('function outer() { function inner() { count = 1; } }', ['count']),
-    'function outer() { function inner() { count = 1; queueUpdate({ count: true }); } }'
+    'function outer() { function inner() { count = 1; __wizzQueueUpdate({ count: true }); } }'
   );
 });
 
 test('intercepts statements that omit semicolons before a closing brace', () => {
   assert.equal(
     interceptAssignments('function increment() { count += 1 }', ['count']),
-    'function increment() { count += 1; queueUpdate({ count: true }); }'
+    'function increment() { count += 1; __wizzQueueUpdate({ count: true }); }'
   );
   assert.equal(
     interceptAssignments('if (ready) { count = 1 }', ['count']),
-    'if (ready) { count = 1; queueUpdate({ count: true }); }'
+    'if (ready) { count = 1; __wizzQueueUpdate({ count: true }); }'
   );
 });
 
 test('intercepts both statements when a semicolon-less mutation ends a line', () => {
   assert.equal(
     interceptAssignments('count = 1\ntotal = 2;', ['count', 'total']),
-    'count = 1; queueUpdate({ count: true });\ntotal = 2; queueUpdate({ total: true });'
+    'count = 1; __wizzQueueUpdate({ count: true });\ntotal = 2; __wizzQueueUpdate({ total: true });'
   );
 });
 
 test('treats a newline before a prefix update as a new statement', () => {
   assert.equal(
     interceptAssignments('count\n++total;', ['count', 'total']),
-    'count\n++total; queueUpdate({ total: true });'
+    'count\n++total; __wizzQueueUpdate({ total: true });'
   );
   assert.equal(
     interceptAssignments('count++\n--total;', ['count', 'total']),
-    'count++; queueUpdate({ count: true });\n--total; queueUpdate({ total: true });'
+    'count++; __wizzQueueUpdate({ count: true });\n--total; __wizzQueueUpdate({ total: true });'
   );
 });
 
@@ -296,13 +296,13 @@ test('leaves arrow parameter mutations alone when they shadow reactive state', (
 test('intercepts non-shadowed reactive names inside parameter-bearing bodies', () => {
   assert.equal(
     interceptAssignments('items.forEach((item, index) => { total += item; });', ['total']),
-    'items.forEach((item, index) => { total += item; queueUpdate({ total: true }); });'
+    'items.forEach((item, index) => { total += item; __wizzQueueUpdate({ total: true }); });'
   );
 });
 
 test('shadowing ends when the parameter-bearing body closes', () => {
   const input = 'items.map(count => { count = 1; });\ncount = 2;';
-  const expected = 'items.map(count => { count = 1; });\ncount = 2; queueUpdate({ count: true });';
+  const expected = 'items.map(count => { count = 1; });\ncount = 2; __wizzQueueUpdate({ count: true });';
 
   assert.equal(interceptAssignments(input, ['count']), expected);
 });
@@ -323,7 +323,7 @@ test('catch parameters shadow reactive state in the catch body', () => {
 test('intercepts assignments inside an arrow block body and not its condition', () => {
   assert.equal(
     interceptAssignments('const load = () => { if (ready) { count = 1; } };', ['count']),
-    'const load = () => { if (ready) { count = 1; queueUpdate({ count: true }); } };'
+    'const load = () => { if (ready) { count = 1; __wizzQueueUpdate({ count: true }); } };'
   );
 });
 
@@ -332,9 +332,9 @@ test('does not mistake division followed by a regex for one merged statement', (
   // merged these three statements, placing the notification after the regex.
   const input = 'average = total / count;\nconst re = /count = 5/;\ndone = 1;';
   const expected = [
-    'average = total / count; queueUpdate({ average: true });',
+    'average = total / count; __wizzQueueUpdate({ average: true });',
     '\nconst re = /count = 5/;\n',
-    'done = 1; queueUpdate({ done: true });'
+    'done = 1; __wizzQueueUpdate({ done: true });'
   ].join('');
 
   assert.equal(interceptAssignments(input, ['average', 'done']), expected);
@@ -342,14 +342,14 @@ test('does not mistake division followed by a regex for one merged statement', (
 
 test('does not mistake a chained division for a regex literal', () => {
   const input = 'scaled = value++ / 2 / divisor;\ndone = 1;';
-  const expected = 'scaled = value++ / 2 / divisor; queueUpdate({ scaled: true });\ndone = 1; queueUpdate({ done: true });';
+  const expected = 'scaled = value++ / 2 / divisor; __wizzQueueUpdate({ scaled: true });\ndone = 1; __wizzQueueUpdate({ done: true });';
 
   assert.equal(interceptAssignments(input, ['scaled', 'done']), expected);
 });
 
 test('rewrites statements whose values contain regex character classes', () => {
   const input = 'pattern = /a[/]b/gi.exec(text);';
-  const expected = 'pattern = /a[/]b/gi.exec(text); queueUpdate({ pattern: true });';
+  const expected = 'pattern = /a[/]b/gi.exec(text); __wizzQueueUpdate({ pattern: true });';
 
   assert.equal(interceptAssignments(input, ['pattern']), expected);
 });
@@ -357,24 +357,24 @@ test('rewrites statements whose values contain regex character classes', () => {
 test('rewrites statements containing regex literals after typeof and case', () => {
   assert.equal(
     interceptAssignments('kind = typeof /x = 1/.source;', ['kind']),
-    'kind = typeof /x = 1/.source; queueUpdate({ kind: true });'
+    'kind = typeof /x = 1/.source; __wizzQueueUpdate({ kind: true });'
   );
   assert.equal(
     interceptAssignments('switch (probe) { case /y = 2/.test(s): flag = true; }', ['flag']),
-    'switch (probe) { case /y = 2/.test(s): flag = true; queueUpdate({ flag: true }); }'
+    'switch (probe) { case /y = 2/.test(s): flag = true; __wizzQueueUpdate({ flag: true }); }'
   );
 });
 
 test('preserves template literals with interpolations and rewrites the surrounding statement', () => {
   const input = 'greeting = `Hello ${user.name}, you have ${unread} messages`;';
-  const expected = 'greeting = `Hello ${user.name}, you have ${unread} messages`; queueUpdate({ greeting: true });';
+  const expected = 'greeting = `Hello ${user.name}, you have ${unread} messages`; __wizzQueueUpdate({ greeting: true });';
 
   assert.equal(interceptAssignments(input, ['greeting']), expected);
 });
 
 test('leaves assignments inside template interpolations untransformed but rewrites the outer statement', () => {
   const input = 'label = `value: ${count = 1}`;';
-  const expected = 'label = `value: ${count = 1}`; queueUpdate({ label: true });';
+  const expected = 'label = `value: ${count = 1}`; __wizzQueueUpdate({ label: true });';
 
   assert.equal(interceptAssignments(input, ['label', 'count']), expected);
 });
@@ -382,8 +382,8 @@ test('leaves assignments inside template interpolations untransformed but rewrit
 test('handles nested template literals inside interpolations', () => {
   const input = 'markup = `<div>${ items.map(item => `<b>${item}</b>`) }</div>`;\ndone = 1;';
   const expected = [
-    'markup = `<div>${ items.map(item => `<b>${item}</b>`) }</div>`; queueUpdate({ markup: true });',
-    '\ndone = 1; queueUpdate({ done: true });'
+    'markup = `<div>${ items.map(item => `<b>${item}</b>`) }</div>`; __wizzQueueUpdate({ markup: true });',
+    '\ndone = 1; __wizzQueueUpdate({ done: true });'
   ].join('');
 
   assert.equal(interceptAssignments(input, ['markup', 'done']), expected);
@@ -391,7 +391,7 @@ test('handles nested template literals inside interpolations', () => {
 
 test('preserves escaped backticks and dollar signs while scanning templates', () => {
   const input = 'text = `a\\`b\\${c}d`;\ndone = 1;';
-  const expected = 'text = `a\\`b\\${c}d`; queueUpdate({ text: true });\ndone = 1; queueUpdate({ done: true });';
+  const expected = 'text = `a\\`b\\${c}d`; __wizzQueueUpdate({ text: true });\ndone = 1; __wizzQueueUpdate({ done: true });';
 
   assert.equal(interceptAssignments(input, ['text', 'done']), expected);
 });
@@ -399,11 +399,11 @@ test('preserves escaped backticks and dollar signs while scanning templates', ()
 test('rewrites assignments whose values are or contain templates', () => {
   assert.equal(
     interceptAssignments('label = `x`;', ['label']),
-    'label = `x`; queueUpdate({ label: true });'
+    'label = `x`; __wizzQueueUpdate({ label: true });'
   );
   assert.equal(
     interceptAssignments('page = `${section}-${index}`;', ['page']),
-    'page = `${section}-${index}`; queueUpdate({ page: true });'
+    'page = `${section}-${index}`; __wizzQueueUpdate({ page: true });'
   );
 });
 
@@ -434,14 +434,14 @@ test('does not rewrite expression-bodied arrows', () => {
 
 test('does not rewrite chained assignments beyond the first target', () => {
   const input = 'count = total = 1;';
-  const expected = 'count = total = 1; queueUpdate({ count: true });';
+  const expected = 'count = total = 1; __wizzQueueUpdate({ count: true });';
 
   assert.equal(interceptAssignments(input, ['count', 'total']), expected);
 });
 
 test('rewrites a sequence expression after its terminating semicolon', () => {
   const input = 'count = 1, other = 2;';
-  const expected = 'count = 1, other = 2; queueUpdate({ count: true });';
+  const expected = 'count = 1, other = 2; __wizzQueueUpdate({ count: true });';
 
   assert.equal(interceptAssignments(input, ['count']), expected);
 });
@@ -449,21 +449,21 @@ test('rewrites a sequence expression after its terminating semicolon', () => {
 test('rewrites statements with ternary and compound values', () => {
   assert.equal(
     interceptAssignments('count = ready ? 1 : 2;', ['count']),
-    'count = ready ? 1 : 2; queueUpdate({ count: true });'
+    'count = ready ? 1 : 2; __wizzQueueUpdate({ count: true });'
   );
   assert.equal(
     interceptAssignments('items = ready ? [1, 2] : { a: 1 };', ['items']),
-    'items = ready ? [1, 2] : { a: 1 }; queueUpdate({ items: true });'
+    'items = ready ? [1, 2] : { a: 1 }; __wizzQueueUpdate({ items: true });'
   );
   assert.equal(
     interceptAssignments('count = cond ? x : y, z;', ['count']),
-    'count = cond ? x : y, z; queueUpdate({ count: true });'
+    'count = cond ? x : y, z; __wizzQueueUpdate({ count: true });'
   );
 });
 
 test('rewrites assignments spanning multiple lines', () => {
   const input = 'count =\n  a +\n  b;';
-  const expected = 'count =\n  a +\n  b; queueUpdate({ count: true });';
+  const expected = 'count =\n  a +\n  b; __wizzQueueUpdate({ count: true });';
 
   assert.equal(interceptAssignments(input, ['count']), expected);
 });
@@ -496,30 +496,30 @@ test('does not rewrite property assignments through a receiver object', () => {
 test('rewrites element and property chains rooted at the reactive name', () => {
   assert.equal(
     interceptAssignments('items[0] = "x";', ['items']),
-    'items[0] = "x"; queueUpdate({ items: true });'
+    'items[0] = "x"; __wizzQueueUpdate({ items: true });'
   );
   assert.equal(
     interceptAssignments('user["name"] = "Ada";', ['user']),
-    'user["name"] = "Ada"; queueUpdate({ user: true });'
+    'user["name"] = "Ada"; __wizzQueueUpdate({ user: true });'
   );
   assert.equal(
     interceptAssignments('user.tags[0].label = "x";', ['user']),
-    'user.tags[0].label = "x"; queueUpdate({ user: true });'
+    'user.tags[0].label = "x"; __wizzQueueUpdate({ user: true });'
   );
   assert.equal(
     interceptAssignments('user.age++;', ['user']),
-    'user.age++; queueUpdate({ user: true });'
+    'user.age++; __wizzQueueUpdate({ user: true });'
   );
 });
 
 test('rewrites chains split across comments and newlines', () => {
   assert.equal(
     interceptAssignments('user /* which */ . name = "Ada";', ['user']),
-    'user /* which */ . name = "Ada"; queueUpdate({ user: true });'
+    'user /* which */ . name = "Ada"; __wizzQueueUpdate({ user: true });'
   );
   assert.equal(
     interceptAssignments('user\n  .name = "Ada";', ['user']),
-    'user\n  .name = "Ada"; queueUpdate({ user: true });'
+    'user\n  .name = "Ada"; __wizzQueueUpdate({ user: true });'
   );
 });
 
@@ -572,7 +572,7 @@ test('handles mutations inside comments and unterminated regions without corrupt
   const expected = [
     '// count = 1;',
     '/* count = 1; */',
-    'count = 2; queueUpdate({ count: true }); // trailing comment'
+    'count = 2; __wizzQueueUpdate({ count: true }); // trailing comment'
   ].join('\n');
 
   assert.equal(interceptAssignments(input, ['count']), expected);
@@ -580,7 +580,7 @@ test('handles mutations inside comments and unterminated regions without corrupt
 
 test('rewrites a mutation preceded by a block comment', () => {
   const input = '/* setup */ count = 1;';
-  const expected = '/* setup */ count = 1; queueUpdate({ count: true });';
+  const expected = '/* setup */ count = 1; __wizzQueueUpdate({ count: true });';
 
   assert.equal(interceptAssignments(input, ['count']), expected);
 });
@@ -589,7 +589,7 @@ test('rewrites compound operators across the full assignment family', () => {
   const operators = ['=', '+=', '-=', '*=', '/=', '%=', '**=', '&&=', '||=', '??=', '&=', '|=', '^=', '<<=', '>>=', '>>>='];
   for (const operator of operators) {
     const input = `count ${operator} 1;`;
-    const expected = `count ${operator} 1; queueUpdate({ count: true });`;
+    const expected = `count ${operator} 1; __wizzQueueUpdate({ count: true });`;
     assert.equal(interceptAssignments(input, ['count']), expected, operator);
   }
 });
@@ -613,11 +613,11 @@ test('does not treat comparison or arrow tokens as assignment operators', () => 
 test('supports underscore and unicode-adjacent identifier spellings', () => {
   assert.equal(
     interceptAssignments('_private = 1;', ['_private']),
-    '_private = 1; queueUpdate({ _private: true });'
+    '_private = 1; __wizzQueueUpdate({ _private: true });'
   );
   assert.equal(
     interceptAssignments('$total += 1;', ['$total']),
-    '$total += 1; queueUpdate({ $total: true });'
+    '$total += 1; __wizzQueueUpdate({ $total: true });'
   );
 });
 
@@ -632,7 +632,7 @@ test('executed intercepted scripts notify the dispatcher with the mutated name',
   const script = interceptAssignments('let count = 0;\nfunction increment() { count += 1; }\nincrement();', ['count']);
 
   const notifications = [];
-  new Function('queueUpdate', script)((changes) => notifications.push(changes));
+  new Function('__wizzQueueUpdate', script)((changes) => notifications.push(changes));
   assert.deepEqual(notifications, [{ count: true }]);
 });
 
@@ -641,7 +641,7 @@ test('intercepted arrow callbacks notify when executed after mounting', () => {
   assertValidJs(script);
 
   const notifications = [];
-  const run = new Function('queueUpdate', `${script}\nregister();`);
+  const run = new Function('__wizzQueueUpdate', `${script}\nregister();`);
   run((changes) => notifications.push(changes));
 
   return new Promise((resolve) => setTimeout(() => {
@@ -667,7 +667,7 @@ test('every intercepted script with string, comment, regex, and template hazards
   for (const input of scripts) {
     const output = interceptAssignments(input, ['count', 'total', 'label']);
     assert.doesNotThrow(
-      () => new Function('queueUpdate', output),
+      () => new Function('__wizzQueueUpdate', output),
       `Interception broke valid JS:\n  in:  ${input}\n  out: ${output}`
     );
   }
@@ -676,7 +676,7 @@ test('every intercepted script with string, comment, regex, and template hazards
 test('notification text matches the generated component dispatcher contract', () => {
   assert.equal(
     interceptAssignments('count = 1;', ['count']),
-    'count = 1; queueUpdate({ count: true });'
+    'count = 1; __wizzQueueUpdate({ count: true });'
   );
 });
 test('locates statement-level mutations of the given names', () => {
@@ -743,8 +743,8 @@ test('leaves mutations of block-local names unrewritten during interception', ()
   const rewritten = interceptAssignments(script, ['count']);
 
   // Only the outer component-state mutation is intercepted.
-  assert.equal(rewritten.split('queueUpdate({ count: true });').length - 1, 1);
-  assert.match(rewritten, /count = 3; queueUpdate\(\{ count: true \}\);/);
+  assert.equal(rewritten.split('__wizzQueueUpdate({ count: true });').length - 1, 1);
+  assert.match(rewritten, /count = 3; __wizzQueueUpdate\(\{ count: true \}\);/);
 });
 
 // --- Persistent write-through (milestone 17) ---
@@ -754,14 +754,14 @@ const THEME = { name: 'theme', storageKey: 'theme' };
 test('inserts a persist write after the queue notification for persistent vars', () => {
   assert.equal(
     interceptAssignments('theme = nextTheme;', ['theme'], [THEME]),
-    'theme = nextTheme; queueUpdate({ theme: true }); __wizzPersistWrite("theme", theme);'
+    'theme = nextTheme; __wizzQueueUpdate({ theme: true }); __wizzPersistWrite("theme", theme);'
   );
 });
 
 test('inserts persist writes on statements without semicolons too', () => {
   assert.equal(
     interceptAssignments('function toggle() { theme = theme === "light" ? "dark" : "light" }', ['theme'], [THEME]),
-    'function toggle() { theme = theme === "light" ? "dark" : "light"; queueUpdate({ theme: true }); __wizzPersistWrite("theme", theme); }'
+    'function toggle() { theme = theme === "light" ? "dark" : "light"; __wizzQueueUpdate({ theme: true }); __wizzPersistWrite("theme", theme); }'
   );
 });
 
@@ -774,9 +774,9 @@ test('persistent vars still emit persist writes for compound and update operator
   assert.equal(
     output,
     [
-      'volume += 2; queueUpdate({ volume: true }); __wizzPersistWrite("vol", volume);',
-      '\nstep++; queueUpdate({ step: true }); __wizzPersistWrite("step", step);',
-      '\n++step; queueUpdate({ step: true }); __wizzPersistWrite("step", step);'
+      'volume += 2; __wizzQueueUpdate({ volume: true }); __wizzPersistWrite("vol", volume);',
+      '\nstep++; __wizzQueueUpdate({ step: true }); __wizzPersistWrite("step", step);',
+      '\n++step; __wizzQueueUpdate({ step: true }); __wizzPersistWrite("step", step);'
     ].join('')
   );
 });
@@ -784,7 +784,7 @@ test('persistent vars still emit persist writes for compound and update operator
 test('writes persist keys through chains rooted at a persistent var', () => {
   assert.equal(
     interceptAssignments('settings.items[0] = "x";', ['settings'], [{ name: 'settings', storageKey: 'settings' }]),
-    'settings.items[0] = "x"; queueUpdate({ settings: true }); __wizzPersistWrite("settings", settings);'
+    'settings.items[0] = "x"; __wizzQueueUpdate({ settings: true }); __wizzPersistWrite("settings", settings);'
   );
 });
 
@@ -793,7 +793,7 @@ test('non-persistent reactive vars are intercepted without persist writes', () =
 
   assert.equal(
     output,
-    'clicks = 1; queueUpdate({ clicks: true });\ntheme = "dark"; queueUpdate({ theme: true }); __wizzPersistWrite("theme", theme);'
+    'clicks = 1; __wizzQueueUpdate({ clicks: true });\ntheme = "dark"; __wizzQueueUpdate({ theme: true }); __wizzPersistWrite("theme", theme);'
   );
   assert.equal(output.includes('__wizzPersistWrite("theme", clicks)'), false);
 });
@@ -802,7 +802,7 @@ test('persistent declarations themselves do not emit persist writes', () => {
   const input = 'let theme = "light";\ntheme = "dark";';
   const output = interceptAssignments(input, ['theme'], [THEME]);
 
-  assert.equal(output, 'let theme = "light";\ntheme = "dark"; queueUpdate({ theme: true }); __wizzPersistWrite("theme", theme);');
+  assert.equal(output, 'let theme = "light";\ntheme = "dark"; __wizzQueueUpdate({ theme: true }); __wizzPersistWrite("theme", theme);');
   assert.equal(output.split('__wizzPersistWrite').length - 1, 1);
 });
 
@@ -817,7 +817,7 @@ test('persistent interception keeps hazardous scripts valid JavaScript', () => {
   for (const input of inputs) {
     const output = interceptAssignments(input, ['theme'], [THEME]);
     assert.doesNotThrow(
-      () => new Function('queueUpdate', '__wizzPersistWrite', output),
+      () => new Function('__wizzQueueUpdate', '__wizzPersistWrite', output),
       `Interception broke valid JS:\n  in:  ${input}\n  out: ${output}`
     );
   }
@@ -832,7 +832,7 @@ test('executed persistent scripts call the write-through with the new value', ()
 
   const notifications = [];
   const writes = [];
-  new Function('queueUpdate', '__wizzPersistWrite', script)((changes) => notifications.push(changes), (key, value) => writes.push([key, value]));
+  new Function('__wizzQueueUpdate', '__wizzPersistWrite', script)((changes) => notifications.push(changes), (key, value) => writes.push([key, value]));
 
   assert.deepEqual(notifications, [{ theme: true }]);
   assert.deepEqual(writes, [['theme', 'dark']]);
@@ -854,7 +854,7 @@ function runHandler(handlerSource, initialState, event) {
     const __handler = (${handlerSource});
     const __result = __handler(__event);
     return { result: __result, state: { ${names.join(', ')} } };`;
-  const run = new Function('queueUpdate', '__wizzPersistWrite', '__state', '__event', body);
+  const run = new Function('__wizzQueueUpdate', '__wizzPersistWrite', '__state', '__event', body);
   const outcome = run((changes) => notifications.push(changes), (key, value) => writes.push([key, value]), initialState, event);
   return { ...outcome, notifications, writes };
 }
@@ -864,7 +864,7 @@ const REACTIVE = ['name', 'count', 'items'];
 test('instruments expression-bodied arrow handlers into block bodies', () => {
   assert.equal(
     interceptHandlerExpression('(e) => name = e.target.value', REACTIVE),
-    '(e) => { name = e.target.value; queueUpdate({ name: true }); }'
+    '(e) => { name = e.target.value; __wizzQueueUpdate({ name: true }); }'
   );
   const run = runHandler(interceptHandlerExpression('(e) => name = e.target.value', REACTIVE), { name: '' }, { target: { value: 'Ada' } });
   assert.deepEqual(run.notifications, [{ name: true }]);
@@ -886,11 +886,11 @@ test('instruments every assignment and update operator form inside handlers', ()
 });
 
 test('instruments single-parameter, async, and multi-line arrow heads', () => {
-  assert.match(interceptHandlerExpression('e => count = e', REACTIVE), /^e => \{ count = e; queueUpdate\(\{ count: true \}\); \}$/);
-  assert.match(interceptHandlerExpression('async (e) => count = 1', REACTIVE), /^async \(e\) => \{ count = 1; queueUpdate/);
-  assert.match(interceptHandlerExpression('async e => count = 1', REACTIVE), /^async e => \{ count = 1; queueUpdate/);
+  assert.match(interceptHandlerExpression('e => count = e', REACTIVE), /^e => \{ count = e; __wizzQueueUpdate\(\{ count: true \}\); \}$/);
+  assert.match(interceptHandlerExpression('async (e) => count = 1', REACTIVE), /^async \(e\) => \{ count = 1; __wizzQueueUpdate/);
+  assert.match(interceptHandlerExpression('async e => count = 1', REACTIVE), /^async e => \{ count = 1; __wizzQueueUpdate/);
   // `async` used as the parameter name, not the modifier.
-  assert.match(interceptHandlerExpression('async => count = async', REACTIVE), /^async => \{ count = async; queueUpdate/);
+  assert.match(interceptHandlerExpression('async => count = async', REACTIVE), /^async => \{ count = async; __wizzQueueUpdate/);
   const multiLine = interceptHandlerExpression('(\n  event\n) =>\n  count = event.detail', REACTIVE);
   assert.deepEqual(runHandler(multiLine, { count: 0 }, { detail: 7 }).state.count, 7);
 });
@@ -898,15 +898,15 @@ test('instruments single-parameter, async, and multi-line arrow heads', () => {
 test('instruments block-bodied arrows and function expressions in place', () => {
   assert.equal(
     interceptHandlerExpression('(e) => { name = e.target.value; count += 1; }', REACTIVE),
-    '(e) => { name = e.target.value; queueUpdate({ name: true }); count += 1; queueUpdate({ count: true }); }'
+    '(e) => { name = e.target.value; __wizzQueueUpdate({ name: true }); count += 1; __wizzQueueUpdate({ count: true }); }'
   );
   assert.equal(
     interceptHandlerExpression('function (e) { count = 1; }', REACTIVE),
-    'function (e) { count = 1; queueUpdate({ count: true }); }'
+    'function (e) { count = 1; __wizzQueueUpdate({ count: true }); }'
   );
   assert.equal(
     interceptHandlerExpression('function named(e) { count = 1 }', REACTIVE),
-    'function named(e) { count = 1; queueUpdate({ count: true }); }'
+    'function named(e) { count = 1; __wizzQueueUpdate({ count: true }); }'
   );
   // ASI inside a block body.
   const run = runHandler(interceptHandlerExpression('() => {\n  count = 1\n  name = "x"\n}', REACTIVE), { count: 0, name: '' });
@@ -940,7 +940,7 @@ test('arrow parameters and local declarations shadow reactive names in handlers'
   // Shadowing is per-name: an unshadowed sibling is still instrumented.
   assert.equal(
     interceptHandlerExpression('(name) => { name = 1; count = name; }', REACTIVE),
-    '(name) => { name = 1; count = name; queueUpdate({ count: true }); }'
+    '(name) => { name = 1; count = name; __wizzQueueUpdate({ count: true }); }'
   );
 });
 
@@ -993,11 +993,11 @@ test('refuses forms whose meaning would change in statement position', () => {
 test('tracks brackets, strings, and template interpolations when finding the body end', () => {
   // Commas and braces nested inside the body do not end it.
   const nested = interceptHandlerExpression('(e) => items = [...items, { id: e, label: `${e, "}"}` }]', REACTIVE);
-  assert.match(nested, /^\(e\) => \{ items = \[\.\.\.items, \{ id: e, label: `\$\{e, "\}"\}` \}\]; queueUpdate\(\{ items: true \}\); \}$/);
+  assert.match(nested, /^\(e\) => \{ items = \[\.\.\.items, \{ id: e, label: `\$\{e, "\}"\}` \}\]; __wizzQueueUpdate\(\{ items: true \}\); \}$/);
   assert.deepEqual(runHandler(nested, { items: [] }, 1).state.items, [{ id: 1, label: '}' }]);
   assert.equal(
     interceptHandlerExpression("() => name = '}'", REACTIVE),
-    "() => { name = '}'; queueUpdate({ name: true }); }"
+    "() => { name = '}'; __wizzQueueUpdate({ name: true }); }"
   );
   // Inner arrows in the body are expressions, not the handler.
   const inner = interceptHandlerExpression('() => items = items.map((x) => x + 1)', REACTIVE);
@@ -1006,11 +1006,11 @@ test('tracks brackets, strings, and template interpolations when finding the bod
 
 test('closes the block on a new line after a trailing line comment', () => {
   const source = interceptHandlerExpression('() => count = 1 // bump', REACTIVE);
-  assert.equal(source, '() => { count = 1; queueUpdate({ count: true }); // bump\n}');
+  assert.equal(source, '() => { count = 1; __wizzQueueUpdate({ count: true }); // bump\n}');
   assert.deepEqual(runHandler(source, { count: 0 }).notifications, [{ count: true }]);
   assert.equal(
     interceptHandlerExpression('() => count = 1 /* bump */', REACTIVE),
-    '() => { count = 1; queueUpdate({ count: true }); /* bump */ }'
+    '() => { count = 1; __wizzQueueUpdate({ count: true }); /* bump */ }'
   );
 });
 
@@ -1024,7 +1024,7 @@ test('every instrumented handler is a valid expression that returns undefined', 
   ]) {
     const source = interceptHandlerExpression(handler, REACTIVE);
     assert.notEqual(source, handler, handler);
-    assert.doesNotThrow(() => new Function('queueUpdate', `return (${source});`), source);
+    assert.doesNotThrow(() => new Function('__wizzQueueUpdate', `return (${source});`), source);
   }
   // Listener return values are ignored by addEventListener, so dropping the
   // expression body's value is unobservable; pin that it is dropped.

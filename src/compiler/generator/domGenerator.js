@@ -41,7 +41,7 @@ function collectComponentRefNames(templateAST, componentImports = []) {
   function walk(node) {
     if (node.type === 'Element' && importedComponents.has(node.name)
       && (node.attributes || []).some((attribute) => attribute.dynamic && attribute.dependencies?.length > 0)) {
-      refNames.push(`component_${node.componentId}`);
+      refNames.push(`__wizzComponent_${node.componentId}`);
     }
     if (node.type === 'IfBlock') {
       // The parser's `children` alias repoints to the alternate at {:else},
@@ -73,11 +73,11 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
   let nodeCounter = 0;
   const importedComponents = new Set(componentImports.map((component) => component.name));
 
-  builder.add('function create(ctx) {')
+  builder.add('function __wizzCreate(__wizzCtx) {')
         .indent()
-      .add('const childComponents = [];')
-      .add('const mountChildren = [];')
-      .add('const listUpdates = [];');
+      .add('const __wizzChildren = [];')
+      .add('const __wizzChildMounts = [];')
+      .add('const __wizzLists = [];');
 
   // A map to keep track of which JS variable name corresponds to which AST node
   const nodeVariables = new Map();
@@ -91,10 +91,10 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
       }
 
       const listId = ++nodeCounter;
-      const anchorName = `anchor_${listId}`;
-      const recordsName = `records_${listId}`;
-      const createName = `createItem_${listId}`;
-      const updateName = `updateList_${listId}`;
+      const anchorName = `__wizzAnchor_${listId}`;
+      const recordsName = `__wizzRecords_${listId}`;
+      const createName = `__wizzCreateItem_${listId}`;
+      const updateName = `__wizzUpdateList_${listId}`;
       const itemRoot = contentNodes[0];
 
       builder.add(`const ${anchorName} = document.createTextNode("");`)
@@ -104,7 +104,7 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
 
       const listNodeVariables = new Map();
       function walkListNode(listNode, listParentName) {
-        const listVarName = `node_${++nodeCounter}`;
+        const listVarName = `__wizzNode_${++nodeCounter}`;
         listNodeVariables.set(listNode, listVarName);
         if (listNode.type === 'Element') {
           if (importedComponents.has(listNode.name)) {
@@ -165,8 +165,8 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
         .add(`function ${updateName}(__wizzItems) {`).indent()
         .add('const __wizzNext = new Map();')
         .add('const __wizzSeen = new Set();')
-        .add(`__wizzItems.forEach((${node.item}${node.key ? '' : `, index_${listId}`}) => {`).indent()
-        .add(node.key ? `const __wizzKey = ${node.item}.${node.key};` : `const __wizzKey = index_${listId};`)
+        .add(`__wizzItems.forEach((${node.item}${node.key ? '' : `, __wizzIndex_${listId}`}) => {`).indent()
+        .add(node.key ? `const __wizzKey = ${node.item}.${node.key};` : `const __wizzKey = __wizzIndex_${listId};`)
         .add('if (__wizzSeen.has(__wizzKey)) throw new Error("Each block keys must be unique.");')
         .add('__wizzSeen.add(__wizzKey);')
         .add(`let __wizzRecord = ${recordsName}.get(__wizzKey);`)
@@ -180,7 +180,7 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
         .add(`__wizzNext.forEach((__wizzRecord, __wizzKey) => ${recordsName}.set(__wizzKey, __wizzRecord));`)
         .dedent().add('}')
         .add(`${updateName}(${node.collection});`)
-        .add(`listUpdates.push((changed) => { if (changed.${node.collection}) ${updateName}(${node.collection}); });`);
+        .add(`__wizzLists.push((__wizzChanged) => { if (__wizzChanged.${node.collection}) ${updateName}(${node.collection}); });`);
       return null;
     }
     if (node.type === 'IfBlock') {
@@ -196,7 +196,7 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
       return null;
     }
     nodeCounter++;
-    const varName = `node_${nodeCounter}`;
+    const varName = `__wizzNode_${nodeCounter}`;
     nodeVariables.set(node, varName);
 
     if (node.type === 'Element') {
@@ -215,18 +215,18 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
         // removed straight after, leaving the DOM hydration would adopt.
         builder.add(`const ${varName} = document.createTextNode("");`)
           .add(`${parentVarName}.appendChild(${varName});`)
-          .add('mountChildren.push(() => {').indent();
+          .add('__wizzChildMounts.push(() => {').indent();
         if (hasReactiveProps) {
           // The mounted instance is kept in a factory-scope reference so
           // update() can deliver prop changes without remounting.
           if (node.componentId == null) {
             throw compilerDiagnostic(CODES.generator.missingComponentId, `Component <${node.name}> is missing its componentId; run the analyzer before generation.`);
           }
-          const refName = `component_${node.componentId}`;
+          const refName = `__wizzComponent_${node.componentId}`;
           builder.add(`${refName} = ${node.name}(${parentVarName}, ${propsSource}, ${varName});`);
-          builder.add(`childComponents.push(${refName});`);
+          builder.add(`__wizzChildren.push(${refName});`);
         } else {
-          builder.add(`childComponents.push(${node.name}(${parentVarName}, ${propsSource}, ${varName}));`);
+          builder.add(`__wizzChildren.push(${node.name}(${parentVarName}, ${propsSource}, ${varName}));`);
         }
         builder.add(`${parentVarName}.removeChild(${varName});`)
           .dedent().add('});');
@@ -255,7 +255,7 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
             if (!handlerExpression) {
               throw compilerDiagnostic(CODES.generator.eventMissingHandler, `Event directive '${attr.name}' requires a handler expression.`);
             }
-            builder.add(`trackListener(${varName}, ${JSON.stringify(eventName)}, ${handlerSources.get(attr) ?? handlerExpression});`);
+            builder.add(`__wizzListen(${varName}, ${JSON.stringify(eventName)}, ${handlerSources.get(attr) ?? handlerExpression});`);
             return;
           }
 
@@ -297,9 +297,9 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
   }
   const rootVarName = walk(rootNode, null);
 
-    builder.add(`${rootVarName}.__wizzChildComponents = childComponents;`)
-      .add(`${rootVarName}.__wizzMountChildren = () => mountChildren.forEach((mount) => mount());`)
-      .add(`${rootVarName}.__wizzListUpdates = listUpdates;`)
+    builder.add(`${rootVarName}.__wizzChildComponents = __wizzChildren;`)
+      .add(`${rootVarName}.__wizzMountChildren = () => __wizzChildMounts.forEach((mount) => mount());`)
+      .add(`${rootVarName}.__wizzListUpdates = __wizzLists;`)
       .add(`return ${rootVarName};`)
         .dedent()
         .add('}');

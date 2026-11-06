@@ -1347,3 +1347,128 @@ test('a position argument inserts the root before that node', async (t) => {
   component.destroy();
   assert.deepEqual(target.childNodes, [footer]);
 });
+
+// --- Author names (issue #65) ---
+// Author scripts run inside the generated factory and author expressions run
+// inside its nested functions, so no generated name may be an ordinary word.
+// `names` is every unprefixed identifier generated code has used.
+const names = [
+  'target', 'props', 'hydrate', 'state', 'adoptSelf', 'headOwner', 'isMounted', 'headNodes', 'isDestroyed',
+  'batchScheduled', 'pendingChanges', 'mountHooks', 'destroyHooks', 'trackedListeners', 'trackListener',
+  'queueUpdate', 'ctx', 'create', 'update', 'rootNode', 'childComponents', 'listUpdates', 'adoptedHydration',
+  'createHeadNodes', 'createStyleNodes', 'hydrateCreate', 'mountInstance', 'mountChildren', 'mountComponent',
+  'hydrateComponent', 'hydrateRoot', 'changed', 'changes', 'problems', 'pendingListeners', 'nodes', 'node',
+  'node_1', 'node_2', 'anchor_1', 'records_1', 'createItem_1', 'updateList_1', 'index_1', 'component_1',
+  'hydrateList_1', 'fresh_1_0', 'value', 'next', 'key', 'html', 'head', 'options', 'renderComponent',
+  'serializeInitialState', 'styleNode', 'hook', 'handler'
+];
+
+const reactiveSource = (name) => `<script>\nlet ${name} = "authored";\nfunction change() { ${name} = "changed"; }\n</script>`
+  + `<main title={${name}}>{${name}}<button on:click={change}>go</button></main>`;
+
+for (const [mode, mount] of Object.entries(mountBothWays)) {
+  for (const name of names) {
+    test(`${mode}: reactive state may be named ${name}`, async (t) => {
+      const { target, component } = await mount(t, reactiveSource(name));
+      const [main] = elementsNamed(target, 'main');
+      assert.equal(main.attributes.title, 'authored');
+      assert.equal(textOf(main), 'authored');
+
+      elementsNamed(target, 'button')[0].dispatchEvent('click');
+      await flushUpdates();
+
+      assert.equal(main.attributes.title, 'changed');
+      assert.equal(textOf(main), 'changed');
+      component.destroy();
+    });
+
+    test(`${mode}: a const and a function may be named ${name}`, async (t) => {
+      const constSource = `<script>\nconst ${name} = "authored";\n</script><main>{${name}}</main>`;
+      const constant = await mount(t, constSource);
+      assert.equal(textOf(elementsNamed(constant.target, 'main')[0]), 'authored');
+      constant.component.destroy();
+
+      const functionSource = `<script>\nlet hits = 0;\nfunction ${name}() { hits += 1; }\n</script><main><button on:click={${name}}>{hits}</button></main>`;
+      const { target, component } = await mount(t, functionSource);
+      const [button] = elementsNamed(target, 'button');
+      button.dispatchEvent('click');
+      await flushUpdates();
+      assert.equal(textOf(button), '1');
+      component.destroy();
+    });
+
+    test(`${mode}: a prop may be named ${name}`, async (t) => {
+      const source = `<script>\nexport let ${name} = "authored";\n</script><main>{${name}}</main>`;
+      const { target, component } = await mount(t, source);
+      assert.equal(textOf(elementsNamed(target, 'main')[0]), 'authored');
+
+      component.setProps({ [name]: 'changed' });
+      await flushUpdates();
+
+      assert.equal(textOf(elementsNamed(target, 'main')[0]), 'changed');
+      component.destroy();
+    });
+
+    test(`${mode}: persistent state may be named ${name}`, async (t) => {
+      const source = `<script>\nlet ${name} = persist("names-${name}-${mode.length}", "authored");\nfunction change() { ${name} = "changed"; }\n</script>`
+        + `<main>{${name}}<button on:click={change}>go</button></main>`;
+      const { target, component } = await mount(t, source);
+      const [main] = elementsNamed(target, 'main');
+      assert.equal(textOf(main), 'authored');
+
+      elementsNamed(target, 'button')[0].dispatchEvent('click');
+      await flushUpdates();
+
+      assert.equal(textOf(main), 'changed');
+      component.destroy();
+    });
+
+    test(`${mode}: a list and its rows may use ${name}`, async (t) => {
+      const asCollection = await mount(t, listSource(name, 'row', true));
+      elementsNamed(asCollection.target, 'button')[0].dispatchEvent('click');
+      await flushUpdates();
+      assert.deepEqual(elementsNamed(asCollection.target, 'li').map(textOf), ['b', 'c']);
+      asCollection.component.destroy();
+
+      const rowBody = `<script>\nlet ${name} = "outer";\nlet rows = [1, 2];\n</script><main><ul>{#each rows as row}<li>{${name}}</li>{/each}</ul></main>`;
+      const { target, component } = await mount(t, rowBody);
+      assert.deepEqual(elementsNamed(target, 'li').map(textOf), ['outer', 'outer']);
+      component.destroy();
+    });
+
+    test(`${mode}: head and child props may read ${name}`, async (t) => {
+      const source = `<script>\nimport Counter from "./Counter.wizz";\nlet ${name} = "authored";\n</script>`
+        + `<wizz:head><title>{${name}}</title></wizz:head><main><Counter text={${name}} /></main>`;
+      const { target, component } = await mount(t, source, labelChildSource);
+      assert.equal(textOf(elementsNamed(target, 'span')[0]), 'authored');
+      component.destroy();
+    });
+  }
+}
+
+test('a persistent value named value receives another instance\'s write', async (t) => {
+  const source = '<script>\nlet value = persist("names-shared", "a");\nfunction change() { value = "b"; }\n</script>'
+    + '<main>{value}<button on:click={change}>go</button></main>';
+  const { document, freshClientModule } = await loadNestedModules(t, source, noChildSource);
+  const firstTarget = document.makeElement('div');
+  const secondTarget = document.makeElement('div');
+  const first = freshClientModule.default(firstTarget);
+  const second = freshClientModule.default(secondTarget);
+
+  elementsNamed(firstTarget, 'button')[0].dispatchEvent('click');
+  await flushUpdates();
+
+  assert.equal(textOf(elementsNamed(secondTarget, 'main')[0]), 'b');
+  first.destroy();
+  second.destroy();
+});
+
+test('renderComponent keeps its html, head, and state result fields', async (t) => {
+  const source = '<script>\nlet html = "a";\nlet head = "b";\nlet state = "c";\nlet options = "d";\n</script>'
+    + '<wizz:head><title>{head}</title></wizz:head><main title={options}>{html}{state}</main>';
+  const { render } = await loadNestedModules(t, source, noChildSource);
+  const { html, state } = render();
+
+  assert.match(html, /<main title="d"/);
+  assert.deepEqual({ ...state }, { html: 'a', head: 'b', state: 'c', options: 'd' });
+});

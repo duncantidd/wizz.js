@@ -162,7 +162,7 @@ test('emits an ES module default export and creates framework context getters', 
   )));
   const source = generateComponent(payload);
 
-  assert.match(source, /^export default function mountComponent\(target, props = \{\}, __wizzAnchor = null\)/m);
+  assert.match(source, /^export default function mountComponent\(__wizzHost, __wizzProps = \{\}, __wizzAnchor = null\)/m);
   assert.match(source, /get count\(\) \{ return count; \}/);
   assert.doesNotMatch(source, /get title\(\)/);
 });
@@ -197,14 +197,14 @@ test('generated modules keep the output contract surface pinned to output 1.9.0 
   )));
   const source = generateComponent(payload);
 
-  assert.match(source, /export default function mountComponent\(target, props = \{\}, __wizzAnchor = null\) \{/);
+  assert.match(source, /export default function mountComponent\(__wizzHost, __wizzProps = \{\}, __wizzAnchor = null\) \{/);
   // Components without declared props expose no setProps member.
   assert.doesNotMatch(source, /setProps/);
   assert.match(source, /return \{\n    destroy\(\) \{/);
-  assert.match(source, /target\.removeChild\(rootNode\);/);
-  assert.match(source, /\.__wizzChildComponents = childComponents;/);
-  assert.match(source, /\.__wizzMountChildren = \(\) => mountChildren\.forEach\(\(mount\) => mount\(\)\);/);
-  assert.match(source, /\.__wizzListUpdates = listUpdates;/);
+  assert.match(source, /__wizzHost\.removeChild\(__wizzRoot\);/);
+  assert.match(source, /\.__wizzChildComponents = __wizzChildren;/);
+  assert.match(source, /\.__wizzMountChildren = \(\) => __wizzChildMounts\.forEach\(\(mount\) => mount\(\)\);/);
+  assert.match(source, /\.__wizzListUpdates = __wizzLists;/);
 });
 
 test('renders non-reactive constant expressions during creation', () => {
@@ -238,7 +238,7 @@ test('intercepts reactive mutations in the emitted component script', () => {
   )));
   const source = generateComponent(payload);
 
-  assert.match(source, /count \+= 1; queueUpdate\(\{ count: true \}\);/);
+  assert.match(source, /count \+= 1; __wizzQueueUpdate\(\{ count: true \}\);/);
 });
 
 test('does not update before component initialization is complete', () => {
@@ -477,21 +477,21 @@ test('emits lifecycle hook registration machinery', () => {
   )));
   const source = generateComponent(payload);
 
-  assert.match(source, /function onMount\(hook\) \{ mountHooks\.push\(hook\); \}/);
-  assert.match(source, /function onDestroy\(hook\) \{ destroyHooks\.push\(hook\); \}/);
-  assert.match(source, /isMounted = true;\n  mountHooks\.forEach\(\(hook\) => hook\(\)\);/);
-  assert.match(source, /isDestroyed = true;\n      destroyHooks\.forEach\(\(hook\) => hook\(\)\);/);
+  assert.match(source, /function onMount\(hook\) \{ __wizzMountHooks\.push\(hook\); \}/);
+  assert.match(source, /function onDestroy\(hook\) \{ __wizzDestroyHooks\.push\(hook\); \}/);
+  assert.match(source, /__wizzMounted = true;\n  __wizzMountHooks\.forEach\(\(hook\) => hook\(\)\);/);
+  assert.match(source, /__wizzDestroyed = true;\n      __wizzDestroyHooks\.forEach\(\(hook\) => hook\(\)\);/);
 });
 
 test('runs mount hooks after mounting with the DOM attached and reactive state available', async () => {
   const payload = assignNodeIds(analyzeDependencies(parseComponent(
-    '<script>let status = "created"; function first() { target.mountLog = target.childNodes.length; } function initialize() { status = "mounted"; } onMount(first); onMount(initialize);</script><main><p>{status}</p></main>'
+    '<script>export let probe; let status = "created"; function first() { probe("mountLog"); } function initialize() { status = "mounted"; } onMount(first); onMount(initialize);</script><main><p>{status}</p></main>'
   )));
   const source = generateComponent(payload);
   const document = createDocument();
   const target = { childNodes: [], appendChild(node) { this.childNodes.push(node); }, removeChild(node) { this.childNodes.splice(this.childNodes.indexOf(node), 1); } };
   const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
-  mountComponent(target);
+  mountComponent(target, { probe: (key) => { target[key] = target.childNodes.length; } });
 
   assert.equal(target.mountLog, 1);
   assert.equal(target.childNodes[0].childNodes[0].childNodes[0].nodeValue, 'created');
@@ -516,13 +516,13 @@ test('intercepts state mutations inside inline arrow callbacks passed to hooks',
 
 test('runs destroy hooks before teardown and ignores their scheduled updates', async () => {
   const payload = assignNodeIds(analyzeDependencies(parseComponent(
-    '<script>let count = 0; function teardown() { target.destroyLog = target.childNodes.length; count += 1; } onDestroy(teardown);</script><main><button>Clicks: {count}</button></main>'
+    '<script>export let probe; let count = 0; function teardown() { probe("destroyLog"); count += 1; } onDestroy(teardown);</script><main><button>Clicks: {count}</button></main>'
   )));
   const source = generateComponent(payload);
   const document = createDocument();
   const target = { childNodes: [], appendChild(node) { this.childNodes.push(node); }, removeChild(node) { this.childNodes.splice(this.childNodes.indexOf(node), 1); } };
   const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
-  const component = mountComponent(target);
+  const component = mountComponent(target, { probe: (key) => { target[key] = target.childNodes.length; } });
   const button = document.querySelector('[data-wizz-id="1"]');
 
   component.destroy();
@@ -572,12 +572,12 @@ test('emits top-level component imports and mounts imported self-closing compone
   const source = generateComponent(payload);
 
   assert.match(source, /^import Counter from "\.\/Counter\.js";/m);
-  assert.match(source, /childComponents\.push\(Counter\(node_1, \{\}, node_\d+\)\);/);
+  assert.match(source, /__wizzChildren\.push\(Counter\(__wizzNode_1, \{\}, __wizzNode_\d+\)\);/);
   assert.match(
     source,
-    /target\.appendChild\(rootNode\);\n  rootNode\.__wizzMountChildren\(\);\n  update\(ctx, \{  \}\);/
+    /__wizzHost\.appendChild\(__wizzRoot\);\n  __wizzRoot\.__wizzMountChildren\(\);\n  __wizzUpdate\(__wizzCtx, \{  \}\);/
   );
-  assert.match(source, /childComponents\.forEach\(\(component\) => component\.destroy\(\)\);/);
+  assert.match(source, /__wizzChildren\.forEach\(\(component\) => component\.destroy\(\)\);/);
   assert.doesNotMatch(source, /document\.createElement\("Counter"\)/);
 });
 
@@ -585,7 +585,7 @@ test('passes component tag attributes as props and still rejects children and ro
   const generate = (template) => generateComponent(assignNodeIds(analyzeDependencies(parseComponent(template))));
 
   const source = generate("<script>import Counter from './Counter.wizz';</script><main><Counter label=\"Count\" /></main>");
-  assert.match(source, /childComponents\.push\(Counter\(node_1, \{ "label": "Count" \}, node_\d+\)\);/);
+  assert.match(source, /__wizzChildren\.push\(Counter\(__wizzNode_1, \{ "label": "Count" \}, __wizzNode_\d+\)\);/);
   assert.throws(
     () => generate("<script>import Counter from './Counter.wizz';</script><main><Counter>ignored</Counter></main>"),
     /Component <Counter> does not support children\./
@@ -604,12 +604,12 @@ test('emits prop bindings, the props parameter, and a setProps member for prop c
     "<script>export let name = 'Guest'; export let count;</script><p>{name} {count}</p>"
   ))));
 
-  assert.match(source, /export default function mountComponent\(target, props = \{\}, __wizzAnchor = null\) \{/);
-  assert.match(source, /let name = props\.name !== undefined \? props\.name : \('Guest'\);/);
-  assert.match(source, /let count = props\.count;/);
-  assert.match(source, /setProps\(next\) \{/);
+  assert.match(source, /export default function mountComponent\(__wizzHost, __wizzProps = \{\}, __wizzAnchor = null\) \{/);
+  assert.match(source, /let name = __wizzProps\.name !== undefined \? __wizzProps\.name : \('Guest'\);/);
+  assert.match(source, /let count = __wizzProps\.count;/);
+  assert.match(source, /setProps\(__wizzIncoming\) \{/);
   assert.match(source, /if \(!Object\.is\(name, __wizzNext\)\) \{/);
-  assert.match(source, /if \(!Object\.is\(count, next\.count\)\) \{/);
+  assert.match(source, /if \(!Object\.is\(count, __wizzIncoming\.count\)\) \{/);
 });
 
 test('rejects statement-level mutation of props with a located read-only error', () => {
@@ -644,16 +644,16 @@ test('instruments inline handler mutations in both branches of an if block', () 
   const source = generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
     '<script>let a = 1; let b = 1;</script><main>{#if a === 1}<button on:click={() => a = 2}>x</button>{:else}<button on:click={() => b = 2}>y</button>{/if}</main>'
   ))));
-  assert.match(source, /\(\) => \{ a = 2; queueUpdate\(\{ a: true \}\); \}/);
-  assert.match(source, /\(\) => \{ b = 2; queueUpdate\(\{ b: true \}\); \}/);
+  assert.match(source, /\(\) => \{ a = 2; __wizzQueueUpdate\(\{ a: true \}\); \}/);
+  assert.match(source, /\(\) => \{ b = 2; __wizzQueueUpdate\(\{ b: true \}\); \}/);
 });
 
 test('inline handlers write persistent state and leave non-mutating handlers untouched', () => {
   const source = generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
     "<script>let clicks = persist('clicks', 0); function go() {}</script><main><button on:click={() => clicks += 1}>{clicks}</button><button on:click={(e) => go(e)}>go</button></main>"
   ))));
-  assert.match(source, /\(\) => \{ clicks \+= 1; queueUpdate\(\{ clicks: true \}\); __wizzPersistWrite\("clicks", clicks\); \}/);
-  assert.match(source, /trackListener\(node_\d+, "click", \(e\) => go\(e\)\);/);
+  assert.match(source, /\(\) => \{ clicks \+= 1; __wizzQueueUpdate\(\{ clicks: true \}\); __wizzPersistWrite\("clicks", clicks\); \}/);
+  assert.match(source, /__wizzListen\(__wizzNode_\d+, "click", \(e\) => go\(e\)\);/);
 });
 
 test('allows shadowed prop names inside functions and blocks', () => {
@@ -763,9 +763,9 @@ test('emits factory-scope component references and guarded setProps calls for re
     "<script>\nimport Counter from './Counter.wizz';\nlet start = 0;\n</script><main><Counter start={start} label=\"Total\" /></main>"
   ))));
 
-  assert.match(source, /let component_1 = null;/);
-  assert.match(source, /component_1 = Counter\(node_1, \{ "start": start, "label": "Total" \}, node_\d+\);/);
-  assert.match(source, /if \(changed\.start\) \{\n      if \(component_1\) component_1\.setProps\(\{ "start": start \}\);\n    \}/);
+  assert.match(source, /let __wizzComponent_1 = null;/);
+  assert.match(source, /__wizzComponent_1 = Counter\(__wizzNode_1, \{ "start": start, "label": "Total" \}, __wizzNode_\d+\);/);
+  assert.match(source, /if \(__wizzChanged\.start\) \{\n      if \(__wizzComponent_1\) __wizzComponent_1\.setProps\(\{ "start": start \}\);\n    \}/);
 });
 
 test('keeps child component identity across parent prop updates', async () => {
@@ -828,37 +828,37 @@ test('pins the complete default output byte-for-byte for a fixed fixture', () =>
   const payload = assignNodeIds(analyzeDependencies(parseComponent(
     '<script>let count = 0;</script><main><p>static</p><p>{count}</p></main>'
   )));
-  assert.equal(generateComponent(payload), "// Generated by Wizz 1.19.0 (component syntax 1.4.2, generated output 1.10.0). Edits will be overwritten.\n\nexport default function mountComponent(target, props = {}, __wizzAnchor = null) {\n  let isMounted = false;\n  let isDestroyed = false;\n  let batchScheduled = false;\n  let pendingChanges = {};\n  const mountHooks = [];\n  const destroyHooks = [];\n  function onMount(hook) { mountHooks.push(hook); }\n  function onDestroy(hook) { destroyHooks.push(hook); }\n  const trackedListeners = [];\n  function trackListener(node, eventName, handler) {\n    node.addEventListener(eventName, handler);\n    trackedListeners.push({ node, eventName, handler });\n  }\n  function queueUpdate(changed) {\n    if (!isMounted) return;\n    pendingChanges = { ...pendingChanges, ...changed };\n    if (batchScheduled) return;\n    batchScheduled = true;\n    queueMicrotask(() => {\n      batchScheduled = false;\n      const changes = pendingChanges;\n      pendingChanges = {};\n      if (isDestroyed) return;\n      update(ctx, changes);\n    });\n  }\n  // --- Developer Logic ---\n  let count = 0;\n  \n// --- Framework Context ---\n  const ctx = {\n    get count() { return count; },\n  };\n  \n// --- DOM Creation ---\n  let __wizzTarget_1;\n  \n  function create(ctx) {\n    const childComponents = [];\n    const mountChildren = [];\n    const listUpdates = [];\n    const node_1 = document.createElement(\"main\");\n    const node_2 = document.createElement(\"p\");\n    node_1.appendChild(node_2);\n    const node_3 = document.createTextNode(\"static\");\n    node_2.appendChild(node_3);\n    const node_4 = document.createElement(\"p\");\n    node_4.setAttribute(\"data-wizz-id\", \"1\");\n    node_1.appendChild(node_4);\n    const node_5 = document.createTextNode(String(count));\n    __wizzTarget_1 = node_5;\n    node_4.appendChild(node_5);\n    node_1.__wizzChildComponents = childComponents;\n    node_1.__wizzMountChildren = () => mountChildren.forEach((mount) => mount());\n    node_1.__wizzListUpdates = listUpdates;\n    return node_1;\n  }\n  \n// --- Reactivity Engine ---\n  function update(ctx, changed) {\n    if (changed.count) {\n      __wizzTarget_1.nodeValue = String(count);\n    }\n  }\n  \n// --- Initialization ---\n  const rootNode = create(ctx);\n  const childComponents = rootNode.__wizzChildComponents;\n  const listUpdates = rootNode.__wizzListUpdates;\n  if (__wizzAnchor) target.insertBefore(rootNode, __wizzAnchor); else target.appendChild(rootNode);\n  rootNode.__wizzMountChildren();\n  update(ctx, { count: true });\n  isMounted = true;\n  mountHooks.forEach((hook) => hook());\n  \nreturn {\n    destroy() {\n      isDestroyed = true;\n      destroyHooks.forEach((hook) => hook());\n      childComponents.forEach((component) => component.destroy());\n      trackedListeners.forEach(({ node, eventName, handler }) => node.removeEventListener(eventName, handler));\n      target.removeChild(rootNode);\n    }\n  };\n}");
+  assert.equal(generateComponent(payload), "// Generated by Wizz 1.20.0 (component syntax 1.4.3, generated output 1.10.1). Edits will be overwritten.\n\nexport default function mountComponent(__wizzHost, __wizzProps = {}, __wizzAnchor = null) {\n  let __wizzMounted = false;\n  let __wizzDestroyed = false;\n  let __wizzBatched = false;\n  let __wizzPending = {};\n  const __wizzMountHooks = [];\n  const __wizzDestroyHooks = [];\n  function onMount(hook) { __wizzMountHooks.push(hook); }\n  function onDestroy(hook) { __wizzDestroyHooks.push(hook); }\n  const __wizzListeners = [];\n  function __wizzListen(node, eventName, handler) {\n    node.addEventListener(eventName, handler);\n    __wizzListeners.push({ node, eventName, handler });\n  }\n  function __wizzQueueUpdate(__wizzChanged) {\n    if (!__wizzMounted) return;\n    __wizzPending = { ...__wizzPending, ...__wizzChanged };\n    if (__wizzBatched) return;\n    __wizzBatched = true;\n    queueMicrotask(() => {\n      __wizzBatched = false;\n      const __wizzBatch = __wizzPending;\n      __wizzPending = {};\n      if (__wizzDestroyed) return;\n      __wizzUpdate(__wizzCtx, __wizzBatch);\n    });\n  }\n  // --- Developer Logic ---\n  let count = 0;\n  \n// --- Framework Context ---\n  const __wizzCtx = {\n    get count() { return count; },\n  };\n  \n// --- DOM Creation ---\n  let __wizzTarget_1;\n  \n  function __wizzCreate(__wizzCtx) {\n    const __wizzChildren = [];\n    const __wizzChildMounts = [];\n    const __wizzLists = [];\n    const __wizzNode_1 = document.createElement(\"main\");\n    const __wizzNode_2 = document.createElement(\"p\");\n    __wizzNode_1.appendChild(__wizzNode_2);\n    const __wizzNode_3 = document.createTextNode(\"static\");\n    __wizzNode_2.appendChild(__wizzNode_3);\n    const __wizzNode_4 = document.createElement(\"p\");\n    __wizzNode_4.setAttribute(\"data-wizz-id\", \"1\");\n    __wizzNode_1.appendChild(__wizzNode_4);\n    const __wizzNode_5 = document.createTextNode(String(count));\n    __wizzTarget_1 = __wizzNode_5;\n    __wizzNode_4.appendChild(__wizzNode_5);\n    __wizzNode_1.__wizzChildComponents = __wizzChildren;\n    __wizzNode_1.__wizzMountChildren = () => __wizzChildMounts.forEach((mount) => mount());\n    __wizzNode_1.__wizzListUpdates = __wizzLists;\n    return __wizzNode_1;\n  }\n  \n// --- Reactivity Engine ---\n  function __wizzUpdate(__wizzCtx, __wizzChanged) {\n    if (__wizzChanged.count) {\n      __wizzTarget_1.nodeValue = String(count);\n    }\n  }\n  \n// --- Initialization ---\n  const __wizzRoot = __wizzCreate(__wizzCtx);\n  const __wizzChildren = __wizzRoot.__wizzChildComponents;\n  const __wizzLists = __wizzRoot.__wizzListUpdates;\n  if (__wizzAnchor) __wizzHost.insertBefore(__wizzRoot, __wizzAnchor); else __wizzHost.appendChild(__wizzRoot);\n  __wizzRoot.__wizzMountChildren();\n  __wizzUpdate(__wizzCtx, { count: true });\n  __wizzMounted = true;\n  __wizzMountHooks.forEach((hook) => hook());\n  \nreturn {\n    destroy() {\n      __wizzDestroyed = true;\n      __wizzDestroyHooks.forEach((hook) => hook());\n      __wizzChildren.forEach((component) => component.destroy());\n      __wizzListeners.forEach(({ node, eventName, handler }) => node.removeEventListener(eventName, handler));\n      __wizzHost.removeChild(__wizzRoot);\n    }\n  };\n}");
 });
 
-test('hydratable compiles export both mount entries through one mountInstance', () => {
+test('hydratable compiles export both mount entries through one __wizzMountInstance', () => {
   const payload = assignNodeIds(analyzeDependencies(parseComponent(
     '<script>let count = 0; function go() {}</script><main><p>{count}</p><button on:click={go}>x</button></main>'
   )));
   const source = generateComponent(payload, { hydratable: true });
 
-  assert.match(source, /export default function mountComponent\(target, props = \{\}, __wizzAnchor = null\) \{\n  return mountInstance\(target, props, __wizzAnchor, false, null, false\);\n\}/);
-  assert.match(source, /export function hydrateComponent\(target, props = \{\}, state = null\) \{\n  return mountInstance\(target, props, null, true, state, false\);\n\}/);
+  assert.match(source, /export default function mountComponent\(__wizzHost, __wizzProps = \{\}, __wizzAnchor = null\) \{\n  return __wizzMountInstance\(__wizzHost, __wizzProps, __wizzAnchor, false, null, false\);\n\}/);
+  assert.match(source, /export function hydrateComponent\(__wizzHost, __wizzProps = \{\}, __wizzState = null\) \{\n  return __wizzMountInstance\(__wizzHost, __wizzProps, null, true, __wizzState, false\);\n\}/);
   // The nested adoption entry adopts the given node as the component root, so
   // a mismatch remounts inside it and never detaches the parent's tree.
-  assert.match(source, /export function hydrateRoot\(rootNode, props = \{\}, state = null\)/);
-  assert.match(source, /return mountInstance\(rootNode, props, null, true, state, true\);/);
-  assert.match(source, /function mountInstance\(target, props, __wizzAnchor, hydrate, state, adoptSelf\) \{/);
-  assert.match(source, /function hydrateCreate\(target, state, adoptSelf\) \{/);
-  assert.match(source, /const adoptedHydration = hydrate \? hydrateCreate\(target, state, adoptSelf\) : null;/);
-  assert.match(source, /if \(hydrate && !adoptedHydration\) return mountComponent\(target, props\);/);
-  assert.match(source, /const rootNode = hydrate \? adoptedHydration\.node : create\(ctx\);/);
+  assert.match(source, /export function hydrateRoot\(__wizzRoot, __wizzProps = \{\}, __wizzState = null\)/);
+  assert.match(source, /return __wizzMountInstance\(__wizzRoot, __wizzProps, null, true, __wizzState, true\);/);
+  assert.match(source, /function __wizzMountInstance\(__wizzHost, __wizzProps, __wizzAnchor, __wizzHydrating, __wizzState, __wizzAdoptSelf\) \{/);
+  assert.match(source, /function __wizzHydrateCreate\(__wizzHost, __wizzState, __wizzAdoptSelf\) \{/);
+  assert.match(source, /const __wizzAdopted = __wizzHydrating \? __wizzHydrateCreate\(__wizzHost, __wizzState, __wizzAdoptSelf\) : null;/);
+  assert.match(source, /if \(__wizzHydrating && !__wizzAdopted\) return __wizzMountInstance\(__wizzHost, __wizzProps, null, false, null, false\);/);
+  assert.match(source, /const __wizzRoot = __wizzHydrating \? __wizzAdopted\.node : __wizzCreate\(__wizzCtx\);/);
   // Hydration collects listeners and attaches them only after the walk passes.
-  assert.match(source, /pendingListeners\.forEach\(\(pending\) => trackListener\(pending\[0\], pending\[1\], pending\[2\]\)\);/);
+  assert.match(source, /__wizzPendingListeners\.forEach\(\(pending\) => __wizzListen\(pending\[0\], pending\[1\], pending\[2\]\)\);/);
   // A self-adopted root belongs to the parent's tree; teardown leaves it.
-  assert.match(source, /if \(!hydrate \|\| !adoptSelf\) target\.removeChild\(rootNode\);/);
+  assert.match(source, /if \(!__wizzHydrating \|\| !__wizzAdoptSelf\) __wizzHost\.removeChild\(__wizzRoot\);/);
 });
 
 test('default compiles never emit the hydration surface', () => {
   const payload = assignNodeIds(analyzeDependencies(parseComponent('<script>let count = 0;</script><main><p>{count}</p></main>')));
   const source = generateComponent(payload);
 
-  assert.doesNotMatch(source, /hydrateComponent|hydrateCreate|mountInstance/);
+  assert.doesNotMatch(source, /hydrateComponent|__wizzHydrateCreate|__wizzMountInstance/);
 });
 
 test('hydratable compiles seed non-prop reactive state from the serialized snapshot', () => {
@@ -867,9 +867,9 @@ test('hydratable compiles seed non-prop reactive state from the serialized snaps
   )));
   const source = generateComponent(payload, { hydratable: true });
 
-  assert.match(source, /if \(hydrate && state && typeof state === 'object' && !Array\.isArray\(state\)\) \{/);
-  assert.match(source, /if \(Object\.prototype\.hasOwnProperty\.call\(state, "count"\)\) count = state\["count"\];/);
-  assert.doesNotMatch(source, /hasOwnProperty\.call\(state, "label"\)/);
+  assert.match(source, /if \(__wizzHydrating && __wizzState && typeof __wizzState === 'object' && !Array\.isArray\(__wizzState\)\) \{/);
+  assert.match(source, /if \(Object\.prototype\.hasOwnProperty\.call\(__wizzState, "count"\)\) count = __wizzState\["count"\];/);
+  assert.doesNotMatch(source, /hasOwnProperty\.call\(__wizzState, "label"\)/);
 });
 
 test('hydratable compiles reject the server-renderable boundary', () => {
@@ -998,14 +998,14 @@ test('head-free component-free modules emit no head machinery', () => {
   assert.doesNotMatch(plain, /__wizzApplyHead/);
   assert.doesNotMatch(plain, /__wizzHeadOwnerSeq/);
   assert.doesNotMatch(plain, /headNodes/);
-  assert.doesNotMatch(plain, /mountInstance\(target, props, __wizzAnchor, hydrate, state, adoptSelf, headOwner\)/);
+  assert.doesNotMatch(plain, /__wizzMountInstance\(__wizzHost, __wizzProps, __wizzAnchor, __wizzHydrating, __wizzState, __wizzAdoptSelf, __wizzOwnerPath\)/);
 
   const hydratableHeadless = generateComponent(
     assignNodeIds(analyzeDependencies(parseComponent('<main><p>Hi</p></main>'))),
     { hydratable: true }
   );
   assert.doesNotMatch(hydratableHeadless, /__wizzApplyHead/);
-  assert.doesNotMatch(hydratableHeadless, /hydrateCreate\(target, state, adoptSelf, headOwner\)/);
+  assert.doesNotMatch(hydratableHeadless, /__wizzHydrateCreate\(__wizzHost, __wizzState, __wizzAdoptSelf, __wizzOwnerPath\)/);
 });
 
 test('styled components mount one scoped stylesheet and stamp data-wizz-s markup', () => {
@@ -1017,7 +1017,7 @@ test('styled components mount one scoped stylesheet and stamp data-wizz-s markup
   const target = createHeadTarget();
   const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
 
-  assert.ok(source.includes('createStyleNodes'), 'the style factory is emitted');
+  assert.ok(source.includes('__wizzCreateStyle'), 'the style factory is emitted');
   const component = mountComponent(target);
 
   const styles = document.head.childNodes.filter((node) => node.nodeName === 'STYLE');
@@ -1084,7 +1084,7 @@ test('unstyled components emit no style machinery or scope attributes', () => {
   const target = createHeadTarget();
   const mountComponent = new Function('document', `${source.replace('export default ', '')}\nreturn mountComponent;`)(document);
 
-  assert.ok(!source.includes('createStyleNodes'));
+  assert.ok(!source.includes('__wizzCreateStyle'));
   assert.ok(!source.includes('data-wizz-style'));
   mountComponent(target);
   const root = target.childNodes[0];
@@ -1101,7 +1101,7 @@ test('extractedStyles drops the injection but keeps the scope attributes', () =>
   const mountComponent = new Function('document', `${generated.replace('export default ', '')}\nreturn mountComponent;`)(document);
 
   assert.ok(!generated.includes('font-size'));
-  assert.ok(!generated.includes('createStyleNodes'));
+  assert.ok(!generated.includes('__wizzCreateStyle'));
   assert.ok(!generated.includes('__wizzApplyHead'), 'a style-only component needs no head machinery');
 
   const component = mountComponent(target);
@@ -1131,7 +1131,7 @@ test('extractedStyles only matches true: other truthy values keep the injection'
   const payload = assignNodeIds(analyzeDependencies(parseComponent(
     '<main></main><wizz:style>main { color: red }</wizz:style>'
   )));
-  assert.ok(generateComponent(payload, { extractedStyles: 'yes' }).includes('createStyleNodes'));
+  assert.ok(generateComponent(payload, { extractedStyles: 'yes' }).includes('__wizzCreateStyle'));
 });
 
 test('extractedStyles is byte-identical for a component with no style block', () => {
@@ -1203,10 +1203,10 @@ test('emits persistence helpers, read initializers, and subscription machinery f
   assert.match(source, /function __wizzPersistWrite\(key, value\)/);
   assert.match(source, /function __wizzPersistSubscribe\(key, callback\)/);
   assert.match(source, /let theme = __wizzPersistRead\("theme", \('light'\)\);/);
-  assert.match(source, /theme = theme === 'light' \? 'dark' : 'light'; queueUpdate\(\{ theme: true \}\); __wizzPersistWrite\("theme", theme\);/);
-  assert.match(source, /__wizzPersistUnsubscribe\.push\(__wizzPersistSubscribe\("theme", \(value\) => \{/);
-  assert.match(source, /if \(Object\.is\(value, theme\)\) return;\n    theme = value;\n    queueUpdate\(\{ theme: true \}\);/);
-  assert.match(source, /destroyHooks\.push\(\(\) => \{ for \(const unsubscribe of __wizzPersistUnsubscribe\) unsubscribe\(\); \}\);/);
+  assert.match(source, /theme = theme === 'light' \? 'dark' : 'light'; __wizzQueueUpdate\(\{ theme: true \}\); __wizzPersistWrite\("theme", theme\);/);
+  assert.match(source, /__wizzPersistUnsubscribe\.push\(__wizzPersistSubscribe\("theme", \(__wizzValue\) => \{/);
+  assert.match(source, /if \(Object\.is\(__wizzValue, theme\)\) return;\n    theme = __wizzValue;\n    __wizzQueueUpdate\(\{ theme: true \}\);/);
+  assert.match(source, /__wizzDestroyHooks\.push\(\(\) => \{ for \(const __wizzStop of __wizzPersistUnsubscribe\) __wizzStop\(\); \}\);/);
 });
 
 test('persist-free components emit no persistence machinery', () => {
@@ -1318,8 +1318,8 @@ test('hydratable compiles seed persistent vars for the walk and restore storage 
     "<script>let clicks = 0; let theme = persist('theme', 'light');</script><p>{clicks}{theme}</p>"
   ))), { hydratable: true });
 
-  assert.match(source, /if \(Object\.prototype\.hasOwnProperty\.call\(state, "clicks"\)\) clicks = state\["clicks"\];/);
-  assert.match(source, /if \(Object\.prototype\.hasOwnProperty\.call\(state, "theme"\)\) theme = state\["theme"\];/);
+  assert.match(source, /if \(Object\.prototype\.hasOwnProperty\.call\(__wizzState, "clicks"\)\) clicks = __wizzState\["clicks"\];/);
+  assert.match(source, /if \(Object\.prototype\.hasOwnProperty\.call\(__wizzState, "theme"\)\) theme = __wizzState\["theme"\];/);
   assert.match(source, /const __wizzPersistHydration = \{ theme: theme \};/);
 
   // Ordering contract: the storage-read values are captured before the
@@ -1328,10 +1328,10 @@ test('hydratable compiles seed persistent vars for the walk and restore storage 
   // returns but before the initial update pass syncs the adopted markup to
   // the persisted value.
   const capture = source.indexOf('const __wizzPersistHydration = {');
-  const seeding = source.indexOf('hasOwnProperty.call(state, "theme")');
-  const walkCall = source.indexOf('const adoptedHydration = hydrate ? hydrateCreate');
+  const seeding = source.indexOf('hasOwnProperty.call(__wizzState, "theme")');
+  const walkCall = source.indexOf('const __wizzAdopted = __wizzHydrating ? __wizzHydrateCreate');
   const restore = source.indexOf('theme = __wizzPersistHydration.theme;');
-  const initialUpdate = source.indexOf('update(ctx, {');
+  const initialUpdate = source.indexOf('__wizzUpdate(__wizzCtx, {');
   assert.ok(capture !== -1 && seeding > capture, 'the storage capture precedes the snapshot seeding');
   assert.ok(walkCall !== -1 && restore > walkCall, 'the restore runs after the adoption walk returns');
   assert.ok(restore !== -1 && restore < initialUpdate, 'the restore precedes the initial update pass');

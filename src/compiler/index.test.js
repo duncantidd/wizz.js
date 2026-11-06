@@ -88,7 +88,7 @@ test('returns the generated module source and its analyzed payload', () => {
     '<script>let count = 0; const title = "Total";</script><section><h1>{title}</h1><p>Count: {count + 1}</p></section>'
   );
 
-  assert.match(source, /^export default function mountComponent\(target, props = \{\}, __wizzAnchor = null\)/m);
+  assert.match(source, /^export default function mountComponent\(__wizzHost, __wizzProps = \{\}, __wizzAnchor = null\)/m);
 
   const section = payload.template.children[0];
   const heading = section.children[0];
@@ -123,7 +123,7 @@ test('emits intercepted mutations and targeted updates in the generated source',
     '<script>let count = 0; function increment() { count += 1; }</script><button on:click={increment}>Clicks: {count}</button>'
   );
 
-  assert.match(source, /count \+= 1; queueUpdate\(\{ count: true \}\);/);
+  assert.match(source, /count \+= 1; __wizzQueueUpdate\(\{ count: true \}\);/);
   assert.match(source, /__wizzTarget_\d+\.nodeValue = String\(count\);/);
   assert.doesNotMatch(source, /querySelector/);
 });
@@ -225,7 +225,7 @@ test('compileServer produces the self-contained HTML string module contract', ()
 
   // Named exports only: no default browser mount, no DOM API anywhere.
   assert.doesNotMatch(source, /export default/);
-  assert.match(source, /export function renderComponent\(props = \{\}\)/);
+  assert.match(source, /export function renderComponent\(__wizzProps = \{\}\)/);
   assert.match(source, /export \{ __wizzSerializeInitialState as serializeInitialState \};/);
   assert.doesNotMatch(source, /createElement|createTextNode|appendChild/);
   assert.match(source, /server output \d+\.\d+\.\d+/);
@@ -330,8 +330,8 @@ test('the hydratable option exports hydrateComponent and gates the surface', () 
     { hydratable: true }
   );
 
-  assert.match(source, /export default function mountComponent\(target, props = \{\}, __wizzAnchor = null\)/);
-  assert.match(source, /export function hydrateComponent\(target, props = \{\}, state = null\)/);
+  assert.match(source, /export default function mountComponent\(__wizzHost, __wizzProps = \{\}, __wizzAnchor = null\)/);
+  assert.match(source, /export function hydrateComponent\(__wizzHost, __wizzProps = \{\}, __wizzState = null\)/);
 
   // Blocks hydrate since nested hydration; the remaining gate is the
   // server-renderable component surface (vouched imports only).
@@ -346,7 +346,7 @@ test('the hydratable option exports hydrateComponent and gates the surface', () 
   const { source: defaultSource } = compile(
     '<script>let count = 0;</script><main><p>Count: {count}</p></main>'
   );
-  assert.doesNotMatch(defaultSource, /hydrateComponent|hydrateCreate/);
+  assert.doesNotMatch(defaultSource, /hydrateComponent|__wizzHydrateCreate/);
 });
 
 test('collect mode adds an empty diagnostics array to a successful compile', () => {

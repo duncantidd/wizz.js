@@ -28,7 +28,7 @@ function createDocument() {
 
 function createFrom(template) {
   const document = createDocument();
-  const create = new Function('document', `${generateCreateFunction(template)}\nreturn create;`)(document);
+  const create = new Function('document', `${generateCreateFunction(template)}\nreturn __wizzCreate;`)(document);
   return create({});
 }
 
@@ -45,8 +45,8 @@ test('assigns update targets from the nodes it creates, in branches too', () => 
     }]
   }, [], new WeakMap(), new Map([[paragraph, '__wizzTarget_1'], [text, '__wizzTarget_2']]));
 
-  assert.match(source, /const (node_\d+) = document\.createElement\("p"\);\n\s*__wizzTarget_1 = \1;/);
-  assert.match(source, /const (node_\d+) = document\.createTextNode\(String\(count\)\);\n\s*__wizzTarget_2 = \1;/);
+  assert.match(source, /const (__wizzNode_\d+) = document\.createElement\("p"\);\n\s*__wizzTarget_1 = \1;/);
+  assert.match(source, /const (__wizzNode_\d+) = document\.createTextNode\(String\(count\)\);\n\s*__wizzTarget_2 = \1;/);
 });
 
 test('emits list locals with the reserved prefix so author names cannot collide', () => {
@@ -138,7 +138,7 @@ test('emits event directives as DOM listeners rather than inline attributes', ()
     }]
   });
 
-  assert.match(source, /trackListener\(\w+, "click", handleClick\)/);
+  assert.match(source, /__wizzListen\(\w+, "click", handleClick\)/);
   assert.doesNotMatch(source, /setAttribute\("on:click"/);
   assert.doesNotMatch(source, /\w+\.addEventListener/);
 });
@@ -154,18 +154,18 @@ test('emits event handler expressions with arguments', () => {
     }]
   });
 
-  assert.match(source, /trackListener\(\w+, "click", \(event\) => increment\(event\.detail\)\)/);
+  assert.match(source, /__wizzListen\(\w+, "click", \(event\) => increment\(event\.detail\)\)/);
 });
 
 test('emits the instrumented handler source when one is supplied for the attribute', () => {
   const attribute = { name: 'on:input', value: '(e) => name = e.target.value' };
   const template = { type: 'Root', children: [{ type: 'Element', name: 'input', attributes: [attribute], children: [] }] };
-  const handlerSources = new WeakMap([[attribute, '(e) => { name = e.target.value; queueUpdate({ name: true }); }']]);
+  const handlerSources = new WeakMap([[attribute, '(e) => { name = e.target.value; __wizzQueueUpdate({ name: true }); }']]);
 
-  assert.match(generateCreateFunction(template, [], handlerSources), /trackListener\(\w+, "input", \(e\) => \{ name = e\.target\.value; queueUpdate\(\{ name: true \}\); \}\);/);
+  assert.match(generateCreateFunction(template, [], handlerSources), /__wizzListen\(\w+, "input", \(e\) => \{ name = e\.target\.value; __wizzQueueUpdate\(\{ name: true \}\); \}\);/);
   // Without an entry (or a map) the raw directive value is emitted.
-  assert.match(generateCreateFunction(template), /trackListener\(\w+, "input", \(e\) => name = e\.target\.value\);/);
-  assert.match(generateCreateFunction(template, [], new WeakMap()), /trackListener\(\w+, "input", \(e\) => name = e\.target\.value\);/);
+  assert.match(generateCreateFunction(template), /__wizzListen\(\w+, "input", \(e\) => name = e\.target\.value\);/);
+  assert.match(generateCreateFunction(template, [], new WeakMap()), /__wizzListen\(\w+, "input", \(e\) => name = e\.target\.value\);/);
 });
 
 test('rejects event directives without a handler expression', () => {
@@ -220,8 +220,8 @@ test('emits item key lookups for keyed each blocks', () => {
 test('emits index-based keys for keyless each blocks', () => {
   const source = generateCreateFunction(createEachTemplate(null, [listItem()]));
 
-  assert.match(source, /__wizzItems\.forEach\(\(item, index_\d+\) => \{/);
-  assert.match(source, /const __wizzKey = index_\d+;/);
+  assert.match(source, /__wizzItems\.forEach\(\(item, __wizzIndex_\d+\) => \{/);
+  assert.match(source, /const __wizzKey = __wizzIndex_\d+;/);
   assert.doesNotMatch(source, /const __wizzKey = item\./);
 });
 
@@ -296,9 +296,9 @@ test('emits component tags with attributes as mount calls carrying props', () =>
     }]
   }, [{ name: 'Counter', source: './Counter.wizz' }]);
 
-  assert.match(source, /mountChildren\.push\(\(\) => \{/);
-  assert.match(source, /component_1 = Counter\(node_1, \{ "label": "Total", "disabled": true, "start": count \}, node_\d+\);/);
-  assert.match(source, /childComponents\.push\(component_1\);/);
+  assert.match(source, /__wizzChildMounts\.push\(\(\) => \{/);
+  assert.match(source, /__wizzComponent_1 = Counter\(__wizzNode_1, \{ "label": "Total", "disabled": true, "start": count \}, __wizzNode_\d+\);/);
+  assert.match(source, /__wizzChildren\.push\(__wizzComponent_1\);/);
 });
 
 test('mounts prop-less component tags with a single expression and no instance reference', () => {
@@ -312,8 +312,8 @@ test('mounts prop-less component tags with a single expression and no instance r
     }]
   }, [{ name: 'Counter', source: './Counter.wizz' }]);
 
-  assert.match(source, /childComponents\.push\(Counter\(node_1, \{\}, node_\d+\)\);/);
-  assert.doesNotMatch(source, /component_1/);
+  assert.match(source, /__wizzChildren\.push\(Counter\(__wizzNode_1, \{\}, __wizzNode_\d+\)\);/);
+  assert.doesNotMatch(source, /__wizzComponent_1/);
 });
 
 test('passes reactive prop values to the child at mount time', () => {
@@ -339,7 +339,7 @@ test('passes reactive prop values to the child at mount time', () => {
     mounts.push({ target, props });
     return instance;
   };
-  const create = new Function('document', 'Counter', 'count', `${source}\nreturn create;`)(
+  const create = new Function('document', 'Counter', 'count', `${source}\nreturn __wizzCreate;`)(
     {
       createElement: (name) => ({ name, childNodes: [], appendChild() {}, removeChild() {}, setAttribute() {} }),
       createTextNode: () => ({})
@@ -380,7 +380,7 @@ test('holds a child position with a placeholder it removes once the child mounts
     placed.push({ target, anchor, nodes: [...target.nodes] });
     return { destroy() {} };
   };
-  const create = new Function('document', 'Counter', `${source}\nreturn create;`)(
+  const create = new Function('document', 'Counter', `${source}\nreturn __wizzCreate;`)(
     { createElement: () => parent, createTextNode: (value) => ({ value }) },
     Counter
   );
@@ -410,7 +410,7 @@ test('collectComponentRefNames lists refs only for tags with reactive props', ()
     }]
   };
 
-  assert.deepEqual(collectComponentRefNames(template, [{ name: 'A' }, { name: 'B' }]), ['component_1']);
+  assert.deepEqual(collectComponentRefNames(template, [{ name: 'A' }, { name: 'B' }]), ['__wizzComponent_1']);
   assert.deepEqual(collectComponentRefNames(template, [{ name: 'A' }, { name: 'B' }]), collectComponentRefNames(template, [{ name: 'A' }, { name: 'B' }]));
 });
 
@@ -438,7 +438,7 @@ test('collectComponentRefNames walks both branches of an if block with an else',
     }]
   };
 
-  assert.deepEqual(collectComponentRefNames(template, [{ name: 'A' }, { name: 'B' }]), ['component_3', 'component_4']);
+  assert.deepEqual(collectComponentRefNames(template, [{ name: 'A' }, { name: 'B' }]), ['__wizzComponent_3', '__wizzComponent_4']);
 });
 
 test('rejects children, event directives, and prototype keys on component tags', () => {

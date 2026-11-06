@@ -11,6 +11,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed — Author Names Cannot Collide With Generated Code (issue #65; compiler 1.19.0 → 1.20.0, syntax 1.4.2 → 1.4.3, output 1.10.0 → 1.10.1)
+
+#### Fixed
+
+- A reactive variable named `state` broke server rendering at runtime while the build reported the component as server-renderable (#65). The same class affected far more names in every target. `let target`, `props`, `update`, `create`, `ctx`, `rootNode`, `queueUpdate`, `isMounted` and others produced a module that failed to parse. `html`, `head`, and `options` did the same in server modules.
+- Some names failed silently instead. A persistent `value` was shadowed by the subscriber's parameter, so writes from another tab were lost. `setProps` read a prop named `next` from its own parameter. Expressions reading author variables named `changed`, `ctx`, `nodes`, `problems`, or `node_1` saw the generated value.
+- A `let document` in a script no longer fails at runtime: it is now a located diagnostic, as are the other names below.
+
+#### Changed
+
+- Every name the client, hydratable, and server generators declare around author code now carries the reserved `__wizz` prefix, so ordinary names are free. The public exports and the `{ html, head, state }` result are unchanged.
+- `props` is now a valid prop name (`propExtractor.js`): the parser refused it only because it was a generated parameter.
+- Versions: **compiler minor** for the new diagnostic, **syntax patch** because the rejected names never worked in generated code (see Migration for the one exception), **output patch** because the module surface is unchanged. `package.json` follows the compiler.
+
+#### Added
+
+- `WIZZ-G025` (`reservedNames.js`) rejects names renaming cannot free, at a script's top level or as a prop or import name: the `__wizz` prefix, `onMount`, `onDestroy`, and the globals generated code reads (`document`, `console`, `queueMicrotask`, `Array`, `Error`, `JSON`, `Map`, `Object`, `Set`, `String`). Imports are also checked against `mountComponent`, `hydrateComponent`, and `hydrateRoot`. Names inside a function or block stay allowed.
+
+#### Migration
+
+- A script that read generated names directly, which was never documented, now gets a `ReferenceError`: `target`, `props`, `ctx`, `queueUpdate`, and the rest are gone. Pass what the script needs as a prop instead.
+- A top-level `function onMount() {}` used to compile and silently replace the hook. It now fails with `WIZZ-G025`, so rename it.
+
+#### Docs
+
+- `README.md`, the MCP `language_contract`, `STRUCTURE.md`, and `src/compiler/generator/README.md` state the naming rule and the reserved list.
+
+#### Tests
+
+- `test/hydration.test.js` runs every name generated code has declared through reactive state, `const`, functions, props, persistent state, lists, row bodies, head, and child props, on fresh mount and hydration with server output. `reservedNames.test.js` covers each reserved name in every declaration form, destructuring, and the nested scopes that stay allowed. Test pins move to the prefixed names. Two hook tests that read `target` from a script now use a function prop.
+
 ### Fixed — Child Components Mount at Their Template Position (issue #66; compiler 1.18.2 → 1.19.0, output 1.9.2 → 1.10.0)
 
 #### Fixed
