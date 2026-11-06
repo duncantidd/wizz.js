@@ -209,6 +209,13 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
         }
         const propsSource = buildComponentPropsSource(node);
         const hasReactiveProps = (node.attributes || []).some((attribute) => attribute.dynamic && attribute.dependencies?.length > 0);
+
+        // Children mount after this tree is attached, so a placeholder holds
+        // the tag's position until the child inserts its root before it. It is
+        // removed straight after, leaving the DOM hydration would adopt.
+        builder.add(`const ${varName} = document.createTextNode("");`)
+          .add(`${parentVarName}.appendChild(${varName});`)
+          .add('mountChildren.push(() => {').indent();
         if (hasReactiveProps) {
           // The mounted instance is kept in a factory-scope reference so
           // update() can deliver prop changes without remounting.
@@ -216,13 +223,13 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
             throw compilerDiagnostic(CODES.generator.missingComponentId, `Component <${node.name}> is missing its componentId; run the analyzer before generation.`);
           }
           const refName = `component_${node.componentId}`;
-          builder.add('mountChildren.push(() => {').indent();
-          builder.add(`${refName} = ${node.name}(${parentVarName}, ${propsSource});`);
+          builder.add(`${refName} = ${node.name}(${parentVarName}, ${propsSource}, ${varName});`);
           builder.add(`childComponents.push(${refName});`);
-          builder.dedent().add('});');
         } else {
-          builder.add(`mountChildren.push(() => childComponents.push(${node.name}(${parentVarName}, ${propsSource})));`);
+          builder.add(`childComponents.push(${node.name}(${parentVarName}, ${propsSource}, ${varName}));`);
         }
+        builder.add(`${parentVarName}.removeChild(${varName});`)
+          .dedent().add('});');
         return null;
       }
 

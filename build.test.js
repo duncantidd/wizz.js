@@ -304,12 +304,12 @@ test('builds nested components into missing output directories', (t) => {
   );
   assert.match(
     fs.readFileSync(path.join(outputDirectory, 'App.js'), 'utf8'),
-    /^export default function mountComponent\(target, props = \{\}\)/m
+    /^export default function mountComponent\(target, props = \{\}, __wizzAnchor = null\)/m
   );
   assert.equal(fs.existsSync(path.join(outputDirectory, 'App.js.map')), false);
   assert.match(
     fs.readFileSync(path.join(outputDirectory, 'pages', 'Home.js'), 'utf8'),
-    /^export default function mountComponent\(target, props = \{\}\)/m
+    /^export default function mountComponent\(target, props = \{\}, __wizzAnchor = null\)/m
   );
   const homeSourceMap = JSON.parse(fs.readFileSync(path.join(outputDirectory, 'pages', 'Home.js.map'), 'utf8'));
   assert.equal(homeSourceMap.file, 'Home.js');
@@ -326,7 +326,7 @@ test('builds nested components into missing output directories', (t) => {
   for (const moduleName of ['App', 'pages/Home']) {
     assert.match(
       fs.readFileSync(path.join(outputDirectory, `${moduleName}.js`), 'utf8'),
-      /^export default function mountComponent\(target, props = \{\}\)/m
+      /^export default function mountComponent\(target, props = \{\}, __wizzAnchor = null\)/m
     );
     assert.match(
       fs.readFileSync(path.join(outputDirectory, `${moduleName}.server.js`), 'utf8'),
@@ -429,7 +429,7 @@ test('keeps pages whose imported component fails the gate client-only, chaining 
   assert.deepEqual(result, { compiledCount: 2, failedCount: 0 });
   assert.match(
     fs.readFileSync(path.join(outputDirectory, 'pages', 'Static.js'), 'utf8'),
-    /^export default function mountComponent\(target, props = \{\}\)/m
+    /^export default function mountComponent\(target, props = \{\}, __wizzAnchor = null\)/m
   );
   assert.equal(fs.existsSync(path.join(outputDirectory, 'pages', 'Static.server.js')), false);
   assert.equal(fs.existsSync(path.join(outputDirectory, 'pages', 'Static.hydrate.js')), false);
@@ -611,7 +611,7 @@ test('continues after invalid components and reports every failure with its path
   assert.equal(fs.existsSync(path.join(outputDirectory, 'pages', 'Broken.js')), false);
   assert.match(
     fs.readFileSync(path.join(outputDirectory, 'pages', 'Home.js'), 'utf8'),
-    /^export default function mountComponent\(target, props = \{\}\)/m
+    /^export default function mountComponent\(target, props = \{\}, __wizzAnchor = null\)/m
   );
   assert.equal(logger.errors.length, 1);
   assert.match(logger.errors[0], new RegExp(`Compilation failed for ${invalidPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:`));

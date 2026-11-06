@@ -297,7 +297,7 @@ test('emits component tags with attributes as mount calls carrying props', () =>
   }, [{ name: 'Counter', source: './Counter.wizz' }]);
 
   assert.match(source, /mountChildren\.push\(\(\) => \{/);
-  assert.match(source, /component_1 = Counter\(node_1, \{ "label": "Total", "disabled": true, "start": count \}\);/);
+  assert.match(source, /component_1 = Counter\(node_1, \{ "label": "Total", "disabled": true, "start": count \}, node_\d+\);/);
   assert.match(source, /childComponents\.push\(component_1\);/);
 });
 
@@ -312,7 +312,7 @@ test('mounts prop-less component tags with a single expression and no instance r
     }]
   }, [{ name: 'Counter', source: './Counter.wizz' }]);
 
-  assert.match(source, /mountChildren\.push\(\(\) => childComponents\.push\(Counter\(node_1, \{\}\)\)\);/);
+  assert.match(source, /childComponents\.push\(Counter\(node_1, \{\}, node_\d+\)\);/);
   assert.doesNotMatch(source, /component_1/);
 });
 
@@ -340,7 +340,10 @@ test('passes reactive prop values to the child at mount time', () => {
     return instance;
   };
   const create = new Function('document', 'Counter', 'count', `${source}\nreturn create;`)(
-    { createElement: (name) => ({ name, childNodes: [], appendChild() {}, setAttribute() {} }) },
+    {
+      createElement: (name) => ({ name, childNodes: [], appendChild() {}, removeChild() {}, setAttribute() {} }),
+      createTextNode: () => ({})
+    },
     Counter,
     7
   );
@@ -351,6 +354,45 @@ test('passes reactive prop values to the child at mount time', () => {
   assert.deepEqual(mounts[0].props, { start: 7 });
   // The mounted instance is registered for the parent-owned teardown cascade.
   assert.deepEqual(root.__wizzChildComponents, [instance]);
+});
+
+test('holds a child position with a placeholder it removes once the child mounts', () => {
+  const placed = [];
+  const parent = {
+    nodes: [],
+    setAttribute() {},
+    appendChild(node) { this.nodes.push(node); },
+    removeChild(node) { this.nodes.splice(this.nodes.indexOf(node), 1); }
+  };
+  const source = generateCreateFunction({
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'main',
+      attributes: [],
+      children: [
+        { type: 'Element', name: 'Counter', componentId: 1, attributes: [], children: [] },
+        { type: 'Text', value: 'after' }
+      ]
+    }]
+  }, [{ name: 'Counter', source: './Counter.wizz' }]);
+  const Counter = (target, props, anchor) => {
+    placed.push({ target, anchor, nodes: [...target.nodes] });
+    return { destroy() {} };
+  };
+  const create = new Function('document', 'Counter', `${source}\nreturn create;`)(
+    { createElement: () => parent, createTextNode: (value) => ({ value }) },
+    Counter
+  );
+
+  const root = create({});
+  assert.deepEqual(root.nodes.map((node) => node.value), ['', 'after']);
+
+  root.__wizzMountChildren();
+
+  assert.equal(placed[0].anchor, placed[0].nodes[0], 'the child receives the node at its position');
+  assert.equal(placed[0].target, root);
+  assert.deepEqual(root.nodes.map((node) => node.value), ['after']);
 });
 
 test('collectComponentRefNames lists refs only for tags with reactive props', () => {

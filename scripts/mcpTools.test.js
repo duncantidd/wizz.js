@@ -216,7 +216,7 @@ test('language_contract documents the version triple, language surface, and diag
   const { text } = await registry.call('language_contract', {});
   // The literal triple is pinned deliberately: a version bump fails this
   // test until the contract text has been reviewed against the compiler.
-  assert.match(text, /compiler 1\.18\.2, syntax 1\.4\.2, output 1\.9\.2/);
+  assert.match(text, /compiler 1\.19\.0, syntax 1\.4\.2, output 1\.10\.0/);
   assert.match(text, /export let/);
   assert.match(text, /onMount/);
   assert.match(text, /onDestroy/);

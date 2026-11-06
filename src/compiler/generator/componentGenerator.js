@@ -384,16 +384,19 @@ function generateComponent(astPayload, options = {}) {
   // passed to the component tag; missing keys fall back to declared defaults.
   // Hydratable modules route both public entries through one mountInstance
   // closure; the default emission is unchanged.
+  // `__wizzAnchor` is the node a parent wants this root inserted before, so a
+  // child that mounts after its parent still lands at its template position.
+  const mountSignature = 'export default function mountComponent(target, props = {}, __wizzAnchor = null) {';
   if (hydratable) {
-    builder.add('export default function mountComponent(target, props = {}) {')
+    builder.add(mountSignature)
           .indent()
-          .add('return mountInstance(target, props, false, null, false);')
+          .add('return mountInstance(target, props, __wizzAnchor, false, null, false);')
           .dedent()
           .add('}')
           .add('')
           .add('export function hydrateComponent(target, props = {}, state = null) {')
           .indent()
-          .add('return mountInstance(target, props, true, state, false);')
+          .add('return mountInstance(target, props, null, true, state, false);')
           .dedent()
           .add('}')
           .add('')
@@ -405,17 +408,17 @@ function generateComponent(astPayload, options = {}) {
           .add('// the component tag\'s position, so a mismatch remounts inside it')
           .add('// and never detaches anything from the parent tree.')
           .add(headActive
-            ? 'return mountInstance(rootNode, props, true, state, true, headOwner);'
-            : 'return mountInstance(rootNode, props, true, state, true);')
+            ? 'return mountInstance(rootNode, props, null, true, state, true, headOwner);'
+            : 'return mountInstance(rootNode, props, null, true, state, true);')
           .dedent()
           .add('}')
           .add('')
           .add(headActive
-            ? 'function mountInstance(target, props, hydrate, state, adoptSelf, headOwner) {'
-            : 'function mountInstance(target, props, hydrate, state, adoptSelf) {')
+            ? 'function mountInstance(target, props, __wizzAnchor, hydrate, state, adoptSelf, headOwner) {'
+            : 'function mountInstance(target, props, __wizzAnchor, hydrate, state, adoptSelf) {')
           .indent();
   } else {
-    builder.add('export default function mountComponent(target, props = {}) {')
+    builder.add(mountSignature)
           .indent();
   }
 
@@ -703,11 +706,12 @@ function generateComponent(astPayload, options = {}) {
   const hydrateCreateCall = headActive
     ? 'const adoptedHydration = hydrate ? hydrateCreate(target, state, adoptSelf, headOwner) : null;'
     : 'const adoptedHydration = hydrate ? hydrateCreate(target, state, adoptSelf) : null;';
+  const attachRoot = 'if (__wizzAnchor) target.insertBefore(rootNode, __wizzAnchor); else target.appendChild(rootNode);';
   if (!hydratable) {
     builder.add('const rootNode = create(ctx);')
           .add('const childComponents = rootNode.__wizzChildComponents;')
           .add('const listUpdates = rootNode.__wizzListUpdates;')
-          .add('target.appendChild(rootNode);');
+          .add(attachRoot);
     if (ownHead || ownStyle) {
       emitHeadApply(false);
     }
@@ -730,7 +734,7 @@ function generateComponent(astPayload, options = {}) {
           .add('const listUpdates = hydrate ? adoptedHydration.listUpdates : rootNode.__wizzListUpdates;')
           .add('if (!hydrate) {')
           .indent();
-    builder.add('target.appendChild(rootNode);');
+    builder.add(attachRoot);
     if (ownHead || ownStyle) {
       emitHeadApply(false);
     }

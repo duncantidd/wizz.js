@@ -8,7 +8,7 @@
 //     compiling with the same meaning. New syntax may be added in a minor
 //     version; existing syntax never changes meaning without a major bump.
 //   - `output` is the contract version of the generated module surface: the
-//     `mountComponent(target, props)` default export, the returned
+//     `mountComponent(target, props, anchor?)` default export, the returned
 //     `{ setProps?, destroy() }` handle, and the `__wizz*` root-node
 //     properties the framework consumes. Optionally — for compiles requested
 //     with the `hydratable` flag — the module additionally exports
@@ -107,9 +107,9 @@
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.18.2',
+  compiler: '1.19.0',
   syntax: '1.4.2',
-  output: '1.9.2'
+  output: '1.10.0'
 });
 
 module.exports = { VERSIONS };

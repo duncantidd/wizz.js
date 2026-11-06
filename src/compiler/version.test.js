@@ -99,11 +99,13 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // references instead of querying by id and child index (output patch: same
   // module surface, corrected write targets). compiler 1.18.2 / output 1.9.2:
   // emitted list locals carry the __wizz prefix so author names cannot collide
-  // with them (output patch).
+  // with them (output patch). compiler 1.19.0 / output 1.10.0: mountComponent
+  // takes an optional anchor so children mount at their template position
+  // (output minor: additive surface).
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.18.2',
+    compiler: '1.19.0',
     syntax: '1.4.2',
-    output: '1.9.2'
+    output: '1.10.0'
   });
 });
 

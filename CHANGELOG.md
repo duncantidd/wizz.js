@@ -11,6 +11,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed — Child Components Mount at Their Template Position (issue #66; compiler 1.18.2 → 1.19.0, output 1.9.2 → 1.10.0)
+
+#### Fixed
+
+- A fresh mount placed every child component last in its parent, so `<main><Label /><input /></main>` rendered `INPUT, SPAN` (#66). The hydrated path kept server order, so the same page's DOM depended on whether it hydrated or fell back to a client mount. Fresh mounts now produce the same DOM as hydration.
+
+#### Added
+
+- `mountComponent(target, props, anchor?)` takes an optional third argument: the root is inserted before `anchor`, and appends as before when it is omitted. Existing callers are unaffected.
+
+#### Changed
+
+- `create()` holds each component tag's position with an empty text node, passes it to the child, and removes it once the child mounts, so no placeholder stays in the DOM (`domGenerator.js`, `componentGenerator.js`). Children still mount after the parent is attached, so head order and `onMount` timing are unchanged.
+- Hydratable modules pass the anchor through `mountInstance`, whose parameter order changes. It is internal to the generated module.
+- Versions: **compiler and output minor**, because `anchor` is an additive surface. Syntax holds, and `package.json` follows the compiler.
+
+#### Migration
+
+- Code or CSS that relied on children rendering last in client-mounted pages now sees template order, which is what hydrated pages already showed.
+
+#### Tests
+
+- `test/hydration.test.js` compares fresh and hydrated DOM for children first, last, between siblings and text, adjacent, in both branches, beside lists, and nested. It also covers placeholder removal, reactive props, fallback order, grandchildren, and the `anchor` argument. `domGenerator.test.js` pins the placeholder lifecycle, and signature pins across the suite move to the new form.
+
 ### Fixed — List Name Collisions (compiler 1.18.1 → 1.18.2, output 1.9.1 → 1.9.2)
 
 #### Fixed

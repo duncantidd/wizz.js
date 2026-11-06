@@ -88,7 +88,7 @@ test('returns the generated module source and its analyzed payload', () => {
     '<script>let count = 0; const title = "Total";</script><section><h1>{title}</h1><p>Count: {count + 1}</p></section>'
   );
 
-  assert.match(source, /^export default function mountComponent\(target, props = \{\}\)/m);
+  assert.match(source, /^export default function mountComponent\(target, props = \{\}, __wizzAnchor = null\)/m);
 
   const section = payload.template.children[0];
   const heading = section.children[0];
@@ -330,7 +330,7 @@ test('the hydratable option exports hydrateComponent and gates the surface', () 
     { hydratable: true }
   );
 
-  assert.match(source, /export default function mountComponent\(target, props = \{\}\)/);
+  assert.match(source, /export default function mountComponent\(target, props = \{\}, __wizzAnchor = null\)/);
   assert.match(source, /export function hydrateComponent\(target, props = \{\}, state = null\)/);
 
   // Blocks hydrate since nested hydration; the remaining gate is the

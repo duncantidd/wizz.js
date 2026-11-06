@@ -179,7 +179,7 @@ test('a tarball install builds a project on this runtime without further steps',
     });
 
     const appModule = fs.readFileSync(path.join(projectDirectory, 'dist', 'App.js'), 'utf8');
-    assert.match(appModule, /export default function mountComponent\(target, props = \{\}\)/);
+    assert.match(appModule, /export default function mountComponent\(target, props = \{\}, __wizzAnchor = null\)/);
     assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'runtime', 'main.js')), true);
   } finally {
     fs.rmSync(workspace, { recursive: true, force: true });
