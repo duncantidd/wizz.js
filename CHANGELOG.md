@@ -11,6 +11,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed — List Name Collisions (compiler 1.18.1 → 1.18.2, output 1.9.1 → 1.9.2)
+
+#### Fixed
+
+- A hydratable `{#each items as item}` threw `Cannot access 'items' before initialization`: the adoption walk emitted `const items = items;`. Any collection named `index`, `parentRef`, `startIndex`, `nextRecords`, or `seenKeys` failed the same way or read a generated value.
+- A list item named `key`, `record`, `index`, `parentRef`, `nextRecords`, or `seenKeys` produced a module that failed to parse or threw during list updates, in client and hydratable builds. The emitted locals shared the item's scope.
+- A row expression reading an author variable named `index` or `parentRef` no longer sees the adoption walk's parameter, which failed hydration or rendered the wrong value.
+
+#### Changed
+
+- Every local in the emitted list machinery now carries the reserved `__wizz` prefix (`domGenerator.js`, `hydrationGenerator.js`). The module surface is unchanged.
+- Versions: **compiler and output patch**. Syntax holds, and `package.json` follows the compiler.
+
+#### Tests
+
+- `test/hydration.test.js` runs every colliding name as a collection and as an item, keyed and keyless, through fresh mount and hydration, plus row bodies reading author variables. `domGenerator.test.js` and `hydrationGenerator.test.js` pin the emitted names.
+
 ### Fixed — Direct Update Targets (issue #63; compiler 1.18.0 → 1.18.1, output 1.9.0 → 1.9.1)
 
 #### Fixed

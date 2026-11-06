@@ -412,11 +412,13 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
 
     // Per-item verification: the item variable is in scope, so expression
     // text is re-evaluated per item exactly as the server rendered it.
-    builder.add(`  function hydrateListItem_${listId}(${itemVar}, parentRef, index) {`).indent();
+    // Author expressions run in this scope, so its parameters and the list
+    // functions' locals below carry the reserved `__wizz` prefix.
+    builder.add(`  function hydrateListItem_${listId}(${itemVar}, __wizzParent, __wizzIndex) {`).indent();
     const rootVar = `node_${listId}_root`;
-    builder.add(`    const ${rootVar} = parentRef.childNodes[index];`);
+    builder.add(`    const ${rootVar} = __wizzParent.childNodes[__wizzIndex];`);
     builder.add(`    if (!${rootVar} || ${rootVar}.nodeType !== 1 || __wizzNodeTag(${rootVar}) !== '${itemRoot.name.toLowerCase()}') {`).indent();
-    builder.add(`      problems.push('expected <${itemRoot.name}> at index ' + index + ' of <' + __wizzNodeTag(parentRef) + '>, found ' + __wizzDescribe(${rootVar}));`);
+    builder.add(`      problems.push('expected <${itemRoot.name}> at index ' + __wizzIndex + ' of <' + __wizzNodeTag(__wizzParent) + '>, found ' + __wizzDescribe(${rootVar}));`);
     builder.add('      return null;');
     builder.dedent().add('    }');
     itemVars.set(itemRoot, rootVar);
@@ -535,45 +537,45 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     builder.dedent().add('  }');
 
     builder.add(`  function hydrateUpdateList_${listId}() {`).indent();
-    builder.add(`    const items = ${node.collection};`);
-    builder.add('    const nextRecords = new Map();');
-    builder.add('    const seenKeys = new Set();');
-    builder.add(`    items.forEach((${itemVar}${node.key ? '' : `, ${keylessIndex}`}) => {`).indent();
-    builder.add(node.key ? `      const key = ${itemVar}.${node.key};` : `      const key = ${keylessIndex};`);
-    builder.add('      if (seenKeys.has(key)) throw new Error("Each block keys must be unique.");');
-    builder.add('      seenKeys.add(key);');
-    builder.add(`      let record = ${recordsRef}.get(key);`);
-    builder.add(`      if (record) record.update(${itemVar});`);
-    builder.add(`      else record = hydrateCreateFreshItem_${listId}(${itemVar});`);
-    builder.add(`      ${anchorRef}.parentNode.insertBefore(record.node, ${anchorRef});`);
-    builder.add('      nextRecords.set(key, record);');
+    builder.add(`    const __wizzItems = ${node.collection};`);
+    builder.add('    const __wizzNext = new Map();');
+    builder.add('    const __wizzSeen = new Set();');
+    builder.add(`    __wizzItems.forEach((${itemVar}${node.key ? '' : `, ${keylessIndex}`}) => {`).indent();
+    builder.add(node.key ? `      const __wizzKey = ${itemVar}.${node.key};` : `      const __wizzKey = ${keylessIndex};`);
+    builder.add('      if (__wizzSeen.has(__wizzKey)) throw new Error("Each block keys must be unique.");');
+    builder.add('      __wizzSeen.add(__wizzKey);');
+    builder.add(`      let __wizzRecord = ${recordsRef}.get(__wizzKey);`);
+    builder.add(`      if (__wizzRecord) __wizzRecord.update(${itemVar});`);
+    builder.add(`      else __wizzRecord = hydrateCreateFreshItem_${listId}(${itemVar});`);
+    builder.add(`      ${anchorRef}.parentNode.insertBefore(__wizzRecord.node, ${anchorRef});`);
+    builder.add('      __wizzNext.set(__wizzKey, __wizzRecord);');
     builder.dedent().add('    });');
-    builder.add(`    ${recordsRef}.forEach((record, key) => { if (!nextRecords.has(key)) ${anchorRef}.parentNode.removeChild(record.node); });`);
+    builder.add(`    ${recordsRef}.forEach((__wizzRecord, __wizzKey) => { if (!__wizzNext.has(__wizzKey)) ${anchorRef}.parentNode.removeChild(__wizzRecord.node); });`);
     builder.add(`    ${recordsRef}.clear();`);
-    builder.add(`    nextRecords.forEach((record, key) => ${recordsRef}.set(key, record));`);
+    builder.add(`    __wizzNext.forEach((__wizzRecord, __wizzKey) => ${recordsRef}.set(__wizzKey, __wizzRecord));`);
     builder.dedent().add('  }');
 
-    builder.add(`  function hydrateList_${listId}(parentRef, startIndex) {`).indent();
-    builder.add(`    const items = ${node.collection};`);
-    builder.add('    let index = startIndex;');
-    builder.add(`    items.forEach((${itemVar}${node.key ? '' : `, ${keylessIndex}`}) => {`).indent();
+    builder.add(`  function hydrateList_${listId}(__wizzParent, __wizzStart) {`).indent();
+    builder.add(`    const __wizzItems = ${node.collection};`);
+    builder.add('    let __wizzIndex = __wizzStart;');
+    builder.add(`    __wizzItems.forEach((${itemVar}${node.key ? '' : `, ${keylessIndex}`}) => {`).indent();
     builder.add('      if (problems.length > 0) return;');
-    builder.add(node.key ? `      const key = ${itemVar}.${node.key};` : `      const key = ${keylessIndex};`);
-    builder.add(`      if (${recordsRef}.has(key)) problems.push('Each block keys must be unique.');`);
-    builder.add(`      const record = hydrateListItem_${listId}(${itemVar}, parentRef, index);`);
-    builder.add('      if (record) {');
-    builder.add(`        ${recordsRef}.set(key, record);`);
-    builder.add('        index += 1;');
+    builder.add(node.key ? `      const __wizzKey = ${itemVar}.${node.key};` : `      const __wizzKey = ${keylessIndex};`);
+    builder.add(`      if (${recordsRef}.has(__wizzKey)) problems.push('Each block keys must be unique.');`);
+    builder.add(`      const __wizzRecord = hydrateListItem_${listId}(${itemVar}, __wizzParent, __wizzIndex);`);
+    builder.add('      if (__wizzRecord) {');
+    builder.add(`        ${recordsRef}.set(__wizzKey, __wizzRecord);`);
+    builder.add('        __wizzIndex += 1;');
     builder.add('      }');
     builder.dedent().add('    });');
     // The anchor must exist for future positional updates but cannot survive
     // HTML serialization, so hydration creates it after the adopted run.
     builder.add(`    ${anchorRef} = document.createTextNode('');`);
-    builder.add(`    parentRef.insertBefore(${anchorRef}, parentRef.childNodes[index] || null);`);
+    builder.add(`    __wizzParent.insertBefore(${anchorRef}, __wizzParent.childNodes[__wizzIndex] || null);`);
     builder.add(`    listUpdates.push((changed) => { if (changed.${node.collection}) hydrateUpdateList_${listId}(); });`);
-    // The created anchor occupies a real child position of parentRef (and
+    // The created anchor occupies a real child position of the parent (and
     // shifts any following siblings), so the consumed count includes it.
-    builder.add('    return index - startIndex + 1;');
+    builder.add('    return __wizzIndex - __wizzStart + 1;');
     builder.dedent().add('  }');
   }
 

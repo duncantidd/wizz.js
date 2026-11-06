@@ -49,6 +49,28 @@ test('assigns update targets from the nodes it creates, in branches too', () => 
   assert.match(source, /const (node_\d+) = document\.createTextNode\(String\(count\)\);\n\s*__wizzTarget_2 = \1;/);
 });
 
+test('emits list locals with the reserved prefix so author names cannot collide', () => {
+  const source = generateCreateFunction({
+    type: 'Root',
+    children: [{
+      type: 'Element',
+      name: 'ul',
+      attributes: [],
+      children: [{
+        type: 'EachBlock',
+        item: 'row',
+        collection: 'rows',
+        key: 'id',
+        children: [{ type: 'Element', name: 'li', attributes: [], children: [] }]
+      }]
+    }]
+  });
+  const code = source.replace(/"[^"]*"/g, '""');
+
+  assert.match(code, /__wizzItems\.forEach/);
+  assert.doesNotMatch(code, /\b(?:items|nextRecords|seenKeys|record|key|parentRef|startIndex)\b/);
+});
+
 test('assigns no targets by default', () => {
   const source = generateCreateFunction({
     type: 'Root',
@@ -191,16 +213,16 @@ const listItem = () => ({ type: 'Element', name: 'li', attributes: [], children:
 test('emits item key lookups for keyed each blocks', () => {
   const source = generateCreateFunction(createEachTemplate('id', [listItem()]));
 
-  assert.match(source, /items\.forEach\(\(item\) => \{/);
-  assert.match(source, /const key = item\.id;/);
+  assert.match(source, /__wizzItems\.forEach\(\(item\) => \{/);
+  assert.match(source, /const __wizzKey = item\.id;/);
 });
 
 test('emits index-based keys for keyless each blocks', () => {
   const source = generateCreateFunction(createEachTemplate(null, [listItem()]));
 
-  assert.match(source, /items\.forEach\(\(item, index_\d+\) => \{/);
-  assert.match(source, /const key = index_\d+;/);
-  assert.doesNotMatch(source, /const key = item\./);
+  assert.match(source, /__wizzItems\.forEach\(\(item, index_\d+\) => \{/);
+  assert.match(source, /const __wizzKey = index_\d+;/);
+  assert.doesNotMatch(source, /const __wizzKey = item\./);
 });
 
 test('ignores formatting whitespace when counting each block root elements', () => {

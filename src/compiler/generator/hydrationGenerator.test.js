@@ -225,9 +225,9 @@ test('emits per-list machinery for each blocks', () => {
     '<script>let fruits = [{ id: 1, name: "apple" }];</script><ul>{#each fruits as fruit (fruit.id)}<li>{fruit.name}</li>{/each}</ul>'
   );
 
-  assert.match(source, /function hydrateList_1\(parentRef, startIndex\) \{/);
-  assert.match(source, /const key = fruit\.id;/);
-  assert.match(source, /if \(records_1\.has\(key\)\) problems\.push\('Each block keys must be unique\.'\);/);
+  assert.match(source, /function hydrateList_1\(__wizzParent, __wizzStart\) \{/);
+  assert.match(source, /const __wizzKey = fruit\.id;/);
+  assert.match(source, /if \(records_1\.has\(__wizzKey\)\) problems\.push\('Each block keys must be unique\.'\);/);
   // The anchor is created during hydration: an empty text node cannot
   // survive HTML serialization.
   assert.match(source, /anchor_1 = document\.parentNode\.createTextNode|anchor_1 = document\.createTextNode\(''\);/);
@@ -629,6 +629,16 @@ test('emits the head adoption walk only when head markup or component tags exist
     { componentServerRenderable: { Counter: true } }
   );
   assert.match(withChild, /__wizzHeadOwner \+ "\/1"/);
+});
+
+test('emits list locals with the reserved prefix so author names cannot collide', () => {
+  const source = generateComponent(assignNodeIds(analyzeDependencies(parseComponent(
+    '<script>let items = [{ id: 1 }];</script><ul>{#each items as row (row.id)}<li>{row.id}</li>{/each}</ul>'
+  ))), { hydratable: true });
+  const lists = source.slice(source.indexOf('function hydrateListItem_1'), source.indexOf('function update('));
+
+  assert.match(lists, /const __wizzItems = items;/);
+  assert.doesNotMatch(lists, /\bconst items\b|\bparentRef\b|\bnextRecords\b|\bseenKeys\b|\bstartIndex\b/);
 });
 
 test('captures an update target for every reactive node it adopts', () => {

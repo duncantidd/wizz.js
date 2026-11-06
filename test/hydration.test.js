@@ -1165,3 +1165,54 @@ test('a failed adoption discards captured targets and the fallback captures its 
   component.destroy();
   assert.deepEqual(target.childNodes, []);
 });
+
+// --- List locals ---
+// The emitted list machinery runs beside author expressions, so its own locals
+// must not share a name with a collection, an item, or a variable a row reads.
+const listSource = (collection, item, keyed) => `<script>
+let ${collection} = [{ id: 1, text: "a" }];
+function grow() { ${collection} = [{ id: 1, text: "b" }, { id: 2, text: "c" }]; }
+</script><main><ul>{#each ${collection} as ${item}${keyed ? ` (${item}.id)` : ''}}<li>{${item}.text}</li>{/each}</ul><button on:click={grow}>g</button></main>`;
+
+const collidingNames = ['items', 'key', 'record', 'index', 'parentRef', 'startIndex', 'nextRecords', 'seenKeys'];
+
+for (const [mode, mount] of Object.entries(mountBothWays)) {
+  for (const keyed of [true, false]) {
+    const flavour = keyed ? 'keyed' : 'keyless';
+
+    for (const name of collidingNames) {
+      test(`${mode}: a ${flavour} collection named ${name} renders and updates`, async (t) => {
+        const { target, component } = await mount(t, listSource(name, 'row', keyed));
+        assert.deepEqual(elementsNamed(target, 'li').map(textOf), ['a']);
+
+        elementsNamed(target, 'button')[0].dispatchEvent('click');
+        await flushUpdates();
+
+        assert.deepEqual(elementsNamed(target, 'li').map(textOf), ['b', 'c']);
+        component.destroy();
+      });
+
+      test(`${mode}: a ${flavour} list item named ${name} renders and updates`, async (t) => {
+        const { target, component } = await mount(t, listSource('rows', name, keyed));
+        assert.deepEqual(elementsNamed(target, 'li').map(textOf), ['a']);
+
+        elementsNamed(target, 'button')[0].dispatchEvent('click');
+        await flushUpdates();
+
+        assert.deepEqual(elementsNamed(target, 'li').map(textOf), ['b', 'c']);
+        component.destroy();
+      });
+    }
+  }
+
+  for (const name of ['index', 'parentRef']) {
+    test(`${mode}: a row body reads the author's ${name}, not a generated local`, async (t) => {
+      const parentSource = `<script>\nlet ${name} = "outer";\nlet rows = [1, 2];\n</script>`
+        + `<main><ul>{#each rows as row}<li>{${name}}</li>{/each}</ul></main>`;
+      const { target, component } = await mount(t, parentSource);
+
+      assert.deepEqual(elementsNamed(target, 'li').map(textOf), ['outer', 'outer']);
+      component.destroy();
+    });
+  }
+}
