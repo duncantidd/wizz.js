@@ -840,3 +840,68 @@ test('nested head adoption claims the child slice by owner path', async () => {
   assert.deepEqual(document.head.childNodes.filter((node) => node.nodeName === 'TITLE').map((node) => node.textContent || ''), [],
     'both adopted heads are released on destroy');
 });
+
+// --- Dynamic attribute policy (issue #72) ---
+
+function hydrateWithDeliveredMeta(metaAttributes) {
+  const componentSource = '<wizz:head><title>T</title><meta content={d} hidden={h} name={n}></wizz:head><main><p>{m}</p></main><script>let d = undefined; let h = false; let n = "x"; let m = "M";</' + 'script>';
+  const document = createDocument();
+  const { hydrateComponent } = new Function(
+    'document',
+    stripModule(generateHydratable(componentSource)) + '\nreturn { mountComponent, hydrateComponent, hydrateRoot };'
+  )(document);
+
+  document.head.appendChild(document.createComment('wizz:head-start'));
+  const title = document.createElement('title');
+  title.setAttribute('data-wizz-head-id', 'r');
+  title.textContent = 'T';
+  document.head.appendChild(title);
+  const meta = document.createElement('meta');
+  meta.setAttribute('data-wizz-head-id', 'r');
+  for (const [name, value] of Object.entries(metaAttributes)) meta.setAttribute(name, value);
+  document.head.appendChild(meta);
+  document.head.appendChild(document.createComment('wizz:head-end'));
+
+  const main = document.createElement('main');
+  const p = document.createElement('p');
+  p.setAttribute('data-wizz-id', '1');
+  p.childNodes.push(document.createTextNode('M'));
+  main.childNodes.push(p);
+  const target = createHeadTarget();
+  target.childNodes.push(main);
+
+  const warnings = [];
+  const originalWarn = console.warn;
+  console.warn = (message) => warnings.push(message);
+  try {
+    const elementsBefore = document.metrics.elements;
+    const component = hydrateComponent(target, {}, { d: undefined, h: false, n: 'x', m: 'M' });
+    return { component, warnings, created: document.metrics.elements - elementsBefore, meta };
+  } finally {
+    console.warn = originalWarn;
+  }
+}
+
+test('head verification accepts delivered markup that omits removed attributes', () => {
+  const { component, warnings, created, meta } = hydrateWithDeliveredMeta({ name: 'x' });
+  assert.ok(component);
+  assert.deepEqual(warnings, []);
+  assert.equal(created, 0, 'adoption creates no nodes');
+  assert.equal(meta.attributes['data-wizz-head'] != null, true, 'the delivered meta was claimed');
+});
+
+test('head verification rejects stringified "undefined" and "false" from older server output', () => {
+  for (const delivered of [{ name: 'x', content: 'undefined' }, { name: 'x', hidden: 'false' }]) {
+    const { component, warnings } = hydrateWithDeliveredMeta(delivered);
+    assert.ok(component, 'the fallback mount succeeds');
+    assert.equal(warnings.length, 1, JSON.stringify(delivered));
+  }
+});
+
+test('hydratable list items write boolean attributes through the helper', () => {
+  const source = generateHydratable("<script>let rows = [{ id: 1, done: false }];</script><ul>{#each rows as row (row.id)}<li hidden={row.done}>{row.id}</li>{/each}</ul>");
+  const fresh = source.slice(source.indexOf('function __wizzCreateFreshItem_1'), source.indexOf('function __wizzHydrateUpdateList_1'));
+  assert.match(fresh, /__wizzAttr\(__wizzFresh_1_0, "hidden", row\.done, 1\);/);
+  assert.doesNotMatch(source, /setAttribute\("hidden", String/);
+  assert.equal((source.match(/function __wizzAttr\(/g) || []).length, 1);
+});

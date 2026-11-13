@@ -102,14 +102,27 @@
 // the option is byte-identical apart from the version header, so syntax
 // holds.
 //
+// compiler 1.21.0 / output 1.11.0: dynamic attribute policy (issue #72).
+// HTML boolean attributes written from an expression are present when the
+// value is truthy and removed when it is falsy (`hidden={false}` no longer
+// renders `hidden="false"`); every other dynamic attribute is removed for
+// null/undefined instead of rendering "null"/"undefined". `false` still
+// renders "false" outside the boolean list so enumerated attributes such as
+// aria-* keep their meaning. Client create/update, each items, hydration,
+// head nodes, and server markup all follow attributePolicy.js. Output minor:
+// generated attribute writes change and modules gain the module-scope
+// `__wizzAttr` helper when they need it; the module surface is unchanged.
+// Syntax holds: the template grammar and directives accept exactly what they
+// did, and what a dynamic attribute renders is part of the output contract.
+//
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.20.0',
+  compiler: '1.21.0',
   syntax: '1.4.3',
-  output: '1.10.1'
+  output: '1.11.0'
 });
 
 module.exports = { VERSIONS };

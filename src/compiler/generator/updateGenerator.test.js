@@ -1,12 +1,13 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { generateUpdateFunction, collectUpdateTargets } = require('./updateGenerator');
+const { __wizzAttr } = require('./attributePolicy');
 
 // Everything update() closes over is supplied by name: reactive bindings,
 // component instances, and the __wizzTarget_N variables create() would assign.
 function createUpdate(template, scope = {}) {
   const names = Object.keys(scope);
-  return new Function(...names, `${generateUpdateFunction(template)}\nreturn __wizzUpdate;`)(
+  return new Function(...names, `${__wizzAttr.toString()}\n${generateUpdateFunction(template)}\nreturn __wizzUpdate;`)(
     ...names.map((name) => scope[name])
   );
 }
@@ -80,7 +81,7 @@ test('writes through captured targets and never queries the DOM', () => {
     reactiveAttribute('title', 'count')
   ])));
 
-  assert.match(source, /__wizzTarget_1\.setAttribute/);
+  assert.match(source, /__wizzAttr\(__wizzTarget_1, "title", count\);/);
   assert.match(source, /__wizzTarget_2\.nodeValue = String\(count\);/);
   assert.doesNotMatch(source, /querySelector|childNodes|__wizzRoot|data-wizz-id/);
 });
@@ -104,7 +105,7 @@ test('guards writes inside a branch and only those', () => {
   assert.doesNotThrow(() => update({}, { count: true, other: true }));
 
   const source = generateUpdateFunction(template);
-  assert.match(source, /if \(__wizzTarget_1\) __wizzTarget_1\.setAttribute/);
+  assert.match(source, /if \(__wizzTarget_1\) __wizzAttr\(__wizzTarget_1, /);
   assert.match(source, /if \(__wizzTarget_3\) __wizzTarget_3\.nodeValue/);
   assert.match(source, /^\s*__wizzTarget_4\.nodeValue/m);
 });
@@ -262,4 +263,49 @@ test('emits setProps for component tags inside conditional branches', () => {
   update({}, { count: true });
 
   assert.deepEqual(calls, [{ start: 5 }]);
+});
+
+// --- Dynamic attribute policy (issue #72) ---
+
+test('update() toggles boolean attributes and removes null/undefined attributes', () => {
+  const node = {
+    attributes: Object.create(null),
+    setAttribute(name, value) { this.attributes[name] = value; },
+    removeAttribute(name) { delete this.attributes[name]; }
+  };
+  const scope = { __wizzTarget_1: node, open: true, tip: 'hint', pressed: false };
+  const template = root(element('details', [], [
+    reactiveAttribute('open', 'open'),
+    reactiveAttribute('title', 'tip'),
+    reactiveAttribute('aria-pressed', 'pressed')
+  ]));
+  let update = createUpdate(template, scope);
+  update({}, { open: true, tip: true, pressed: true });
+  assert.deepEqual({ ...node.attributes }, { open: '', title: 'hint', 'aria-pressed': 'false' });
+
+  update = createUpdate(template, { ...scope, open: false, tip: null, pressed: true });
+  update({}, { open: true, tip: true, pressed: true });
+  assert.deepEqual({ ...node.attributes }, { 'aria-pressed': 'true' });
+
+  update = createUpdate(template, { ...scope, open: 'false', tip: undefined, pressed: null });
+  update({}, { open: true, tip: true, pressed: true });
+  assert.deepEqual({ ...node.attributes }, { open: '' }, 'the string "false" is truthy; null/undefined remove');
+});
+
+test('update() only writes attributes whose dependency changed', () => {
+  const calls = [];
+  const node = {
+    setAttribute(name) { calls.push(['set', name]); },
+    removeAttribute(name) { calls.push(['remove', name]); }
+  };
+  const update = createUpdate(root(element('p', [], [reactiveAttribute('hidden', 'a'), reactiveAttribute('title', 'b')])), { __wizzTarget_1: node, a: false, b: 'x' });
+  update({}, { a: true });
+  assert.deepEqual(calls, [['remove', 'hidden']]);
+});
+
+test('update() emits helper calls with the boolean flag only for boolean names', () => {
+  const source = generateUpdateFunction(root(element('p', [], [reactiveAttribute('HIDDEN', 'a'), reactiveAttribute('aria-hidden', 'a'), reactiveAttribute('Checked', 'a')])));
+  assert.match(source, /__wizzAttr\(__wizzTarget_1, "HIDDEN", a, 1\);/);
+  assert.match(source, /__wizzAttr\(__wizzTarget_1, "aria-hidden", a\);/);
+  assert.match(source, /__wizzTarget_1\.checked = a;/);
 });

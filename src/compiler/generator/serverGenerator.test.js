@@ -854,3 +854,35 @@ test('void elements still ship without an end tag', async () => {
 
   assert.equal(html, '<p>a<br>b<input></p>');
 });
+
+// --- Dynamic attribute policy (issue #72) ---
+
+test('omits falsy boolean attributes and null/undefined attributes, keeping "false" elsewhere', async () => {
+  const { html } = await renderSource(
+    '<script>let isValid = false; let tip = null; let gone = undefined; let zero = 0;</script>'
+    + '<p hidden={isValid} title={tip} lang={gone} aria-expanded={isValid} data-n={zero} required={zero} open={tip}>x</p>'
+  );
+  assert.equal(html, '<p aria-expanded="false" data-n="0" data-wizz-id="1">x</p>');
+});
+
+test('renders truthy boolean attributes bare and escapes non-boolean values', async () => {
+  const { html } = await renderSource(
+    "<script>let on = 'false'; let tip = '\"><script>alert(1)</' + 'script>';</script>"
+    + '<details open={on} title={tip} HIDDEN={on}><summary>s</summary></details>'
+  );
+  assert.equal(html, '<details open title="&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;" HIDDEN data-wizz-id="1"><summary>s</summary></details>');
+});
+
+test('evaluates each dynamic attribute expression once per render', async () => {
+  const moduleSource = generateServer('<script>let s = { n: 0, get v() { this.n += 1; return this.n; } };</script><p hidden={s.v} title={s.v}>x</p>');
+  const mod = await loadServerModule(moduleSource);
+  assert.equal(mod.renderComponent({}).html, '<p hidden title="2" data-wizz-id="1">x</p>');
+});
+
+test('head attributes follow the same policy as body attributes', async () => {
+  const { head } = await renderSource(
+    '<script>\nlet robots = undefined;\nlet hide = false;\nlet label = false;\n</script><wizz:head><meta name="robots" content={robots}><link rel="x" hidden={hide} title={label}></wizz:head><main></main>'
+  );
+  assert.doesNotMatch(head, /content=|hidden/);
+  assert.match(head, /<link [^>]*rel="x" title="false">/);
+});

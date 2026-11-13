@@ -14,6 +14,7 @@ const { assertAuthorNames } = require('./reservedNames');
 const { generateHydrationFunction } = require('./hydrationGenerator');
 const { scopeCss } = require('../analyzer/cssScanner.js');
 const { VERSIONS } = require('../version.js');
+const { attributeWriteSource, needsAttributeHelper, __wizzAttr } = require('./attributePolicy');
 
 // Defined flush-left and emitted verbatim via Function.prototype.toString so
 // the generated module carries exactly this head-management implementation
@@ -366,6 +367,17 @@ function generateComponent(astPayload, options = {}) {
     builder.add('');
   }
 
+  // The dynamic-attribute writer (see attributePolicy.js) is emitted only when
+  // some native element — body or head — carries a dynamic attribute it
+  // writes, so components without one keep byte-identical output.
+  const componentNames = new Set(componentImports.map(({ name }) => name));
+  if (needsAttributeHelper(astPayload.template, { componentNames })
+    || (ownHead && needsAttributeHelper(astPayload.head, { properties: false }))) {
+    builder.add('// --- Attribute Helper ---');
+    builder.add(__wizzAttr.toString());
+    builder.add('');
+  }
+
   // Persistent state helpers are emitted from their in-generator definitions
   // (same pattern as the head helpers) so every generated module carries
   // exactly this implementation. Components without persistent state keep
@@ -600,12 +612,8 @@ function generateComponent(astPayload, options = {}) {
     const emitHeadAttribute = (nodeRef, attribute) => {
       if (attribute.name.startsWith('on:')) return;
       if (attribute.dynamic) {
-        if (attribute.name === 'checked' || attribute.name === 'disabled') {
-          // Absence is the false representation for boolean attributes.
-          builder.add(`if (${attribute.value}) ${nodeRef}.setAttribute(${JSON.stringify(attribute.name)}, '');`);
-          return;
-        }
-        builder.add(`${nodeRef}.setAttribute(${JSON.stringify(attribute.name)}, String(${attribute.value}));`);
+        // Head nodes are written as attributes only (no property path).
+        builder.add(attributeWriteSource(nodeRef, attribute.name, attribute.value, { properties: false }));
         return;
       }
       builder.add(`${nodeRef}.setAttribute(${JSON.stringify(attribute.name)}, ${JSON.stringify(attribute.value === null ? '' : attribute.value)});`);

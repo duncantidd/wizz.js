@@ -105,10 +105,12 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // 1.10.1: generated locals carry the __wizz prefix so any ordinary author name
   // works (output patch), and WIZZ-G025 rejects the names that cannot be freed
   // (syntax patch: those names never worked, and the catalog grows additively).
+  // compiler 1.21.0 / output 1.11.0: dynamic boolean attributes toggle presence
+  // and null/undefined remove any dynamic attribute (output minor, issue #72).
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.20.0',
+    compiler: '1.21.0',
     syntax: '1.4.3',
-    output: '1.10.1'
+    output: '1.11.0'
   });
 });
 

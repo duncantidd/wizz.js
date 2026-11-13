@@ -1,6 +1,7 @@
 // src/compiler/generator/domGenerator.js
 const { CodeBuilder } = require('./codeBuilder');
 const { CODES, compilerDiagnostic } = require('../diagnostics.js');
+const { attributeWriteSource } = require('./attributePolicy');
 
 // Component attributes are props, not DOM attributes: imported component tags
 // create no element, so native attribute semantics never apply to them.
@@ -117,8 +118,7 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
           builder.add(`const ${listVarName} = document.createElement(${JSON.stringify(listNode.name)});`);
           for (const attribute of listNode.attributes || []) {
             if (attribute.dynamic) {
-              if (['value', 'checked', 'disabled'].includes(attribute.name)) builder.add(`${listVarName}.${attribute.name} = ${attribute.value};`);
-              else builder.add(`${listVarName}.setAttribute(${JSON.stringify(attribute.name)}, String(${attribute.value}));`);
+              builder.add(attributeWriteSource(listVarName, attribute.name, attribute.value));
             } else if (!attribute.name.startsWith('on:')) {
               builder.add(attribute.value === null
                 ? `${listVarName}.setAttribute(${JSON.stringify(attribute.name)}, "");`
@@ -147,8 +147,7 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
         if (listNode.type === 'Element') {
           for (const attribute of listNode.attributes || []) {
             if (!attribute.dynamic) continue;
-            if (['value', 'checked', 'disabled'].includes(attribute.name)) builder.add(`${listVarName}.${attribute.name} = ${attribute.value};`);
-            else builder.add(`${listVarName}.setAttribute(${JSON.stringify(attribute.name)}, String(${attribute.value}));`);
+            builder.add(attributeWriteSource(listVarName, attribute.name, attribute.value));
           }
           (listNode.children || []).forEach((child, childIndex) => {
             if (child.type === 'Expression') builder.add(`${listVarName}.childNodes[${childIndex}].nodeValue = String(${child.value});`);
@@ -239,11 +238,7 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
       if (node.attributes) {
         node.attributes.forEach(attr => {
           if (attr.dynamic) {
-            if (['value', 'checked', 'disabled'].includes(attr.name)) {
-              builder.add(`${varName}.${attr.name} = ${attr.value};`);
-            } else {
-              builder.add(`${varName}.setAttribute(${JSON.stringify(attr.name)}, String(${attr.value}));`);
-            }
+            builder.add(attributeWriteSource(varName, attr.name, attr.value));
             return;
           }
           if (attr.name.startsWith('on:')) {
