@@ -7,6 +7,18 @@ const { rewritePersistInitializers } = require('./persistInitializer');
 const { buildComponentPropsSource } = require('./domGenerator');
 const { scopeCss } = require('../analyzer/cssScanner.js');
 const { VERSIONS } = require('../version.js');
+const { isBooleanAttribute } = require('./attributePolicy');
+
+// Server half of the dynamic-attribute policy (see attributePolicy.js): an
+// expression yielding the serialized ` name="value"` fragment, or '' when the
+// attribute is absent. Boolean attributes render bare when truthy; any other
+// attribute is omitted for null/undefined and escaped otherwise. Attribute
+// names come from the template parser and are emitted as compile-time
+// literals, so only values reach the escaper.
+function serverAttributeSource(name, valueSource) {
+  if (isBooleanAttribute(name)) return `((${valueSource}) ? ${JSON.stringify(` ${name}`)} : '')`;
+  return `((__wizzV) => __wizzV == null ? '' : ${JSON.stringify(` ${name}="`)} + __wizzEscapeAttribute(__wizzV) + '"')(${valueSource})`;
+}
 
 // Elements the HTML parser treats as empty. The server target omits their end
 // tag, and the renderable gate refuses to give them children because real
@@ -466,12 +478,7 @@ function generateServerComponent(astPayload, options = {}) {
       // Event directives are client-only; head nodes never receive handlers.
       if (attribute.name.startsWith('on:')) continue;
       if (attribute.dynamic) {
-        if (attribute.name === 'checked' || attribute.name === 'disabled') {
-          // Absence is the false representation for boolean attributes.
-          builder.add(`if (${attribute.value}) __wizzHeadParts.push(${JSON.stringify(` ${attribute.name}`)});`);
-          continue;
-        }
-        builder.add(`__wizzHeadParts.push(${JSON.stringify(` ${attribute.name}="`)} + __wizzEscapeAttribute(String(${attribute.value})) + ${JSON.stringify('"')});`);
+        builder.add(`__wizzHeadParts.push(${serverAttributeSource(attribute.name, attribute.value)});`);
         continue;
       }
       builder.add(`__wizzHeadParts.push(${JSON.stringify(` ${attribute.name}="${attribute.value === null ? '' : __wizzEscapeAttribute(attribute.value)}"`)});`);
@@ -558,14 +565,8 @@ function generateServerComponent(astPayload, options = {}) {
       // Event directives are client-only; hydration attaches the handlers.
       if (attribute.name.startsWith('on:')) continue;
       if (attribute.dynamic) {
-        if (attribute.name === 'checked' || attribute.name === 'disabled') {
-          // Absence is the false representation for boolean attributes.
-          flush();
-          builder.add(`if (${attribute.value}) __wizzParts.push(' ${attribute.name}');`);
-          continue;
-        }
         flush();
-        builder.add(`__wizzParts.push(' ${attribute.name}="' + __wizzEscapeAttribute(String(${attribute.value})) + '"');`);
+        builder.add(`__wizzParts.push(${serverAttributeSource(attribute.name, attribute.value)});`);
         continue;
       }
       pending += ` ${attribute.name}="${attribute.value === null ? '' : __wizzEscapeAttribute(attribute.value)}"`;

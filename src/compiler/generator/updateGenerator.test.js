@@ -1,12 +1,13 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { generateUpdateFunction, collectUpdateTargets } = require('./updateGenerator');
+const { __wizzAttr } = require('./attributePolicy');
 
 // Everything update() closes over is supplied by name: reactive bindings,
 // component instances, and the __wizzTarget_N variables create() would assign.
 function createUpdate(template, scope = {}) {
   const names = Object.keys(scope);
-  return new Function(...names, `${generateUpdateFunction(template)}\nreturn __wizzUpdate;`)(
+  return new Function(...names, `${__wizzAttr.toString()}\n${generateUpdateFunction(template)}\nreturn __wizzUpdate;`)(
     ...names.map((name) => scope[name])
   );
 }
@@ -80,7 +81,7 @@ test('writes through captured targets and never queries the DOM', () => {
     reactiveAttribute('title', 'count')
   ])));
 
-  assert.match(source, /__wizzTarget_1\.setAttribute/);
+  assert.match(source, /__wizzAttr\(__wizzTarget_1, "title", count\);/);
   assert.match(source, /__wizzTarget_2\.nodeValue = String\(count\);/);
   assert.doesNotMatch(source, /querySelector|childNodes|__wizzRoot|data-wizz-id/);
 });
@@ -104,7 +105,7 @@ test('guards writes inside a branch and only those', () => {
   assert.doesNotThrow(() => update({}, { count: true, other: true }));
 
   const source = generateUpdateFunction(template);
-  assert.match(source, /if \(__wizzTarget_1\) __wizzTarget_1\.setAttribute/);
+  assert.match(source, /if \(__wizzTarget_1\) __wizzAttr\(__wizzTarget_1, /);
   assert.match(source, /if \(__wizzTarget_3\) __wizzTarget_3\.nodeValue/);
   assert.match(source, /^\s*__wizzTarget_4\.nodeValue/m);
 });

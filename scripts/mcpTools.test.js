@@ -216,7 +216,7 @@ test('language_contract documents the version triple, language surface, and diag
   const { text } = await registry.call('language_contract', {});
   // The literal triple is pinned deliberately: a version bump fails this
   // test until the contract text has been reviewed against the compiler.
-  assert.match(text, /compiler 1\.20\.0, syntax 1\.4\.3, output 1\.10\.1/);
+  assert.match(text, /compiler 1\.21\.0, syntax 1\.4\.3, output 1\.11\.0/);
   assert.match(text, /export let/);
   assert.match(text, /onMount/);
   assert.match(text, /onDestroy/);
@@ -697,12 +697,12 @@ test('every documented silent limit compiles and generates the documented behavi
   assert.doesNotMatch(generated(component('let xs = [];\n  function add() { xs.push(1); }', '<ul on:click={add}>{#each xs as x}<li>{x}</li>{/each}</ul>')), /__wizzQueueUpdate\(\{ xs/);
   assert.equal(compileCode(component('const xs = [];', '<ul>{#each xs as x}<li>{x}</li>{/each}</ul>')), null);
 
-  // Dynamic attributes: non-property names are stringified, never removed.
+  // Dynamic attributes: boolean attributes toggle presence; other names keep
+  // "false" and are removed only for null/undefined (issue #72).
   const attributes = generated(component('let a = false;', '<div hidden={a} aria-pressed={a} disabled={a}></div>'));
-  assert.match(attributes, /setAttribute\("hidden", String\(a\)\)/);
-  assert.match(attributes, /setAttribute\("aria-pressed", String\(a\)\)/);
+  assert.match(attributes, /__wizzAttr\([^,]+, "hidden", a, 1\)/);
+  assert.match(attributes, /__wizzAttr\([^,]+, "aria-pressed", a\)/);
   assert.match(attributes, /\.disabled = a;/);
-  assert.doesNotMatch(attributes, /removeAttribute/);
 
   // Quoted values are literal text.
   assert.match(generated(component('let kind = "x";', '<div class="card {kind}"></div>')), /setAttribute\("class", "card \{kind\}"\)/);
@@ -711,7 +711,7 @@ test('every documented silent limit compiles and generates the documented behavi
   // plain attribute.
   assert.doesNotMatch(generated(component('let a = 1;\n  let ok = 1;', '<button on:click={() => ok ? a = 2 : 0}>{a}</button>')), /__wizzQueueUpdate\(\{ a/);
   assert.doesNotMatch(generated(component('let a = 1;', '<button on:click={() => (a = 2)}>{a}</button>')), /__wizzQueueUpdate\(\{ a/);
-  assert.match(generated(component('let name = "";', '<input bind:value={name} />')), /setAttribute\("bind:value", String\(name\)\)/);
+  assert.match(generated(component('let name = "";', '<input bind:value={name} />')), /__wizzAttr\([^,]+, "bind:value", name\)/);
 });
 
 test('every documented working pattern compiles and is reactive', () => {
@@ -719,7 +719,7 @@ test('every documented working pattern compiles and is reactive', () => {
   assert.match(generated(component("let done = false;\n  let label = 'Open';\n  function toggle() { done = !done; label = done ? 'Done' : 'Open'; }", '<button on:click={toggle}>{label}</button>')), /__wizzQueueUpdate\(\{ label: true \}\)/);
   // Class toggling instead of a reactive {#if}.
   const classToggle = generated(component("let openClass = '';\n  function open() { openClass = ' open'; }", "<div on:click={open} class={'panel' + openClass}></div>"));
-  assert.match(classToggle, /__wizzTarget_\d+\.setAttribute\("class", String\('panel' \+ openClass\)\)/);
+  assert.match(classToggle, /__wizzAttr\(__wizzTarget_\d+, "class", 'panel' \+ openClass\)/);
   // Nested {#if} inside {:else} for chains.
   assert.equal(compileCode(component('let a = 1;', '<div>{#if a === 1}<b>a</b>{:else}{#if a === 2}<i>b</i>{:else}<u>c</u>{/if}{/if}</div>')), null);
   // Reassigning the collection.

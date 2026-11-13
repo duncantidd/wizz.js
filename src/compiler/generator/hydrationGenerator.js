@@ -2,9 +2,7 @@
 const { CodeBuilder } = require('./codeBuilder');
 const { CODES, compilerDiagnostic } = require('../diagnostics.js');
 const { buildComponentPropsSource } = require('./domGenerator');
-
-// Attributes the browser target assigns as properties rather than attributes.
-const PROPERTY_ATTRIBUTES = new Set(['value', 'checked', 'disabled']);
+const { attributeWriteSource, attributeValueSource, isBooleanAttribute } = require('./attributePolicy');
 
 /**
  * Generates the hydrateCreate() adoption walk for hydratable components.
@@ -204,13 +202,15 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
         const flags = [];
         for (const attribute of child.attributes || []) {
           if (attribute.name.startsWith('on:')) continue;
-          if (attribute.dynamic && (attribute.name === 'checked' || attribute.name === 'disabled')) {
+          if (attribute.dynamic && isBooleanAttribute(attribute.name)) {
             // Presence is the only representation for boolean attributes.
-            flags.push(`[${JSON.stringify(attribute.name)}, (${attribute.value}) ? '' : null]`);
+            flags.push(`[${JSON.stringify(attribute.name)}, ${attributeValueSource(attribute.name, attribute.value)}]`);
             continue;
           }
+          // A null expected value means the attribute must be absent
+          // (null/undefined dynamic values are not rendered).
           attrs.push(`[${JSON.stringify(attribute.name)}, ${attribute.dynamic
-            ? `String(${attribute.value})`
+            ? attributeValueSource(attribute.name, attribute.value)
             : JSON.stringify(attribute.value === null ? '' : attribute.value)}]`);
         }
         parts.push(`attrs: [${attrs.join(', ')}]`);
@@ -473,11 +473,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
       if (listNode.type !== 'Element' || !varName) return;
       for (const attribute of listNode.attributes || []) {
         if (!attribute.dynamic) continue;
-        if (PROPERTY_ATTRIBUTES.has(attribute.name)) {
-          builder.add(`        ${varName}.${attribute.name} = ${attribute.value};`);
-        } else {
-          builder.add(`        ${varName}.setAttribute(${JSON.stringify(attribute.name)}, String(${attribute.value}));`);
-        }
+        builder.add(`        ${attributeWriteSource(varName, attribute.name, attribute.value)}`);
       }
       (listNode.children || []).forEach((child, childIndex) => {
         if (child.type === 'Expression') builder.add(`        ${varName}.childNodes[${childIndex}].nodeValue = String(${child.value});`);
@@ -496,8 +492,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
         builder.add(`    const ${varName} = document.createElement(${JSON.stringify(listNode.name)});`);
         for (const attribute of listNode.attributes || []) {
           if (attribute.dynamic) {
-            if (PROPERTY_ATTRIBUTES.has(attribute.name)) builder.add(`    ${varName}.${attribute.name} = ${attribute.value};`);
-            else builder.add(`    ${varName}.setAttribute(${JSON.stringify(attribute.name)}, String(${attribute.value}));`);
+            builder.add(`    ${attributeWriteSource(varName, attribute.name, attribute.value)}`);
           } else {
             builder.add(attribute.value === null
               ? `    ${varName}.setAttribute(${JSON.stringify(attribute.name)}, "");`
@@ -522,8 +517,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
       if (listNode.type === 'Element') {
         for (const attribute of listNode.attributes || []) {
           if (!attribute.dynamic) continue;
-          if (PROPERTY_ATTRIBUTES.has(attribute.name)) builder.add(`        ${varName}.${attribute.name} = ${attribute.value};`);
-          else builder.add(`        ${varName}.setAttribute(${JSON.stringify(attribute.name)}, String(${attribute.value}));`);
+          builder.add(`        ${attributeWriteSource(varName, attribute.name, attribute.value)}`);
         }
         (listNode.children || []).forEach((child, childIndex) => {
           if (child.type === 'Expression') builder.add(`        ${varName}.childNodes[${childIndex}].nodeValue = String(${child.value});`);
