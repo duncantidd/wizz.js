@@ -609,10 +609,10 @@ const TEMPLATE_LIMITS = Object.freeze([
   },
   {
     area: 'Dynamic attributes',
-    supported: '`name={expr}` updates reactively; `value`, `checked`, and `disabled` are set as DOM properties.',
-    limit: 'Every other dynamic attribute is written with `setAttribute(name, String(value))` and is never removed: `hidden={false}` still hides, and `undefined` renders as `"undefined"`.',
+    supported: '`name={expr}` updates reactively; `value`, `checked`, and `disabled` are set as DOM properties. HTML boolean attributes (`hidden`, `required`, `readonly`, `open`, `inert`, `multiple`, ...) are present when the value is truthy and removed when it is falsy, so `hidden={false}` shows the element. Any other attribute is removed when the value is `null` or `undefined`.',
+    limit: 'Outside the boolean list, `false` renders the string `"false"` rather than removing the attribute, because `aria-*`, `draggable`, and `spellcheck` give `"false"` its own meaning.',
     failure: 'Silent',
-    workaround: 'Toggle presence with a reactive class and CSS, and pass explicit strings such as `\'true\'`/`\'false\'` to `aria-*` attributes.'
+    workaround: 'Hold `null` in state to drop a non-boolean attribute (`let tip = null;` with `title={tip}`).'
   },
   {
     area: 'Quoted attribute values',

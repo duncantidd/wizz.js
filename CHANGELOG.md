@@ -11,6 +11,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed — Dynamic Boolean Attributes Toggle Presence (issue #72; compiler 1.20.0 → 1.21.0, output 1.10.1 → 1.11.0)
+
+#### Fixed
+
+- `<p hidden={isValid}>` stayed hidden when `isValid` was `false`, because every dynamic attribute other than `value`/`checked`/`disabled` was written as `setAttribute(name, String(value))` and the attribute stayed present as `hidden="false"` (#72). HTML boolean attributes (`hidden`, `required`, `readonly`, `open`, `inert`, `multiple`, `selected`, `autofocus`, and the rest of the spec's list) are now present (`""`) when the value is truthy and removed when it is falsy.
+- Any dynamic attribute whose value is `null` or `undefined` is now removed instead of rendering the strings `"null"`/`"undefined"`.
+
+#### Changed
+
+- New `src/compiler/generator/attributePolicy.js` holds one policy for every target. It covers client `create()`, `update()`, each-block item create/update, hydratable fresh items and item updates, client head nodes, hydration head verification, and server body and head markup. Boolean names are matched case-insensitively against `BOOLEAN_ATTRIBUTES` at compile time.
+- Client modules emit one module-scope `__wizzAttr(node, name, value, boolean)` helper. It is emitted only when a native body or head element has a dynamic attribute it writes, so modules without one stay byte-identical apart from the version header. Calls look like `__wizzAttr(node, "hidden", expr, 1)` and `__wizzAttr(node, "title", expr)`. The helper uses only `setAttribute`/`removeAttribute`.
+- The server target serializes through `serverAttributeSource()`. Boolean attributes render bare when truthy, and other attributes are omitted for `null`/`undefined` and escaped otherwise. Each expression is evaluated once.
+- Head nodes previously special-cased only `checked`/`disabled`. They now use the full boolean list, and hydration's head check expects a removed attribute to be absent.
+- `updateGenerator.js`: `emitWrite()` now takes a statement builder instead of a property-access suffix.
+- The `value`/`checked`/`disabled` property path now matches names case-insensitively and always assigns the lowercase property. Before, `DISABLED={x}` fell through to an attribute write and never set `.disabled`.
+- Hydration's head-verification loop local is renamed from `__wizzAttr` to `__wizzPair` so it no longer shadows the module-scope helper.
+- Versions: **output minor**, because generated attribute writes change and the helper is new, while the module surface is unchanged. **Compiler minor**, and `package.json` follows it. **Syntax holds**: the template grammar accepts exactly what it did, and what a dynamic attribute renders is part of the output contract.
+
+#### Migration
+
+- Outside the boolean list, `false` deliberately still renders `"false"`, so `aria-expanded={open}`, `aria-hidden`, `draggable`, and `spellcheck` keep their enumerated meaning. To drop a non-boolean attribute, use `null`.
+- A component that relied on `hidden={false}` keeping the element hidden, or on `"undefined"` appearing in markup, renders differently. Server output from compilers before 1.21.0 that delivered `hidden="false"` or `content="undefined"` in a head node now fails head verification, and the client mounts fresh. Rebuild client and server modules together.
+
+#### Docs
+
+- The README's "Template Language at a Glance" table, the MCP `language_contract` limits row, the README dynamic-attribute section, `src/compiler/generator/README.md` (a new `attributePolicy.js` section, the server emission rules, and the runtime boundaries), and `STRUCTURE.md` describe the policy. The ROADMAP's Framework Feedback #1 records that the generator half has landed.
+
+#### Tests
+
+- `attributePolicy.test.js` covers truthy and falsy values (including `NaN`, `0n`, and `'false'`), null/undefined removal, `false` staying `"false"`, repeated toggling, hostile values and `__proto__` names, single evaluation, helper detection through branches, each bodies, component tags, and cyclic input.
+- `componentGenerator.test.js` mounts components that toggle `hidden`, `required`, `readonly`, `title`, and `aria-expanded`, inside `{#if}` branches and keyed each items, and checks that the helper appears only when needed.
+- `serverGenerator.test.js` covers omitted and bare attributes, escaping, and head parity. `hydrationGenerator.test.js` covers head verification for omitted attributes and rejection of stringified older output.
+- `domGenerator.test.js` runs `create()` against the policy, including mixed-case property names, and checks each-item create and update emission. `updateGenerator.test.js` covers boolean toggling, null/undefined removal, the string 'false' staying truthy, and dependency-scoped writes.
+- `test/hydration.test.js` renders on the server, hydrates, and toggles `hidden`/`title`/`aria-expanded` (and `inert` from a truthy start) on the adopted nodes with no creation and no mismatch.
+- The tests that pinned the old `setAttribute(..., String(x))` shape (`updateGenerator.test.js`, `mcpTools.test.js`) are updated.
+
 ### Fixed — Author Names Cannot Collide With Generated Code (issue #65; compiler 1.19.0 → 1.20.0, syntax 1.4.2 → 1.4.3, output 1.10.0 → 1.10.1)
 
 #### Fixed

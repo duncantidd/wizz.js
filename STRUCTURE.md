@@ -83,6 +83,7 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 	├── generator/                   3. Analyzed payload -> ES module source
 	  ├── README.md                 Generator contracts and module reference
 	  ├── codeBuilder.js            Indented source-code builder
+	  ├── attributePolicy.js        Shared dynamic-attribute policy: property names, boolean presence, null/undefined removal
 	  ├── domGenerator.js           Emits create() DOM construction function
 	  ├── updateGenerator.js        Emits update() and names the nodes it writes to (collectUpdateTargets)
 	  ├── assignmentInterceptor.js  Syntax-aware rewriter for reactive script mutations
@@ -159,6 +160,7 @@ Wizz component source
 - `src/compiler/analyzer/cssScanner.js` exports `scopeCss(css, scope)`, the minimal CSS scoping pass shared by the server, client, and build style outputs.
 - `src/compiler/generator/componentGenerator.js` exports `generateComponent(payload, options)`.
 - `src/compiler/generator/serverGenerator.js` exports `generateServerComponent(payload, options)` and the shared `assertServerRenderable(payload, options)` surface gate.
+- `src/compiler/generator/attributePolicy.js` exports the dynamic-attribute policy every target shares: `attributeWriteSource()`, `attributeValueSource()`, `isBooleanAttribute()`, `needsAttributeHelper()`, and the emitted `__wizzAttr` helper.
 - `src/compiler/generator/hydrationGenerator.js` exports `generateHydrationFunction(templateAST)`, the `hydrateComponent()`/`hydrateRoot()` adoption-walk emitter.
 - `test.js` demonstrates the complete pipeline and prints the generated module source.
 

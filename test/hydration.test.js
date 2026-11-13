@@ -1472,3 +1472,58 @@ test('renderComponent keeps its html, head, and state result fields', async (t) 
   assert.match(html, /<main title="d"/);
   assert.deepEqual({ ...state }, { html: 'a', head: 'b', state: 'c', options: 'd' });
 });
+
+// --- Dynamic attribute policy round trip (issue #72) ---
+
+test('issue #72: server-omitted boolean and nullish attributes hydrate and then toggle', async (t) => {
+  const source = '<script>\nlet isValid = false;\nlet tip = null;\nlet expanded = false;\nfunction flip() {\n  isValid = !isValid;\n  tip = isValid ? "ok" : undefined;\n  expanded = isValid;\n}\n</script>'
+    + '<form><p hidden={isValid} title={tip} aria-expanded={expanded}>Please enter a food name.</p><button on:click={flip}>Go</button></form>';
+  const { document, clientModule, metricsBefore, warnings, render } = await loadGeneratedModules(t, source);
+
+  const { html, stateScript } = render();
+  assert.doesNotMatch(html, /hidden|title=/, 'the server omits falsy boolean and null attributes');
+  assert.match(html, /aria-expanded="false"/);
+
+  const target = deliverMarkup(document, html);
+  const component = clientModule.hydrateComponent(target, {}, parseInitialStateScript(stateScript));
+  assert.ok(component);
+  assert.deepEqual(warnings, []);
+  assert.equal(document.metrics.elements, metricsBefore.elements, 'adoption creates no elements');
+
+  const form = target.firstElementChild;
+  const [paragraph, button] = form.childNodes.filter((node) => node.nodeType === 1);
+  assert.equal('hidden' in paragraph.attributes, false, 'the adopted paragraph is visible');
+
+  button.dispatchEvent('click');
+  await flushUpdates();
+  assert.equal(paragraph.attributes.hidden, '');
+  assert.equal(paragraph.attributes.title, 'ok');
+  assert.equal(paragraph.attributes['aria-expanded'], 'true');
+
+  button.dispatchEvent('click');
+  await flushUpdates();
+  assert.equal('hidden' in paragraph.attributes, false);
+  assert.equal('title' in paragraph.attributes, false);
+  assert.equal(paragraph.attributes['aria-expanded'], 'false');
+
+  component.destroy();
+  assert.deepEqual(target.childNodes, []);
+});
+
+test('issue #72: a truthy server-rendered boolean attribute is adopted bare and removed on update', async (t) => {
+  const source = '<script>\nlet busy = true;\nfunction done() { busy = false; }\n</script><main><section inert={busy} hidden={busy}>x</section><button on:click={done}>Done</button></main>';
+  const { document, clientModule, warnings, render } = await loadGeneratedModules(t, source);
+  const { html, stateScript } = render();
+  assert.match(html, /<section inert hidden /);
+
+  const target = deliverMarkup(document, html);
+  const component = clientModule.hydrateComponent(target, {}, parseInitialStateScript(stateScript));
+  assert.deepEqual(warnings, []);
+  const [section, button] = target.firstElementChild.childNodes.filter((node) => node.nodeType === 1);
+  assert.equal(section.attributes.inert, '');
+  button.dispatchEvent('click');
+  await flushUpdates();
+  assert.equal('inert' in section.attributes, false);
+  assert.equal('hidden' in section.attributes, false);
+  component.destroy();
+});
