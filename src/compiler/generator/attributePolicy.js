@@ -56,7 +56,10 @@ function __wizzAttr(node, name, value, boolean) {
  * @returns {string} A complete statement.
  */
 function attributeWriteSource(nodeRef, name, valueSource, { properties = true } = {}) {
-  if (properties && PROPERTY_ATTRIBUTES.has(name)) return `${nodeRef}.${name} = ${valueSource};`;
+  // HTML attribute names are case-insensitive but DOM properties are not, so
+  // `DISABLED={x}` must still assign the lowercase `.disabled` property.
+  const lower = String(name).toLowerCase();
+  if (properties && PROPERTY_ATTRIBUTES.has(lower)) return `${nodeRef}.${lower} = ${valueSource};`;
   return `__wizzAttr(${nodeRef}, ${JSON.stringify(name)}, ${valueSource}${isBooleanAttribute(name) ? ', 1' : ''});`;
 }
 
@@ -90,7 +93,7 @@ function needsAttributeHelper(root, { properties = true, componentNames = new Se
       && value.componentId == null && !componentNames.has(value.name)) {
       const written = value.attributes.some((attribute) => attribute.dynamic
         && !attribute.name.startsWith('on:')
-        && !(properties && PROPERTY_ATTRIBUTES.has(attribute.name)));
+        && !(properties && PROPERTY_ATTRIBUTES.has(attribute.name.toLowerCase())));
       if (written) return true;
     }
     return Object.keys(value).some((key) => key !== 'loc' && key !== 'attributes' && visit(value[key]));

@@ -460,3 +460,78 @@ test('rejects children, event directives, and prototype keys on component tags',
     /'__proto__' cannot be used as a prop name/
   );
 });
+
+// --- Dynamic attribute policy (issue #72) ---
+
+const { __wizzAttr } = require('./attributePolicy');
+
+// Executes create() with the module-scope helper and author bindings in scope,
+// against nodes that track attribute presence like the DOM.
+function createWithScope(template, scope) {
+  const document = {
+    createElement(name) {
+      return {
+        type: 'Element', name, attributes: Object.create(null), children: [],
+        setAttribute(attributeName, value) { this.attributes[attributeName] = value; },
+        removeAttribute(attributeName) { delete this.attributes[attributeName]; },
+        appendChild(child) { this.children.push(child); }
+      };
+    },
+    createTextNode(value) { return { type: 'Text', value }; }
+  };
+  const names = Object.keys(scope);
+  return new Function('document', '__wizzAttr', ...names, `${generateCreateFunction(template)}\nreturn __wizzCreate;`)(
+    document, __wizzAttr, ...names.map((name) => scope[name])
+  )({});
+}
+
+const dynamicAttribute = (name, value) => ({ name, value, dynamic: true, dependencies: [value] });
+const rootWith = (name, attributes) => ({ type: 'Root', children: [{ type: 'Element', name, attributes, children: [] }] });
+
+test('create() applies the boolean, nullable, and property attribute policy', () => {
+  const node = createWithScope(rootWith('input', [
+    dynamicAttribute('hidden', 'off'),
+    dynamicAttribute('required', 'on'),
+    dynamicAttribute('title', 'missing'),
+    dynamicAttribute('aria-invalid', 'off'),
+    dynamicAttribute('data-count', 'zero'),
+    dynamicAttribute('value', 'text'),
+    dynamicAttribute('checked', 'on')
+  ]), { off: false, on: 'yes', missing: undefined, zero: 0, text: 'typed' });
+
+  assert.deepEqual({ ...node.attributes }, { required: '', 'aria-invalid': 'false', 'data-count': '0' });
+  assert.equal(node.value, 'typed');
+  assert.equal(node.checked, 'yes');
+});
+
+test('create() emits helper calls, never stringified boolean attributes', () => {
+  const source = generateCreateFunction(rootWith('p', [dynamicAttribute('hidden', 'a'), dynamicAttribute('title', 'b')]));
+  assert.match(source, /__wizzAttr\(__wizzNode_1, "hidden", a, 1\);/);
+  assert.match(source, /__wizzAttr\(__wizzNode_1, "title", b\);/);
+  assert.doesNotMatch(source, /setAttribute\("hidden"|String\(a\)|innerHTML/);
+});
+
+test('mixed-case property names still assign the lowercase DOM property', () => {
+  const node = createWithScope(rootWith('input', [dynamicAttribute('DISABLED', 'on'), dynamicAttribute('Value', 'text')]), { on: true, text: 'v' });
+  assert.equal(node.disabled, true);
+  assert.equal(node.value, 'v');
+  assert.equal(node.DISABLED, undefined);
+  assert.deepEqual({ ...node.attributes }, {});
+});
+
+test('each item creation and positional updates both go through the policy', () => {
+  const item = {
+    type: 'Element', name: 'li',
+    attributes: [dynamicAttribute('hidden', 'item.done'), dynamicAttribute('title', 'item.note'), dynamicAttribute('checked', 'item.done')],
+    children: []
+  };
+  const source = generateCreateFunction(createEachTemplate('id', [item]));
+  const create = source.slice(0, source.indexOf('update(item)'));
+  const update = source.slice(source.indexOf('update(item)'));
+
+  for (const part of [create, update]) {
+    assert.match(part, /__wizzAttr\(__wizzNode_\d+, "hidden", item\.done, 1\);/);
+    assert.match(part, /__wizzAttr\(__wizzNode_\d+, "title", item\.note\);/);
+    assert.match(part, /__wizzNode_\d+\.checked = item\.done;/);
+  }
+});

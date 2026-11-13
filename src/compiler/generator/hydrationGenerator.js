@@ -237,9 +237,9 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
       builder.add('          break;');
       builder.add('        }');
       builder.add('        for (let __wizzA = 0; __wizzA < __wizzExpected[__wizzI].attrs.length; __wizzA++) {').indent();
-      builder.add('          const __wizzAttr = __wizzExpected[__wizzI].attrs[__wizzA];');
-      builder.add("          if (__wizzGot.getAttribute(__wizzAttr[0]) !== __wizzAttr[1]) {");
-      builder.add("            __wizzProblems.push('head node ' + __wizzI + ' attribute ' + __wizzAttr[0] + ' mismatch');");
+      builder.add('          const __wizzPair = __wizzExpected[__wizzI].attrs[__wizzA];');
+      builder.add("          if (__wizzGot.getAttribute(__wizzPair[0]) !== __wizzPair[1]) {");
+      builder.add("            __wizzProblems.push('head node ' + __wizzI + ' attribute ' + __wizzPair[0] + ' mismatch');");
       builder.add('            __wizzHeadOk = false;');
       builder.add('            break;');
       builder.add('          }');

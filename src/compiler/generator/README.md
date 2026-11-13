@@ -111,8 +111,8 @@ With `options.extractedStyles` a linked stylesheet delivers the CSS: all three t
 - Text escapes `&`, `<`, `>`; attribute values additionally escape `"` (with `&` escaped first). Expression output goes through the same escaping.
 - Adjacent text-like children (Text/Expression) are separated by `<!-- -->` markers; when an element's direct children include a block, markers are also emitted at branch boundaries. Wizz templates cannot contain comments, so the marker is unambiguous, and browsers otherwise merge adjacent text nodes and break positional targeting. Over-marking is harmless — the hydration walk strips comments.
 - Elements never emit self-closing syntax; void elements (`area base br col embed hr img input link meta param source track wbr`) get no end tag and must have no children. Every other element closes even when it has no children — an unterminated start tag stays open in the browser and swallows the following markup into it, breaking the delivered childNodes' one-to-one alignment with the template positions the hydration walk verifies.
-- `on:` attributes are skipped (client-only); `value` always renders, while `checked`/`disabled` render as bare attributes only when truthy; `data-wizz-id` flows through for hydration.
-- Dynamic attributes are interpolated as `name="escapeAttribute(String(expr))"`.
+- `on:` attributes are skipped (client-only); `data-wizz-id` flows through for hydration.
+- Dynamic attributes are serialized by `serverAttributeSource()`, the server half of `attributePolicy.js`: every `BOOLEAN_ATTRIBUTES` name (including `checked` and `disabled`) renders bare when truthy and is omitted when falsy; any other name (including `value`) is omitted for `null`/`undefined` and otherwise rendered as `name="escapeAttribute(value)"`. Each expression is evaluated once.
 - `{#if}` evaluates the test against render-time state and emits the taken branch between block markers; `{#each}` loops the initial collection with the item variable in scope; component tags namespace-import the child's `.server.js` build (`import * as __wizzServer_<Name> from "./<Name>.server.js"`) and embed its `renderComponent()` output at the tag position, collecting child state under `state.__wizz.components["<componentId>"]`.
 
 **Hydration — `hydrationGenerator.js`:** `generateHydrationFunction(templateAST)` emits a `__wizzHydrateCreate(target, state, adoptSelf)` function that `componentGenerator.js` embeds when `generateComponent(astPayload, { hydratable: true })` is requested. Hydratable modules export `hydrateComponent(target, props, state)` (adopting the mount point's first element child) and `hydrateRoot(__wizzRoot, props, state)` (adopting the *given* node — the nested-adoption entry); all entries route through a shared `__wizzMountInstance()` closure that seeds reactive non-prop bindings from the serialized state (`Object.prototype.hasOwnProperty.call` + bracket access, so a hostile `__proto__` key cannot pollute; props are never seeded) and adopts the server root instead of creating one. The adoption walk verifies positionally against the AST:
@@ -281,6 +281,18 @@ Each bodies are not targets: list records hold and update their own nodes. The v
 
 Templates with no reactive content generate an empty `update()` body and declare no target variables.
 
+### `attributePolicy.js` - Dynamic Attribute Policy
+
+**Exports:** `PROPERTY_ATTRIBUTES`, `BOOLEAN_ATTRIBUTES`, `isBooleanAttribute(name)`, `attributeWriteSource(nodeRef, name, valueSource, { properties })`, `attributeValueSource(name, valueSource)`, `needsAttributeHelper(root, { properties, componentNames })`, `__wizzAttr`
+
+The single policy for how a dynamic attribute reaches the DOM, shared by `domGenerator.js`, `updateGenerator.js`, `hydrationGenerator.js`, `componentGenerator.js` (head nodes), and `serverGenerator.js`:
+
+- `value`, `checked`, and `disabled` on body elements are assigned as DOM properties. The match is case-insensitive and always assigns the lowercase property, so `DISABLED={x}` emits `.disabled = x`. Head nodes pass `properties: false` and use attributes for every name.
+- Names in `BOOLEAN_ATTRIBUTES` (the HTML boolean attributes, matched case-insensitively at compile time) emit `__wizzAttr(node, name, expr, 1)`: present as `""` when truthy, removed when falsy.
+- Every other name emits `__wizzAttr(node, name, expr)`: removed for `null`/`undefined`, otherwise `String(value)`. `false` deliberately renders `"false"` because enumerated attributes (`aria-*`, `draggable`, `spellcheck`) give it meaning.
+
+`__wizzAttr` is emitted once at module scope via `Function.prototype.toString()`, only when `needsAttributeHelper()` finds a native element with a helper-written dynamic attribute, so other modules stay byte-identical. It uses only `setAttribute`/`removeAttribute`. Attribute names are always emitted as JSON string literals. `attributeValueSource()` gives hydration's head check the expected serialized value, or `null` for an absent attribute.
+
 ### `reservedNames.js` - Author Name Check
 
 Author scripts run inside the generated factory, and author expressions run inside its nested functions. Every name the generators declare there, in the client, hydratable, and server targets, therefore carries the reserved `__wizz` prefix, so an author variable can neither collide with one (a module that fails to load) nor be shadowed by one (a wrong value at runtime). Any new generated local must use the prefix too.
@@ -400,7 +412,7 @@ The generated output is intentionally small and uses direct DOM APIs. Its curren
 - Components must have at least one top-level element. Root-level formatting text is ignored, and additional top-level elements are not mounted because creation selects the first root element.
 - Imported component tags accept attributes as props but no children and no event directives; components inside each blocks remain unsupported, so component identity semantics are defined for directly nested components only.
 - Prop bindings are read-only at statement level; expression-position mutations of a prop name (`if (name = x)`, call arguments) pass through undetected, the same documented boundary the assignment interceptor has for reactive state.
-- Dynamic expressions are supported as direct text-node children and as brace-valued attributes. `value`, `checked`, and `disabled` use property assignment; other dynamic attributes use HTML attributes.
+- Dynamic expressions are supported as direct text-node children and as brace-valued attributes. `value`, `checked`, and `disabled` use property assignment; other dynamic attributes use HTML attributes through `__wizzAttr`. HTML boolean attributes toggle presence by truthiness, and any dynamic attribute is removed for `null`/`undefined`. Outside the boolean list `false` renders `"false"`, so an author who wants a non-boolean attribute gone must pass `null`.
 - Explicit event directives use `on:<event>={handler}` and compile to native `addEventListener()` bindings. A handler may be a component-local identifier or any non-empty JavaScript listener expression, such as `(event) => increment(event.detail)`; reactive assignments inside inline handlers are intercepted like script mutations. Inline event attributes are not supported.
 - The update function queries the document each time a dependency changes and assumes the target still exists. The current output has no null-target guard or caching layer.
 - Repeated dependencies generate separate guards by expression dependency. Updates are batched per microtask with merged flags, but there is no granularity below a component: one changed dependency re-runs every guard that references it in a single pass.
