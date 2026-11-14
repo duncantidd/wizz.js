@@ -115,14 +115,37 @@
 // Syntax holds: the template grammar and directives accept exactly what they
 // did, and what a dynamic attribute renders is part of the output contract.
 //
+// compiler 1.22.0 / syntax 1.5.0 / output 1.12.0: reactive `{#if}` blocks
+// (issue #71) and `on:` directives inside `{#each}` bodies (issue #70).
+// An `{#if}` whose test reads reactive state is re-evaluated when one of its
+// dependencies changes: the old branch is removed with its listeners, lists,
+// and child components, and the new one is built from current state. A test
+// with no reactive dependency keeps the inline mount-time emission. `on:`
+// directives are accepted inside each bodies, with the item variable in
+// scope of the handler; listeners attach per item record and detach when the
+// record is removed. Syntax minor: each bodies accept a directive they used
+// to reject (WIZZ-G006 is retired: it stays in the catalog, never reused,
+// and is no longer thrown); the `{#if}` grammar is unchanged. Output minor:
+// modules with a reactive `{#if}` gain the module-scope `__wizzIfBlock` /
+// `__wizzDropScope` helpers, factory-scope `__wizzIfMake_<id>_<key>` branch
+// makers, and one empty-text anchor per block; listeners owned by a branch
+// or an item attach through `__wizzOn` into the owning scope's `__wizzDrop`
+// list instead of the component-wide `__wizzListeners`. The module surface
+// (`mountComponent`, `hydrateComponent`, `hydrateRoot`, `{ setProps?,
+// destroy() }`) is unchanged, and templates using neither feature keep
+// byte-identical output apart from the version header. Server markup is
+// unchanged. The behavior change for existing components — a branch that
+// used to stay put now follows its test — lifts a documented "not supported
+// yet" limit and follows the precedent of the 1.21.0 attribute policy.
+//
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.21.0',
-  syntax: '1.4.3',
-  output: '1.11.0'
+  compiler: '1.22.0',
+  syntax: '1.5.0',
+  output: '1.12.0'
 });
 
 module.exports = { VERSIONS };

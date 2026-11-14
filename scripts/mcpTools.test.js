@@ -216,7 +216,10 @@ test('language_contract documents the version triple, language surface, and diag
   const { text } = await registry.call('language_contract', {});
   // The literal triple is pinned deliberately: a version bump fails this
   // test until the contract text has been reviewed against the compiler.
-  assert.match(text, /compiler 1\.21\.0, syntax 1\.4\.3, output 1\.11\.0/);
+  assert.match(text, /compiler 1\.22\.0, syntax 1\.5\.0, output 1\.12\.0/);
+  // Reviewed for 1.22.0: reactive {#if} and on: handlers in each bodies.
+  assert.match(text, /the branch is replaced when a\n  reactive let or prop the condition reads changes/);
+  assert.match(text, /on:click=\{\(\) => remove\(item\.id\)\}/);
   assert.match(text, /export let/);
   assert.match(text, /onMount/);
   assert.match(text, /onDestroy/);
@@ -670,7 +673,6 @@ test('every documented compile-error limit fails with the code the table cites',
     ['{:else if}', component('let a = 1;', '<div>{#if a === 1}<b>a</b>{:else if a === 2}<i>b</i>{/if}</div>'), 'WIZZ-P033'],
     ['each member collection', component('let s = { xs: [] };', '<ul>{#each s.xs as x}<li>{x}</li>{/each}</ul>'), 'WIZZ-P002'],
     ['each index alias', component('let xs = [];', '<ul>{#each xs as x, i}<li>{x}</li>{/each}</ul>'), 'WIZZ-P002'],
-    ['each body on:', component('let xs = [];\n  function f() {}', '<ul>{#each xs as x}<li on:click={f}>{x}</li>{/each}</ul>'), 'WIZZ-G006'],
     ['each body component', component(imports, '<ul>{#each xs as x}<li><Card /></li>{/each}</ul>'), 'WIZZ-G004'],
     ['each body nested if', component('let xs = [];', '<ul>{#each xs as x}<li>{#if x === 1}<b>a</b>{/if}</li>{/each}</ul>'), 'WIZZ-G005'],
     ['each body nested each', component('let xs = [];', '<ul>{#each xs as x}<li>{#each xs as y}<b>{y}</b>{/each}</li>{/each}</ul>'), 'WIZZ-G005'],
@@ -685,12 +687,17 @@ test('every documented compile-error limit fails with the code the table cites',
 });
 
 test('every documented silent limit compiles and generates the documented behavior', () => {
-  // {#if}: the branch test runs inside create() only; update() never
-  // re-evaluates it.
-  const ifSource = generated(component('let ok = 1;\n  function flip() { ok = 2; }', '<div on:click={flip}>{#if ok === 1}<b>a</b>{:else}<i>b</i>{/if}</div>'));
-  const updateBody = ifSource.slice(ifSource.indexOf('function update('), ifSource.indexOf('// --- Initialization'));
-  assert.match(ifSource, /if \(ok === 1\)/);
-  assert.doesNotMatch(updateBody, /ok === 1/);
+  // {#if}: a test reading only const values is selected inline at mount and
+  // gets no block machinery, so nothing ever re-evaluates it.
+  const constIf = generated(component('const ok = 1;', '<div>{#if ok === 1}<b>a</b>{:else}<i>b</i>{/if}</div>'));
+  assert.match(constIf, /if \(ok === 1\) \{/);
+  assert.doesNotMatch(constIf, /__wizzIfBlock|__wizzIfMake/);
+
+  // {#each}: a handler expression is evaluated once, when the item is
+  // created; only what an arrow reads at call time follows the item.
+  const eachHandler = generated(component('let xs = [];\n  function make(x) { return () => x; }', '<ul>{#each xs as x}<li on:click={make(x)}>{x}</li>{/each}</ul>'));
+  assert.match(eachHandler, /__wizzOn\([^,]+, "click", make\(x\)\)/);
+  assert.equal(eachHandler.split('make(x))').length, 2, 'update() does not re-evaluate the handler expression');
 
   // {#each}: in-place mutation schedules nothing; a const collection is
   // accepted.
@@ -717,15 +724,20 @@ test('every documented silent limit compiles and generates the documented behavi
 test('every documented working pattern compiles and is reactive', () => {
   // Derived value recomputed in a handler.
   assert.match(generated(component("let done = false;\n  let label = 'Open';\n  function toggle() { done = !done; label = done ? 'Done' : 'Open'; }", '<button on:click={toggle}>{label}</button>')), /__wizzQueueUpdate\(\{ label: true \}\)/);
-  // Class toggling instead of a reactive {#if}.
-  const classToggle = generated(component("let openClass = '';\n  function open() { openClass = ' open'; }", "<div on:click={open} class={'panel' + openClass}></div>"));
-  assert.match(classToggle, /__wizzAttr\(__wizzTarget_\d+, "class", 'panel' \+ openClass\)/);
+  // A reactive {#if} re-evaluates when its dependency changes (issue #71).
+  const reactiveIf = generated(component('let ok = 1;\n  function flip() { ok = 2; }', '<div on:click={flip}>{#if ok === 1}<b>a</b>{:else}<i>b</i>{/if}</div>'));
+  assert.match(reactiveIf, /__wizzIf_1\.sync\(__wizzChanged, __wizzChanged\.ok\)/);
+  assert.match(reactiveIf, /__wizzIfBlock\([^,]+, [^,]+, \(\) => \(ok === 1\), \[__wizzIfMake_1_0, __wizzIfMake_1_1\]/);
+  // Keeping an element mounted and toggling it with hidden={flag}.
+  assert.match(generated(component('let closed = true;\n  function open() { closed = false; }', '<div on:click={open}><p hidden={closed}>x</p></div>')), /__wizzAttr\(__wizzTarget_\d+, "hidden", closed, 1\)/);
   // Nested {#if} inside {:else} for chains.
   assert.equal(compileCode(component('let a = 1;', '<div>{#if a === 1}<b>a</b>{:else}{#if a === 2}<i>b</i>{:else}<u>c</u>{/if}{/if}</div>')), null);
   // Reassigning the collection.
   assert.match(generated(component('let xs = [];\n  function add() { xs = [...xs, 1]; }', '<ul on:click={add}>{#each xs as x}<li>{x}</li>{/each}</ul>')), /__wizzQueueUpdate\(\{ xs: true \}\)/);
-  // Event delegation with a data attribute on each row.
-  assert.equal(compileCode(component("let rows = [];\n  let picked = '';\n  function pick(event) { picked = event.target.closest('[data-id]').dataset.id; }", '<ul on:click={pick}>{#each rows as row (row.id)}<li data-id={row.id} class={row.cls}>{row.name}</li>{/each}</ul>')), null);
+  // A per-row inline arrow reading the item when it runs (issue #70).
+  const rowHandler = generated(component("let rows = [];\n  let picked = '';\n  function pick(id) { picked = id; }", '<ul>{#each rows as row (row.id)}<li class={row.cls}><button on:click={() => pick(row.id)}>{row.name}</button></li>{/each}</ul>'));
+  assert.match(rowHandler, /__wizzOn\([^,]+, "click", \(\) => pick\(row\.id\)\)/);
+  assert.match(rowHandler, /update\(__wizzItem\) \{\n\s+row = __wizzItem;/);
   // Whole-value attribute expression.
   assert.equal(compileCode(component('let kind = "x";', "<div class={'card ' + kind}></div>")), null);
   // Two-way input through an inline arrow, and through a named setter.

@@ -132,6 +132,13 @@ function createTabDocument() {
       appendChild(node) {
         element.childNodes.push(node);
       },
+      insertBefore(node, referenceNode) {
+        const existing = element.childNodes.indexOf(node);
+        if (existing !== -1) element.childNodes.splice(existing, 1);
+        const index = referenceNode == null ? -1 : element.childNodes.indexOf(referenceNode);
+        element.childNodes.splice(index === -1 ? element.childNodes.length : index, 0, node);
+        return node;
+      },
       removeChild(node) {
         const index = element.childNodes.indexOf(node);
         if (index !== -1) element.childNodes.splice(index, 1);
@@ -495,16 +502,20 @@ test('hydration verifies if-branches that read persistent vars against the deliv
     for (const child of node.childNodes || []) collect(child);
   })(deliveredRoot);
 
-  // Branch selection is a mount-time choice in Wizz: create()/hydrateCreate()
-  // pick it once and update() carries no branch machinery, so the adopted
-  // root keeps the delivered (light) branch even though the persisted value
-  // selects the other one — exactly what a fresh client mount would have
-  // shown instead. The persistence contract here is only that the walk
-  // verifies against the DELIVERED state: before the seeding fix, this walk
+  // The walk verifies against the DELIVERED state: before the seeding fix it
   // evaluated the if-test against the storage-read value, expected the dark
-  // branch, and fell back with a mismatch warning.
+  // branch, and fell back with a mismatch warning. The light branch is
+  // therefore adopted, not remounted. Client storage is then restored as the
+  // mounted truth, and because {#if} is reactive (issue #71) the initial
+  // update pass replaces the adopted branch with the one the stored value
+  // selects — the same content a fresh client mount would show.
   assert.equal(warnings.length, 0, 'no hydration mismatch was reported');
   assert.equal(target.childNodes[0], deliveredRoot, 'the delivered root was adopted, not remounted');
-  assert.ok(texts.some(value => value.includes('light mode')), 'the delivered branch survived adoption');
-  assert.ok(!texts.some(value => value.includes('dark mode')), 'update() carries no branch machinery, so no swap happens');
+  assert.ok(texts.some(value => value.includes('dark mode')), 'the stored value selected its branch after adoption');
+  assert.ok(!texts.some(value => value.includes('light mode')), 'the delivered branch was replaced, not left beside the new one');
+  assert.deepEqual(
+    deliveredRoot.childNodes.map((node) => (node.nodeType === 1 ? node.tagName.toLowerCase() : node.nodeValue)),
+    ['p', ''],
+    'exactly one branch element sits in front of the block anchor'
+  );
 });

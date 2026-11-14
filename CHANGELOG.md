@@ -11,6 +11,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added — Reactive `{#if}` Blocks and `on:` Inside `{#each}` (issues #71, #70; compiler 1.21.0 → 1.22.0, syntax 1.4.3 → 1.5.0, output 1.11.0 → 1.12.0)
+
+#### Added
+
+- `{#if}` is reactive (#71). A block whose test reads a reactive `let` or prop is re-evaluated when one of those names changes; when the result flips, the old branch is removed and the other one is built from current state. Blocks without `{:else}`, nested blocks, each lists inside branches, and imported components inside branches are all covered. A test with no reactive dependency (for example one reading only `const` values) can never change, so it keeps the inline mount-time emission.
+- `on:` directives are accepted inside `{#each}` bodies (#70), at any depth of the item, with the item variable in scope: `<button on:click={() => remove(entry.id)}>`. Listeners attach when an item's record is created and detach when the record is removed. Inline handlers get the same reactive-assignment instrumentation as everywhere else, and a handler that assigns a prop still fails with WIZZ-G015.
+- `src/compiler/generator/blockScopes.js`: the ownership model both features share. A branch (or the component itself) is a scope record `{ lists, drop, mounts, nodes }`; `analyzeBlocks()` numbers reactive if blocks and reports which helpers a template needs.
+- `test/fixtures/benchmark-blocks.wizz` and a benchmark test pinning the cost of toggling a reactive branch around a 100-row list whose rows carry handlers: one branch built per toggle, 99 listeners added and 99 removed per cycle, and a live listener count that never grows.
+
+#### Changed
+
+- `dependencyAnalyzer.js` tags every `IfBlock` with `dependencies`, extracted from its `testAST` the same way expression nodes are tagged.
+- `domGenerator.js`: a reactive if block emits an empty-text anchor, a `__wizzIfBlock(parent, anchor, test, makers, -1, null)` object, an initial `sync()`, a block updater pushed onto `__wizzLists`, and a disposer pushed onto `__wizzDrop`. Each branch becomes a factory-scope maker `__wizzIfMake_<id>_<key>(__wizzParent, __wizzAnchor)`, emitted after `__wizzCreate`. Inside a maker, top-level nodes are inserted before the anchor and tracked, listeners attach through `__wizzOn` into the maker's own `__wizzDrop`, component tags are destroyed by a scope disposer instead of joining `__wizzChildren`, and the update-target variables the branch assigned are nulled on drop.
+- Each records whose body has listeners are `{ node, drop, update(__wizzItem) { item = __wizzItem; ... } }`. Rebinding the create function's item parameter is what keeps a handler reading the item's current value after a keyed item is replaced by a new object. Bodies without listeners keep the previous record shape.
+- `updateGenerator.js` runs block updaters for reactive if blocks as well as each lists, before the target writes: a branch built in the same pass is already current, and a dropped one has cleared its targets.
+- `hydrationGenerator.js` adopts a delivered branch into the same machinery: scope records and branch keys are declared at `__wizzHydrateCreate` scope, top-level nodes, deferred listeners, lists, nested blocks, and update targets register in the branch's record, the block anchor is created after the adopted run, and later swaps call the makers `create()` shares. Component tags in a reactive branch are adopted only when their branch was delivered (an untaken branch previously reached `hydrateRoot(null)`), and their adopted root is tracked by the branch so dropping it removes a root the self-adopted child deliberately leaves in place. Pending listeners carry their owner's `drop` list as a fourth entry.
+- `componentGenerator.js` emits the `__wizzOn`, `__wizzDropScope`, and `__wizzIfBlock` helpers at module scope only when the template needs them, declares the factory-level `__wizzDrop` list only when a block or item listener exists, and has `destroy()` run it (without detaching) before destroying the remaining children. Templates using neither feature are byte-identical apart from the version header.
+- The server gate (`assertServerRenderable`) validates `on:` directives in each bodies instead of rejecting them; server markup is unchanged, since listeners are client-only. A component that uses per-row handlers therefore stays server-renderable and hydratable.
+- WIZZ-G006 (`eventInsideEach`) is retired. It stays in the catalog, is never reused, and is no longer thrown.
+- Versions: **syntax minor** (each bodies accept a directive they used to reject; the `{#if}` grammar is unchanged). **Output minor** (block helpers, branch makers, anchors, and scope-owned listeners are additive; the module surface is unchanged). **Compiler minor**, and `package.json` follows it.
+
+#### Migration
+
+- A component that relied on a branch staying put after its condition changed now sees the branch replaced. That was documented as a "not supported yet" limit rather than a contract, and the workaround it forced (render both, toggle a class) keeps working unchanged.
+- A replaced branch is rebuilt, not hidden, so DOM state inside it (typed input text, scroll position, a child component's own state) is lost when the test flips. Keep such state in a script `let`, or keep the element mounted and toggle `hidden={flag}`.
+- A reactive if block adds one empty text node (its anchor) after its branch. Code that indexes `childNodes` of an element containing such a block shifts by one for the siblings that follow it. Hydration creates this anchor, as it already does for list anchors, so "zero created nodes" pins on pages with a reactive `{#if}` become "one text node per block".
+- With persistent state, hydration still adopts the branch the server rendered from the default, then the initial update pass replaces it with the branch the stored value selects. Previously the delivered branch stayed.
+- An `on:` handler expression in an each body is evaluated once per item. Inline arrows read the item when they run; `on:click={makeHandler(item)}` keeps the handler built from the item's first value.
+- Rebuild client, hydratable, and server modules together, as with any output bump.
+
+#### Docs
+
+- The README's "Template Language at a Glance" table and the MCP `language_contract`/`project_overview` limits rows (kept in sync by `mcpTools.test.js`) describe both features; the README's Lists and Conditional Rendering sections gain examples and the rebuild-not-hide caveat. `src/compiler/generator/README.md` documents the block object, makers, scope records, per-record listeners, and the new `blockScopes.js` section; the parser, analyzer, and compiler READMEs, `STRUCTURE.md`, and `version.js` are updated to match. The ROADMAP's Framework Feedback records both findings as landed.
+
 ### Fixed — Dynamic Boolean Attributes Toggle Presence (issue #72; compiler 1.20.0 → 1.21.0, output 1.10.1 → 1.11.0)
 
 #### Fixed

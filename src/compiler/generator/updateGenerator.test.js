@@ -309,3 +309,52 @@ test('update() emits helper calls with the boolean flag only for boolean names',
   assert.match(source, /__wizzAttr\(__wizzTarget_1, "aria-hidden", a\);/);
   assert.match(source, /__wizzTarget_1\.checked = a;/);
 });
+
+const ifBlock = (dependencies, consequent, alternate = null) => ({
+  type: 'IfBlock', test: 'open', dependencies, consequent, alternate, children: alternate || consequent
+});
+
+test('runs block updaters first when the template has a reactive if block', () => {
+  const template = root(element('main', [ifBlock(['open'], [element('p', [expression('label')])])]));
+  const source = generateUpdateFunction(template);
+  const lines = source.split('\n').map((line) => line.trim());
+
+  // Blocks go before the target writes: a branch built in this pass is
+  // already current, and a dropped one has cleared its targets.
+  assert.equal(lines[1], '__wizzLists.forEach((updateList) => updateList(__wizzChanged));');
+  assert.ok(lines.indexOf('if (__wizzChanged.label) {') > 1);
+  // The test itself is never inlined into update(): the block owns it.
+  assert.doesNotMatch(source, /if \(open\)/);
+});
+
+test('a dependency-free if block adds no block updater pass', () => {
+  const template = root(element('main', [ifBlock([], [element('p', [expression('label')])])]));
+  assert.doesNotMatch(generateUpdateFunction(template), /__wizzLists/);
+  // The same holds when the analyzer never ran (no dependencies property).
+  const untagged = root(element('main', [{ type: 'IfBlock', test: 'open', consequent: [], alternate: null, children: [] }]));
+  assert.doesNotMatch(generateUpdateFunction(untagged), /__wizzLists/);
+});
+
+test('a reactive if block nested in an element, a branch, or an else is found', () => {
+  const nested = ifBlock(['open'], []);
+  for (const template of [
+    root(element('main', [element('section', [nested])])),
+    root(element('main', [ifBlock([], [nested])])),
+    root(element('main', [ifBlock([], [], [nested])]))
+  ]) {
+    assert.match(generateUpdateFunction(template), /__wizzLists\.forEach/);
+  }
+});
+
+test('writes into a dropped branch are skipped and resume when the target returns', () => {
+  const template = root(element('main', [ifBlock(['open'], [element('p', [expression('label')])])]));
+  const source = generateUpdateFunction(template);
+  const run = new Function('__wizzLists', 'label', '__wizzTarget_1', `${source}\n__wizzUpdate({}, { label: true });`);
+
+  // The branch cleared its target on drop: nothing to write, nothing throws.
+  assert.doesNotThrow(() => run([], 'a', null));
+  assert.doesNotThrow(() => run([], 'a', undefined));
+  const text = { nodeValue: '' };
+  run([], 'b', text);
+  assert.equal(text.nodeValue, 'b');
+});
