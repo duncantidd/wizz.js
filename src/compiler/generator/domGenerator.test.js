@@ -246,16 +246,159 @@ test('rejects each blocks without exactly one root element', () => {
   );
 });
 
-test('rejects event directives inside each block bodies', () => {
+const listenerItem = (attributes) => ({
+  type: 'Element',
+  name: 'li',
+  attributes,
+  children: [{ type: 'Element', name: 'button', attributes: [{ name: 'on:click', value: '() => pick(item)' }], children: [] }]
+});
+
+test('emits each-item listeners through the scoped helper and a per-record drop list', () => {
+  const source = generateCreateFunction(createEachTemplate('id', [listenerItem([{ name: 'on:focus', value: 'select' }])]));
+
+  // Item listeners never join the component-wide list: a removed item must
+  // release its own.
+  assert.doesNotMatch(source, /__wizzListen\(/);
+  assert.match(source, /function __wizzCreateItem_2\(item\) \{\n {4}const __wizzDrop = \[\];/);
+  assert.match(source, /__wizzDrop\.push\(__wizzOn\(__wizzNode_3, "focus", select\)\);/);
+  assert.match(source, /__wizzDrop\.push\(__wizzOn\(__wizzNode_4, "click", \(\) => pick\(item\)\)\);/);
+  assert.doesNotMatch(source, /setAttribute\("on:/, 'directives never become attributes');
+  // The record exposes its disposers and rebinds the item its handlers read.
+  assert.match(source, /drop: __wizzDrop,\n {6}update\(__wizzItem\) \{\n {8}item = __wizzItem;/);
+  // A removed record drops its listeners; the owning scope drops the rest.
+  assert.match(source, /if \(!__wizzNext\.has\(__wizzKey\)\) \{ __wizzNode_1\.removeChild\(__wizzRecord\.node\); for \(const __wizzDropItem of __wizzRecord\.drop\) __wizzDropItem\(\); \}/);
+  assert.match(source, /__wizzDrop\.push\(\(__wizzDetach\) => \{\n {4}__wizzRecords_2\.forEach\(\(__wizzRecord\) => \{\n {6}for \(const __wizzDropItem of __wizzRecord\.drop\) __wizzDropItem\(\);\n {4}\}\);\n {4}__wizzRecords_2\.clear\(\);\n {2}\}\);/);
+});
+
+test('each items without listeners keep the listener-free record shape', () => {
+  const source = generateCreateFunction(createEachTemplate('id', [listItem()]));
+  assert.doesNotMatch(source, /__wizzDrop|__wizzOn|__wizzItem\b/);
+  assert.match(source, /update\(item\) \{/);
+});
+
+test('uses the instrumented handler source for an each-item directive', () => {
+  const attribute = { name: 'on:click', value: '() => total += item' };
+  const handlerSources = new WeakMap([[attribute, '() => { total += item; __wizzQueueUpdate({ total: true }); }']]);
+  const source = generateCreateFunction(createEachTemplate(null, [{ type: 'Element', name: 'li', attributes: [attribute], children: [] }]), [], handlerSources);
+  assert.match(source, /__wizzOn\(__wizzNode_3, "click", \(\) => \{ total \+= item; __wizzQueueUpdate\(\{ total: true \}\); \}\)/);
+});
+
+test('validates event directives inside each block bodies', () => {
+  const withDirective = (attribute) => createEachTemplate(null, [{ type: 'Element', name: 'li', attributes: [attribute], children: [] }]);
   assert.throws(
-    () => generateCreateFunction(createEachTemplate(null, [{
-      type: 'Element',
-      name: 'li',
-      attributes: [{ name: 'on:click', value: 'select' }],
-      children: []
-    }])),
-    /Event directive 'on:click' is not supported inside each blocks yet\./
+    () => generateCreateFunction(withDirective({ name: 'on:click', value: null })),
+    (error) => error.code === 'WIZZ-G012' && /Event directive 'on:click' requires a handler expression\./.test(error.message)
   );
+  assert.throws(
+    () => generateCreateFunction(withDirective({ name: 'on:click', value: '   ' })),
+    (error) => error.code === 'WIZZ-G012'
+  );
+  assert.throws(
+    () => generateCreateFunction(withDirective({ name: 'on:bad-name', value: 'go' })),
+    (error) => error.code === 'WIZZ-G013' && /Invalid event directive 'on:bad-name'\./.test(error.message)
+  );
+});
+
+const reactiveIf = (consequent, alternate = null, test = 'open') => ({
+  type: 'Root',
+  children: [{
+    type: 'Element',
+    name: 'main',
+    attributes: [],
+    children: [{ type: 'IfBlock', test, dependencies: ['open'], consequent, alternate, children: alternate || consequent }]
+  }]
+});
+
+test('emits a reactive if block as an anchor, a block, and one maker per branch', () => {
+  const source = generateCreateFunction(reactiveIf(
+    [{ type: 'Element', name: 'p', attributes: [], children: [{ type: 'Text', value: 'yes' }] }],
+    [{ type: 'Text', value: 'no' }]
+  ));
+
+  // create() holds only the anchor and the block wiring.
+  assert.match(source, /const __wizzIfAnchor_1 = document\.createTextNode\(""\);\n {2}__wizzNode_1\.appendChild\(__wizzIfAnchor_1\);/);
+  assert.match(source, /const __wizzIf_1 = __wizzIfBlock\(__wizzNode_1, __wizzIfAnchor_1, \(\) => \(open\), \[__wizzIfMake_1_0, __wizzIfMake_1_1\], -1, null\);/);
+  assert.match(source, /__wizzIf_1\.sync\(\{\}, true, __wizzChildMounts\);/);
+  assert.match(source, /__wizzLists\.push\(\(__wizzChanged\) => __wizzIf_1\.sync\(__wizzChanged, __wizzChanged\.open\)\);/);
+  assert.match(source, /__wizzDrop\.push\(__wizzIf_1\.drop\);/);
+  assert.doesNotMatch(source, /if \(open\) \{/, 'no inline branch selection for a reactive test');
+
+  // Makers follow create() and insert their own top-level nodes in front of
+  // the anchor, tracking them for removal; deeper nodes are appended.
+  const createEnd = source.indexOf('\n}\n');
+  const consequent = source.indexOf('function __wizzIfMake_1_1(__wizzParent, __wizzAnchor) {');
+  const alternate = source.indexOf('function __wizzIfMake_1_0(__wizzParent, __wizzAnchor) {');
+  assert.ok(createEnd !== -1 && createEnd < consequent && consequent < alternate);
+  assert.match(source, /const __wizzNode_2 = document\.createElement\("p"\);\n {2}__wizzParent\.insertBefore\(__wizzNode_2, __wizzAnchor\);\n {2}__wizzNodes\.push\(__wizzNode_2\);/);
+  assert.match(source, /__wizzNode_2\.appendChild\(__wizzNode_3\);/);
+  assert.match(source, /return \{ lists: __wizzLists, drop: __wizzDrop, mounts: __wizzChildMounts, nodes: __wizzNodes \};/);
+});
+
+test('a reactive if block without an else passes null for the falsy maker', () => {
+  const source = generateCreateFunction(reactiveIf([{ type: 'Text', value: 'yes' }]));
+  assert.match(source, /\[null, __wizzIfMake_1_1\]/);
+  assert.doesNotMatch(source, /__wizzIfMake_1_0/);
+});
+
+test('a maker scopes its listeners, clears its update targets, and owns its components', () => {
+  const expression = { type: 'Expression', value: 'label', dependencies: ['label'] };
+  const paragraph = {
+    type: 'Element',
+    name: 'p',
+    attributes: [{ name: 'on:click', value: 'go' }],
+    children: [expression]
+  };
+  const component = {
+    type: 'Element',
+    name: 'Badge',
+    componentId: 1,
+    attributes: [{ name: 'label', value: 'label', dynamic: true, dependencies: ['label'] }],
+    children: []
+  };
+  const targets = new Map([[expression, '__wizzTarget_1']]);
+  const source = generateCreateFunction(reactiveIf([paragraph, component]), [{ name: 'Badge' }], new WeakMap(), targets);
+  const maker = source.slice(source.indexOf('function __wizzIfMake_1_1'));
+
+  assert.match(maker, /__wizzDrop\.push\(__wizzOn\(__wizzNode_2, "click", go\)\);/);
+  assert.doesNotMatch(maker, /__wizzListen\(/);
+  assert.match(maker, /__wizzTarget_1 = __wizzNode_3;/);
+  assert.match(maker, /__wizzDrop\.push\(\(\) => \{ __wizzTarget_1 = null; \}\);/);
+  // The placeholder goes in front of the anchor but is never tracked: the
+  // mount removes it.
+  assert.match(maker, /__wizzParent\.insertBefore\(__wizzNode_4, __wizzAnchor\);\n {2}__wizzChildMounts\.push\(\(\) => \{/);
+  assert.doesNotMatch(maker, /__wizzNodes\.push\(__wizzNode_4\)/);
+  assert.match(maker, /const __wizzChild = Badge\(__wizzParent, \{ "label": label \}, __wizzNode_4\);\n {4}__wizzComponent_1 = __wizzChild;\n {4}__wizzDrop\.push\(\(\) => \{ __wizzChild\.destroy\(\); __wizzComponent_1 = null; \}\);\n {4}__wizzParent\.removeChild\(__wizzNode_4\);/);
+  assert.doesNotMatch(maker, /__wizzChildren\.push/, 'a branch child is not in the component-wide list');
+});
+
+test('a list directly in a branch detaches its records; a deeper one leaves with its element', () => {
+  const each = () => ({ type: 'EachBlock', collection: 'items', item: 'item', key: null, children: [listItem()] });
+  const direct = generateCreateFunction(reactiveIf([each()]));
+  assert.match(direct, /__wizzParent\.insertBefore\(__wizzAnchor_2, __wizzAnchor\);\n {2}__wizzNodes\.push\(__wizzAnchor_2\);/);
+  assert.match(direct, /__wizzParent\.insertBefore\(__wizzRecord\.node, __wizzAnchor_2\);/);
+  assert.match(direct, /__wizzRecords_2\.forEach\(\(__wizzRecord\) => \{\n {6}if \(__wizzDetach\) __wizzParent\.removeChild\(__wizzRecord\.node\);\n {4}\}\);/);
+
+  const nested = generateCreateFunction(reactiveIf([{ type: 'Element', name: 'ul', attributes: [], children: [each()] }]));
+  assert.doesNotMatch(nested, /__wizzDetach/, 'the list element carries its items out');
+});
+
+test('nested reactive blocks get their own makers and anchors inside the outer maker', () => {
+  const inner = { type: 'IfBlock', test: 'deep', dependencies: ['deep'], consequent: [{ type: 'Text', value: 'in' }], alternate: null, children: [] };
+  const template = reactiveIf([inner]);
+  const source = generateCreateFunction(template);
+  const outerMaker = source.slice(source.indexOf('function __wizzIfMake_1_1'));
+  // The nested anchor is one of the outer branch's own nodes.
+  assert.match(outerMaker, /__wizzParent\.insertBefore\(__wizzIfAnchor_2, __wizzAnchor\);\n {2}__wizzNodes\.push\(__wizzIfAnchor_2\);/);
+  assert.match(outerMaker, /__wizzIfBlock\(__wizzParent, __wizzIfAnchor_2, \(\) => \(deep\), \[null, __wizzIfMake_2_1\], -1, null\);/);
+  assert.match(source, /function __wizzIfMake_2_1\(__wizzParent, __wizzAnchor\) \{/);
+});
+
+test('an if block without dependencies is selected inline at mount', () => {
+  const template = reactiveIf([{ type: 'Text', value: 'yes' }], [{ type: 'Text', value: 'no' }]);
+  template.children[0].children[0].dependencies = [];
+  const source = generateCreateFunction(template);
+  assert.match(source, /if \(open\) \{\n {4}const __wizzNode_2 = document\.createTextNode\("yes"\);\n {4}__wizzNode_1\.appendChild\(__wizzNode_2\);\n {2}\} else \{/);
+  assert.doesNotMatch(source, /__wizzIfBlock|__wizzIfMake|__wizzAnchor/);
 });
 
 test('rejects nested blocks inside each block bodies', () => {

@@ -905,3 +905,180 @@ test('hydratable list items write boolean attributes through the helper', () => 
   assert.doesNotMatch(source, /setAttribute\("hidden", String/);
   assert.equal((source.match(/function __wizzAttr\(/g) || []).length, 1);
 });
+
+// --- Reactive {#if} (issue #71) and on: inside {#each} (issue #70) ---
+// Emission pins for the adoption walk. The behavior these lines produce is
+// exercised end to end, against real server markup, in test/hydration.test.js.
+
+const hydrateCreateOf = (source) => source.slice(source.indexOf('function __wizzHydrateCreate('), source.indexOf('// --- Reactivity Engine ---'));
+
+test('adopts a reactive if block into the block machinery create() builds', () => {
+  const source = generateHydratable(
+    '<script>let flag = true; function go() {}</script><main>{#if flag}<p on:click={go}>{flag}</p>{:else}<i>no</i>{/if}</main>'
+  );
+  const walk = hydrateCreateOf(source);
+
+  // The scope record and branch key are declared at function scope, before
+  // the walk, so component adoption after the walk can reach them.
+  assert.match(walk, /const __wizzIfScope_1 = \{ lists: \[\], drop: \[\], mounts: \[\], nodes: \[\] \};\n\s+let __wizzIfKey_1 = 0;/);
+  assert.ok(walk.indexOf('__wizzIfScope_1 = {') < walk.indexOf('const __wizzRoot ='));
+
+  // The delivered branch is adopted into the record: its top-level node, its
+  // listener (still deferred), and its update target.
+  assert.match(walk, /if \(flag\) \{\n\s+__wizzIfKey_1 = 1;/);
+  assert.match(walk, /__wizzIfScope_1\.nodes\.push\(__wizzNode_\d+\);/);
+  assert.match(walk, /__wizzPendingListeners\.push\(\[__wizzNode_\d+, "click", go, __wizzIfScope_1\.drop\]\);/);
+  assert.match(walk, /if \(__wizzProblems\.length === 0\) __wizzIfScope_1\.drop\.push\(\(\) => \{ __wizzTarget_1 = null; \}\);/);
+
+  // The anchor follows the adopted run and the cursor moves past it; the
+  // block starts from the adopted key and scope and shares create()'s makers.
+  assert.match(walk, /const __wizzIfAnchor_1 = document\.createTextNode\(''\);\n\s+__wizzRoot\.insertBefore\(__wizzIfAnchor_1, __wizzRoot\.childNodes\[__wizzNode_1\] \|\| null\);\n\s+__wizzNode_1 \+= 1;/);
+  assert.match(walk, /__wizzIfBlock\(__wizzRoot, __wizzIfAnchor_1, \(\) => \(flag\), \[__wizzIfMake_1_0, __wizzIfMake_1_1\], __wizzIfKey_1, __wizzIfScope_1\);/);
+  assert.match(walk, /__wizzLists\.push\(\(__wizzChanged\) => __wizzIf_1\.sync\(__wizzChanged, __wizzChanged\.flag\)\);/);
+  assert.match(walk, /__wizzDrop\.push\(__wizzIf_1\.drop\);/);
+  // The makers themselves are emitted once, by the create generator.
+  assert.equal(source.split('function __wizzIfMake_1_1(').length, 2);
+  assert.doesNotMatch(walk, /function __wizzIfMake/);
+});
+
+test('routes scoped pending listeners through the scoped helper only when a template has them', () => {
+  const scoped = generateHydratable('<script>let flag = true; function go() {}</script><main>{#if flag}<p on:click={go}>x</p>{/if}</main>');
+  assert.match(scoped, /__wizzPendingListeners\.forEach\(\(pending\) => \{ if \(pending\[3\]\) pending\[3\]\.push\(__wizzOn\(pending\[0\], pending\[1\], pending\[2\]\)\); else __wizzListen\(pending\[0\], pending\[1\], pending\[2\]\); \}\);/);
+
+  const plain = generateHydratable('<script>let n = 0; function go() {}</script><main on:click={go}>{n}</main>');
+  assert.match(plain, /__wizzPendingListeners\.forEach\(\(pending\) => __wizzListen\(pending\[0\], pending\[1\], pending\[2\]\)\);/);
+  assert.doesNotMatch(plain, /__wizzOn\b|__wizzIfBlock|__wizzDrop\b/);
+});
+
+test('a dependency-free if block is adopted inline with no block machinery', () => {
+  const source = generateHydratable("<script>const mode = 'a'; function go() {}</script><main>{#if mode === 'a'}<p on:click={go}>x</p>{/if}</main>");
+  const walk = hydrateCreateOf(source);
+  assert.match(walk, /if \(mode === 'a'\) \{/);
+  assert.match(walk, /__wizzPendingListeners\.push\(\[__wizzNode_\d+, "click", go\]\);/);
+  assert.doesNotMatch(source, /__wizzIfScope|__wizzIfBlock|__wizzIfAnchor|__wizzDrop\b/);
+});
+
+test('a component tag in a reactive branch is adopted into the branch scope', () => {
+  const source = generateHydratable(
+    '<script>\nimport Counter from "./Counter.wizz";\nlet flag = true;\nlet label = "a";\n</script><main>{#if flag}<Counter label={label} />{/if}</main>',
+    { componentServerRenderable: { Counter: true } }
+  );
+  const walk = hydrateCreateOf(source);
+  // A self-adopted child leaves its root in place on destroy, so the branch
+  // tracks that root as one of its own nodes.
+  assert.match(walk, /if \(__wizzProblems\.length === 0\) __wizzIfScope_1\.nodes\.push\(__wizzNode_1\);/);
+  // An untaken branch leaves the ref null: nothing is adopted, and the maker
+  // mounts the child if the branch is taken later.
+  assert.match(walk, /if \(__wizzProblems\.length === 0 && __wizzNode_1\) \{/);
+  assert.match(walk, /__wizzIfScope_1\.drop\.push\(\(\) => \{ __wizzChild_1\.destroy\(\); __wizzComponent_1 = null; \}\);/);
+  assert.doesNotMatch(walk, /__wizzChildren\.push\(__wizzChild_1\)/, 'a branch child is not in the component-wide list');
+  assert.match(walk, /__wizzComponent_1 = __wizzChild_1;/);
+});
+
+test('a component tag outside reactive branches keeps the component-wide adoption', () => {
+  const source = generateHydratable(
+    '<script>\nimport Counter from "./Counter.wizz";\n</script><main><Counter /></main>',
+    { componentServerRenderable: { Counter: true } }
+  );
+  const walk = hydrateCreateOf(source);
+  assert.match(walk, /__wizzChildren\.push\(__wizzChild_1\);/);
+  assert.doesNotMatch(walk, /__wizzIfScope|&& __wizzNode_1\) \{/);
+});
+
+test('a component tag in a dependency-free if branch guards adoption on its ref', () => {
+  const source = generateHydratable(
+    '<script>\nimport Counter from "./Counter.wizz";\nconst show = false;\n</script><main>{#if show}<Counter />{/if}</main>',
+    { componentServerRenderable: { Counter: true } }
+  );
+  const walk = hydrateCreateOf(source);
+  // Even without a reactive branch scope, an untaken constant branch leaves
+  // the component ref null and must not call hydrateRoot(null, ...).
+  assert.match(walk, /if \(__wizzProblems\.length === 0 && __wizzNode_1\) \{/);
+  assert.match(walk, /__wizzChildren\.push\(__wizzChild_1\);/);
+  assert.doesNotMatch(walk, /__wizzIfScope/);
+});
+
+test('each items with listeners queue them per record and rebind the item on update', () => {
+  const source = generateHydratable(
+    '<script>let rows = [{ id: 1 }]; function pick() {}</script><ul>{#each rows as row (row.id)}<li><button on:click={() => pick(row.id)}>x</button></li>{/each}</ul>'
+  );
+  const walk = hydrateCreateOf(source);
+
+  // Adopted item: the listener is queued only after the whole item verified,
+  // carrying the record's own drop list.
+  const adoptItem = walk.slice(walk.indexOf('function __wizzHydrateListItem_1('), walk.indexOf('function __wizzCreateFreshItem_1('));
+  assert.match(adoptItem, /const __wizzDrop = \[\];\n\s+__wizzPendingListeners\.push\(\[__wizzNode_1_0_1, "click", \(\) => pick\(row\.id\), __wizzDrop\]\);\n\s+return \{/);
+  assert.ok(adoptItem.lastIndexOf('return null;') < adoptItem.indexOf('const __wizzDrop = [];'), 'no listener is queued before the last verification');
+  assert.match(adoptItem, /drop: __wizzDrop,\n\s+update\(__wizzItem\) \{\n\s+row = __wizzItem;/);
+
+  // Fresh item (created after hydration): attached immediately.
+  const freshItem = walk.slice(walk.indexOf('function __wizzCreateFreshItem_1('), walk.indexOf('function __wizzHydrateUpdateList_1('));
+  assert.match(freshItem, /__wizzDrop\.push\(__wizzOn\(__wizzFresh_1_1, "click", \(\) => pick\(row\.id\)\)\);/);
+  assert.doesNotMatch(freshItem, /setAttribute\("on:/);
+  assert.match(freshItem, /drop: __wizzDrop,\n\s+update\(__wizzItem\) \{\n\s+row = __wizzItem;/);
+
+  // Removal and scope teardown both release record listeners.
+  assert.match(walk, /if \(!__wizzNext\.has\(__wizzKey\)\) \{ __wizzAnchor_1\.parentNode\.removeChild\(__wizzRecord\.node\); for \(const __wizzDropItem of __wizzRecord\.drop\) __wizzDropItem\(\); \}/);
+  assert.match(walk, /__wizzDrop\.push\(\(__wizzDetach\) => \{\n\s+__wizzRecords_1\.forEach\(\(__wizzRecord\) => \{\n\s+for \(const __wizzDropItem of __wizzRecord\.drop\) __wizzDropItem\(\);\n\s+\}\);\n\s+__wizzRecords_1\.clear\(\);\n\s+\}\);/);
+});
+
+test('a list directly in a reactive branch registers in the branch scope and detaches with it', () => {
+  const source = generateHydratable(
+    '<script>let flag = true; let rows = [1];</script><ul>{#if flag}{#each rows as row}<li>{row}</li>{/each}{/if}</ul>'
+  );
+  const walk = hydrateCreateOf(source);
+  assert.match(walk, /__wizzIfScope_1\.lists\.push\(\(__wizzChanged\) => \{ if \(__wizzChanged\.rows\) __wizzHydrateUpdateList_1\(\); \}\);/);
+  assert.match(walk, /__wizzIfScope_1\.nodes\.push\(__wizzAnchor_1\);/);
+  assert.match(walk, /__wizzIfScope_1\.drop\.push\(\(__wizzDetach\) => \{\n\s+__wizzRecords_1\.forEach\(\(__wizzRecord\) => \{\n\s+if \(__wizzDetach\) __wizzParent\.removeChild\(__wizzRecord\.node\);/);
+  assert.doesNotMatch(walk, /\b__wizzLists\.push\(\(__wizzChanged\) => \{ if \(__wizzChanged\.rows\)/, 'the list is not registered component-wide');
+});
+
+test('hydratable list items without listeners keep the listener-free record shape', () => {
+  const source = generateHydratable('<script>let rows = [1];</script><ul>{#each rows as row}<li>{row}</li>{/each}</ul>');
+  assert.doesNotMatch(source, /__wizzDrop\b|__wizzOn\b|__wizzItem\b/);
+  assert.match(source, /update\(row\) \{/);
+});
+
+test('adopts a reactive block from shim markup, then swaps and releases its listener', async () => {
+  const componentSource = '<script>let open = true; function toggle() { open = !open; } function noop() {}</script>'
+    + '<main><button on:click={toggle}>t</button>{#if open}<p on:click={noop}>yes</p>{/if}</main>';
+  const document = createDocument();
+  const { hydrateComponent } = new Function(
+    'document',
+    stripModule(generateHydratable(componentSource)) + '\nreturn { mountComponent, hydrateComponent, hydrateRoot };'
+  )(document);
+
+  // Delivered markup, with the block's boundary markers as comments.
+  const main = document.createElement('main');
+  const button = document.createElement('button');
+  button.childNodes.push(document.createTextNode('t'));
+  const paragraph = document.createElement('p');
+  paragraph.childNodes.push(document.createTextNode('yes'));
+  main.childNodes.push(button, document.createComment(' '), paragraph, document.createComment(' '));
+  const target = createTarget();
+  target.childNodes.push(main);
+
+  const elementsBefore = document.metrics.elements;
+  const textNodesBefore = document.metrics.textNodes;
+  const component = hydrateComponent(target, {}, { open: true });
+  assert.ok(component);
+  assert.equal(document.metrics.elements, elementsBefore, 'adoption creates no elements');
+  assert.equal(document.metrics.textNodes, textNodesBefore + 1, 'only the block anchor is created');
+  assert.deepEqual(main.childNodes.map((node) => node.tagName ?? node.nodeValue), ['button', 'p', '']);
+  assert.equal(typeof paragraph.listeners.click, 'function');
+
+  button.dispatchEvent('click');
+  await flushUpdates();
+  assert.deepEqual(main.childNodes.map((node) => node.tagName ?? node.nodeValue), ['button', '']);
+  assert.equal(paragraph.listeners.click, undefined, 'the adopted branch released its listener');
+
+  button.dispatchEvent('click');
+  await flushUpdates();
+  assert.deepEqual(main.childNodes.map((node) => node.tagName ?? node.nodeValue), ['button', 'p', '']);
+  assert.notEqual(main.childNodes[1], paragraph);
+
+  const rebuilt = main.childNodes[1];
+  component.destroy();
+  assert.equal(rebuilt.listeners.click, undefined);
+  assert.deepEqual(target.childNodes, []);
+});

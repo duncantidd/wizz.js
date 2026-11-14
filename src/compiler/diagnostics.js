@@ -82,6 +82,8 @@ const CODES = Object.freeze({
     eachRootCount: 'WIZZ-G003',
     componentInsideEach: 'WIZZ-G004',
     eachBodyUnsupported: 'WIZZ-G005',
+    // Retired in syntax 1.5.0: each bodies accept `on:` directives (issue
+    // #70). The code stays reserved and is never reused or thrown.
     eventInsideEach: 'WIZZ-G006',
     propAttributeNameInvalid: 'WIZZ-G007',
     componentChildrenUnsupported: 'WIZZ-G008',

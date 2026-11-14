@@ -66,15 +66,19 @@ function collectUpdateTargets(templateAST) {
  */
 function generateUpdateFunction(templateAST, targets = collectUpdateTargets(templateAST)) {
   const builder = new CodeBuilder();
-  const hasEachBlock = (node) => node.type === 'EachBlock'
-    || (node.children || []).some(hasEachBlock)
-    || (node.consequent || []).some(hasEachBlock)
-    || (node.alternate || []).some(hasEachBlock);
+  // Each lists and reactive if blocks both register a block updater.
+  const hasBlockUpdater = (node) => node.type === 'EachBlock'
+    || (node.type === 'IfBlock' && node.dependencies?.length > 0)
+    || (node.children || []).some(hasBlockUpdater)
+    || (node.consequent || []).some(hasBlockUpdater)
+    || (node.alternate || []).some(hasBlockUpdater);
 
   builder.add('function __wizzUpdate(__wizzCtx, __wizzChanged) {')
         .indent();
 
-  if (hasEachBlock(templateAST)) {
+  // Blocks go first: a branch created in this pass is built from current
+  // state, and a dropped one has nulled its targets before the writes below.
+  if (hasBlockUpdater(templateAST)) {
     builder.add('__wizzLists.forEach((updateList) => updateList(__wizzChanged));');
   }
 
@@ -122,8 +126,8 @@ function generateUpdateFunction(templateAST, targets = collectUpdateTargets(temp
 
       (node.children || []).forEach(walk);
     } else if (node.type === 'IfBlock') {
-      // Conditional branches exist in the DOM after mount, so their reactive
-      // content and component props participate in updates like any other.
+      // A live branch's reactive content and component props take part in
+      // updates like any other; the guards skip whichever branch is absent.
       (node.consequent || []).forEach(walk);
       (node.alternate || []).forEach(walk);
     }

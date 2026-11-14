@@ -107,10 +107,16 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // (syntax patch: those names never worked, and the catalog grows additively).
   // compiler 1.21.0 / output 1.11.0: dynamic boolean attributes toggle presence
   // and null/undefined remove any dynamic attribute (output minor, issue #72).
+  // compiler 1.22.0 / syntax 1.5.0 / output 1.12.0: `{#if}` re-evaluates when
+  // a dependency of its test changes (issue #71) and each bodies accept `on:`
+  // directives with the item in scope (issue #70). Syntax minor: a directive
+  // each bodies used to reject is accepted. Output minor: block helpers,
+  // branch makers, and scope-owned listeners are additive; the module surface
+  // is unchanged.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.21.0',
-    syntax: '1.4.3',
-    output: '1.11.0'
+    compiler: '1.22.0',
+    syntax: '1.5.0',
+    output: '1.12.0'
   });
 });
 
@@ -127,7 +133,7 @@ test('the version table is frozen so callers cannot mutate the contract', () => 
     'use strict';
     VERSIONS.syntax = '9.9.9';
   }, TypeError);
-  assert.equal(VERSIONS.syntax, '1.4.3');
+  assert.equal(VERSIONS.syntax, '1.5.0');
 });
 
 test('the compiler major version leads or matches every contract major version', () => {

@@ -1,7 +1,8 @@
 // src/compiler/generator/hydrationGenerator.js
 const { CodeBuilder } = require('./codeBuilder');
 const { CODES, compilerDiagnostic } = require('../diagnostics.js');
-const { buildComponentPropsSource } = require('./domGenerator');
+const { buildComponentPropsSource, eventListenerParts } = require('./domGenerator');
+const { analyzeBlocks, eachHasListeners, isEventAttribute, isReactiveIf, makerName, ifRecheckSource } = require('./blockScopes');
 const { attributeWriteSource, attributeValueSource, isBooleanAttribute } = require('./attributePolicy');
 
 /**
@@ -29,6 +30,15 @@ const { attributeWriteSource, attributeValueSource, isBooleanAttribute } = requi
  * imported component tags are adopted through the child module's hydrateRoot
  * export, which remounts inside the child's own root on mismatch so a nested
  * fallback never fails the parent.
+ *
+ * Reactive `{#if}` blocks (a test with reactive dependencies) are adopted
+ * into the same block machinery create() builds: the delivered branch becomes
+ * the block's initial scope record (see blockScopes.js), the block anchor is
+ * created after the adopted run (like a list anchor, it cannot survive HTML
+ * serialization), and a later change of branch calls the branch makers the
+ * create generator emitted at factory scope. Listeners inside a branch or an
+ * each item are still deferred until the walk passes, then attach through
+ * `__wizzOn` into the owning scope's disposers.
  *
  * Milestone 15 extends adoption to the delivered head run: when the page
  * renders head markup, the walk locates the `<!--wizz:head-start-->` /
@@ -61,6 +71,14 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
   let referenceCounter = 0;
   const nextReference = () => `__wizzNode_${++referenceCounter}`;
   let listCounter = 0;
+  const blocks = analyzeBlocks(templateAST);
+  const handlerSources = options.handlerSources ?? new WeakMap();
+  // Update-target variables captured by the branch being emitted; null
+  // outside reactive branches. `branchDepth` counts all enclosing {#if}
+  // blocks (reactive or constant) so component adoption knows whether a tag's
+  // ref can be null when its branch was not delivered.
+  let branchTargets = null;
+  let branchDepth = 0;
 
   const rootNode = templateAST.children.find(node => node.type === 'Element');
   if (!rootNode) {
@@ -143,6 +161,13 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
   (templateAST.children || []).forEach(preAllocateRefs);
   for (const componentRef of componentRefs.values()) {
     builder.add(`  let ${componentRef} = null;`);
+  }
+  // Reactive if blocks get their adopted scope record and branch key at
+  // function scope for the same reason: component adoption after the walk
+  // registers a branch's children in its scope.
+  for (const id of blocks.ifIds.values()) {
+    builder.add(`  const __wizzIfScope_${id} = { lists: [], drop: [], mounts: [], nodes: [] };`);
+    builder.add(`  let __wizzIfKey_${id} = 0;`);
   }
 
   // --- Delivered head adoption ---
@@ -284,22 +309,30 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     builder.add('  }');
   }
 
-  function emitListenerCollection(ref, elementNode) {
+  // `sc` names the scope record that owns what is being adopted (null for the
+  // component scope); `top` marks a branch's own top-level nodes, which the
+  // scope removes when the branch is replaced.
+  const listsOf = (sc) => (sc ? `${sc}.lists` : '__wizzLists');
+  const dropOf = (sc) => (sc ? `${sc}.drop` : '__wizzDrop');
+
+  function emitListenerCollection(ref, elementNode, sc) {
     for (const attribute of elementNode.attributes || []) {
-      if (!attribute.name.startsWith('on:')) continue;
+      if (!isEventAttribute(attribute)) continue;
       builder.add('  if (__wizzProblems.length === 0) {');
-      builder.add(`    __wizzPendingListeners.push([${ref}, ${JSON.stringify(attribute.name.slice(3))}, ${options.handlerSources?.get(attribute) ?? attribute.value}]);`);
+      // A fourth entry routes the listener into its scope's disposers.
+      builder.add(`    __wizzPendingListeners.push([${ref}, ${JSON.stringify(attribute.name.slice(3))}, ${handlerSources.get(attribute) ?? attribute.value}${sc ? `, ${sc}.drop` : ''}]);`);
       builder.add('  }');
     }
   }
 
-  function emitTextChild(child, parentRef, cursorRef) {
+  function emitTextChild(child, parentRef, cursorRef, sc, top) {
     const ref = nextReference();
     builder.add('  if (__wizzProblems.length === 0) {');
     builder.add(`    const ${ref} = ${parentRef}.childNodes[${cursorRef}];`);
     builder.add(`    if (!${ref} || ${ref}.nodeType !== 3 || ${ref}.nodeValue !== ${JSON.stringify(child.value)}) {`);
     builder.add(`      __wizzProblems.push('expected text ' + ${expectedTextLiteral(child.value)} + ' at index ' + ${cursorRef} + ' of <' + __wizzNodeTag(${parentRef}) + '>, found ' + __wizzDescribe(${ref}));`);
     builder.add('    }');
+    if (top) builder.add(`    ${sc}.nodes.push(${ref});`);
     builder.add(`    ${cursorRef} += 1;`);
     builder.add('  }');
   }
@@ -307,10 +340,12 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
   // Hands a verified node to update(). A failed walk abandons this closure for a
   // fresh mount, so a target captured before the failure is never read.
   function emitTargetCapture(ref, templateNode) {
-    if (updateTargets.has(templateNode)) builder.add(`    ${updateTargets.get(templateNode)} = ${ref};`);
+    if (!updateTargets.has(templateNode)) return;
+    builder.add(`    ${updateTargets.get(templateNode)} = ${ref};`);
+    if (branchTargets) branchTargets.push(updateTargets.get(templateNode));
   }
 
-  function emitExpressionChild(child, parentRef, cursorRef) {
+  function emitExpressionChild(child, parentRef, cursorRef, sc, top) {
     const ref = nextReference();
     builder.add('  if (__wizzProblems.length === 0) {');
     builder.add(`    const ${ref} = ${parentRef}.childNodes[${cursorRef}];`);
@@ -320,11 +355,12 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     builder.add(`      __wizzProblems.push('expected expression text at index ' + ${cursorRef} + ' of <' + __wizzNodeTag(${parentRef}) + '>, found ' + __wizzDescribe(${ref}));`);
     builder.add('    }');
     emitTargetCapture(ref, child);
+    if (top) builder.add(`    ${sc}.nodes.push(${ref});`);
     builder.add(`    ${cursorRef} += 1;`);
     builder.add('  }');
   }
 
-  function emitElementChild(elementNode, parentRef, cursorRef) {
+  function emitElementChild(elementNode, parentRef, cursorRef, sc, top) {
     const ref = nextReference();
     builder.add(`  let ${ref} = null;`);
     builder.add('  if (__wizzProblems.length === 0) {');
@@ -333,11 +369,12 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     builder.add(`      __wizzProblems.push('expected <${elementNode.name}> at index ' + ${cursorRef} + ' of <' + __wizzNodeTag(${parentRef}) + '>, found ' + __wizzDescribe(${ref}));`);
     builder.add('    }');
     emitTargetCapture(ref, elementNode);
+    if (top) builder.add(`    ${sc}.nodes.push(${ref});`);
     builder.add(`    ${cursorRef} += 1;`);
     builder.add('  }');
     emitDataWizzIdCheck(ref, elementNode);
-    emitListenerCollection(ref, elementNode);
-    walkChildren(elementNode, ref);
+    emitListenerCollection(ref, elementNode, sc);
+    walkChildren(elementNode, ref, sc);
   }
 
   // A component tag creates no element of its own: its rendered root occupies
@@ -362,27 +399,78 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     return ref;
   }
 
-  function emitIfBlock(node, parentRef, cursorRef, emitFlattenedChild) {
+  function emitIfBlock(node, parentRef, cursorRef, emitFlattenedChild, sc, top) {
     // The server selected its branch by evaluating this same test against the
     // render-time state; re-evaluating it against the seeded state selects
     // the same branch, so the flattened positions align. (A nondeterministic
     // author script can diverge here; the walk then falls back cleanly.)
+    if (!isReactiveIf(node)) {
+      // No reactive dependency: the branch never changes, so its content is
+      // adopted straight into the enclosing scope.
+      branchDepth += 1;
+      builder.add('  if (__wizzProblems.length === 0) {').indent();
+      builder.add(`    if (${node.test}) {`).indent();
+      (node.consequent || []).forEach(child => emitFlattenedChild(child, sc, top));
+      builder.dedent();
+      if (node.alternate) {
+        builder.add('    } else {').indent();
+        (node.alternate || []).forEach(child => emitFlattenedChild(child, sc, top));
+        builder.dedent();
+      }
+      builder.add('    }');
+      builder.dedent().add('  }');
+      branchDepth -= 1;
+      return;
+    }
+
+    const id = blocks.ifIds.get(node);
+    const scopeName = `__wizzIfScope_${id}`;
+    const keyName = `__wizzIfKey_${id}`;
+    // The delivered branch is adopted into the block's scope record, which
+    // the block then owns exactly as if a maker had built it.
+    const emitBranch = (children) => {
+      const outerTargets = branchTargets;
+      branchTargets = [];
+      branchDepth += 1;
+      children.forEach(child => emitFlattenedChild(child, scopeName, true));
+      branchDepth -= 1;
+      if (branchTargets.length > 0) {
+        builder.add(`    if (__wizzProblems.length === 0) ${scopeName}.drop.push(() => { ${branchTargets.join(' = ')} = null; });`);
+      }
+      branchTargets = outerTargets;
+    };
     builder.add('  if (__wizzProblems.length === 0) {').indent();
     builder.add(`    if (${node.test}) {`).indent();
-    (node.consequent || []).forEach(child => emitFlattenedChild(child, parentRef, cursorRef));
+    builder.add(`    ${keyName} = 1;`);
+    emitBranch(node.consequent || []);
     builder.dedent();
     if (node.alternate) {
       builder.add('    } else {').indent();
-      (node.alternate || []).forEach(child => emitFlattenedChild(child, parentRef, cursorRef));
+      emitBranch(node.alternate);
       builder.dedent();
     }
     builder.add('    }');
     builder.dedent().add('  }');
+
+    // The anchor occupies a real child position after the adopted run, so the
+    // cursor moves past it (the same accounting as a list anchor).
+    const anchorName = `__wizzIfAnchor_${id}`;
+    const blockName = `__wizzIf_${id}`;
+    const makers = `[${node.alternate ? makerName(id, 0) : 'null'}, ${makerName(id, 1)}]`;
+    builder.add('  if (__wizzProblems.length === 0) {');
+    builder.add(`    const ${anchorName} = document.createTextNode('');`);
+    builder.add(`    ${parentRef}.insertBefore(${anchorName}, ${parentRef}.childNodes[${cursorRef}] || null);`);
+    builder.add(`    ${cursorRef} += 1;`);
+    if (top) builder.add(`    ${sc}.nodes.push(${anchorName});`);
+    builder.add(`    const ${blockName} = __wizzIfBlock(${parentRef}, ${anchorName}, () => (${node.test}), ${makers}, ${keyName}, ${scopeName});`);
+    builder.add(`    ${listsOf(sc)}.push((__wizzChanged) => ${blockName}.sync(__wizzChanged, ${ifRecheckSource(node)}));`);
+    builder.add(`    ${dropOf(sc)}.push(${blockName}.drop);`);
+    builder.add('  }');
   }
 
-  function emitEachBlock(node, parentRef, cursorRef) {
+  function emitEachBlock(node, parentRef, cursorRef, sc, top) {
     const listId = ++listCounter;
-    emitListMachinery(listId, node);
+    emitListMachinery(listId, node, sc, top);
     builder.add('  if (__wizzProblems.length === 0) {');
     builder.add(`    ${cursorRef} += __wizzHydrateList_${listId}(${parentRef}, ${cursorRef});`);
     builder.add('  }');
@@ -396,14 +484,22 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
    * serialization) is created after the adopted run. Fresh items created by
    * later client updates reuse the same record shape the browser target
    * builds, so updateList semantics match exactly.
+   *
+   * Items with `on:` directives carry a per-record `drop` array, as in the
+   * browser target. An adopted item's listeners wait in the pending queue
+   * until the whole walk passes; a fresh item attaches them immediately.
    */
-  function emitListMachinery(listId, node) {
+  function emitListMachinery(listId, node, sc, top) {
     const itemVar = node.item;
     const recordsRef = `__wizzRecords_${listId}`;
     const anchorRef = `__wizzAnchor_${listId}`;
     const contentNodes = node.children.filter((child) => child.type !== 'Text' || child.value.trim() !== '');
     const itemRoot = contentNodes[0];
     const keylessIndex = `__wizzIndex_${listId}`;
+    const hasListeners = eachHasListeners(node);
+    // Handlers close over the item parameter, so update() rebinds it.
+    const updateHead = hasListeners ? 'update(__wizzItem) {' : `update(${itemVar}) {`;
+    const dropRecordSource = 'for (const __wizzDropItem of __wizzRecord.drop) __wizzDropItem();';
 
     const itemVars = new Map();
 
@@ -458,9 +554,24 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     };
     walkItemNode(itemRoot, rootVar);
 
+    if (hasListeners) {
+      // Queued only once the whole item verified, so a failed item never
+      // leaves a listener behind.
+      builder.add('    const __wizzDrop = [];');
+      for (const [listNode, listVar] of itemVars) {
+        for (const attribute of listNode.attributes || []) {
+          if (!isEventAttribute(attribute)) continue;
+          const { eventName, handler } = eventListenerParts(attribute, handlerSources);
+          builder.add(`    __wizzPendingListeners.push([${listVar}, ${JSON.stringify(eventName)}, ${handler}, __wizzDrop]);`);
+        }
+      }
+    }
+
     builder.add('    return {').indent();
     builder.add(`      node: ${rootVar},`);
-    builder.add(`      update(${itemVar}) {`).indent();
+    if (hasListeners) builder.add('      drop: __wizzDrop,');
+    builder.add(`      ${updateHead}`).indent();
+    if (hasListeners) builder.add(`        ${itemVar} = __wizzItem;`);
     emitItemUpdates(itemRoot);
     builder.dedent().add('      }');
     builder.dedent().add('    };');
@@ -485,6 +596,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     // emission mirrors the browser target's createItem.
     const freshVars = new Map();
     builder.add(`  function __wizzCreateFreshItem_${listId}(${itemVar}) {`).indent();
+    if (hasListeners) builder.add('    const __wizzDrop = [];');
     const buildFreshNode = (listNode, listParentName) => {
       const varName = `__wizzFresh_${listId}_${freshVars.size}`;
       freshVars.set(listNode, varName);
@@ -493,6 +605,9 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
         for (const attribute of listNode.attributes || []) {
           if (attribute.dynamic) {
             builder.add(`    ${attributeWriteSource(varName, attribute.name, attribute.value)}`);
+          } else if (isEventAttribute(attribute)) {
+            const { eventName, handler } = eventListenerParts(attribute, handlerSources);
+            builder.add(`    __wizzDrop.push(__wizzOn(${varName}, ${JSON.stringify(eventName)}, ${handler}));`);
           } else {
             builder.add(attribute.value === null
               ? `    ${varName}.setAttribute(${JSON.stringify(attribute.name)}, "");`
@@ -511,7 +626,9 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     const freshRoot = buildFreshNode(itemRoot, null);
     builder.add('    return {').indent();
     builder.add(`      node: ${freshRoot},`);
-    builder.add(`      update(${itemVar}) {`).indent();
+    if (hasListeners) builder.add('      drop: __wizzDrop,');
+    builder.add(`      ${updateHead}`).indent();
+    if (hasListeners) builder.add(`        ${itemVar} = __wizzItem;`);
     const emitFreshUpdates = (listNode) => {
       const varName = freshVars.get(listNode);
       if (listNode.type === 'Element') {
@@ -544,7 +661,9 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     builder.add(`      ${anchorRef}.parentNode.insertBefore(__wizzRecord.node, ${anchorRef});`);
     builder.add('      __wizzNext.set(__wizzKey, __wizzRecord);');
     builder.dedent().add('    });');
-    builder.add(`    ${recordsRef}.forEach((__wizzRecord, __wizzKey) => { if (!__wizzNext.has(__wizzKey)) ${anchorRef}.parentNode.removeChild(__wizzRecord.node); });`);
+    builder.add(hasListeners
+      ? `    ${recordsRef}.forEach((__wizzRecord, __wizzKey) => { if (!__wizzNext.has(__wizzKey)) { ${anchorRef}.parentNode.removeChild(__wizzRecord.node); ${dropRecordSource} } });`
+      : `    ${recordsRef}.forEach((__wizzRecord, __wizzKey) => { if (!__wizzNext.has(__wizzKey)) ${anchorRef}.parentNode.removeChild(__wizzRecord.node); });`);
     builder.add(`    ${recordsRef}.clear();`);
     builder.add(`    __wizzNext.forEach((__wizzRecord, __wizzKey) => ${recordsRef}.set(__wizzKey, __wizzRecord));`);
     builder.dedent().add('  }');
@@ -566,14 +685,26 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     // HTML serialization, so hydration creates it after the adopted run.
     builder.add(`    ${anchorRef} = document.createTextNode('');`);
     builder.add(`    __wizzParent.insertBefore(${anchorRef}, __wizzParent.childNodes[__wizzIndex] || null);`);
-    builder.add(`    __wizzLists.push((__wizzChanged) => { if (__wizzChanged.${node.collection}) __wizzHydrateUpdateList_${listId}(); });`);
+    builder.add(`    ${listsOf(sc)}.push((__wizzChanged) => { if (__wizzChanged.${node.collection}) __wizzHydrateUpdateList_${listId}(); });`);
+    if (top) builder.add(`    ${sc}.nodes.push(${anchorRef});`);
+    if (hasListeners || top) {
+      // The owning scope releases the live records: their listeners always,
+      // their nodes when the list sits directly in a replaced branch.
+      builder.add(`    ${dropOf(sc)}.push((__wizzDetach) => {`).indent();
+      builder.add(`      ${recordsRef}.forEach((__wizzRecord) => {`).indent();
+      if (hasListeners) builder.add(`        ${dropRecordSource}`);
+      if (top) builder.add('        if (__wizzDetach) __wizzParent.removeChild(__wizzRecord.node);');
+      builder.dedent().add('      });');
+      builder.add(`      ${recordsRef}.clear();`);
+      builder.dedent().add('    });');
+    }
     // The created anchor occupies a real child position of the parent (and
     // shifts any following siblings), so the consumed count includes it.
     builder.add('    return __wizzIndex - __wizzStart + 1;');
     builder.dedent().add('  }');
   }
 
-  function walkChildren(elementNode, parentRef) {
+  function walkChildren(elementNode, parentRef, sc = null) {
     const children = elementNode.children || [];
     // Hydration markers are stripped before anything else so the remaining
     // childNodes align one-to-one with the flattened template children.
@@ -583,36 +714,40 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     const cursorRef = nextReference();
     builder.add(`  let ${cursorRef} = 0;`);
 
-    const emitFlattenedChild = (child) => {
+    const emitFlattenedChild = (child, childScope, top) => {
       if (child.type === 'Text') {
-        emitTextChild(child, parentRef, cursorRef);
+        emitTextChild(child, parentRef, cursorRef, childScope, top);
         return;
       }
       if (child.type === 'Expression') {
-        emitExpressionChild(child, parentRef, cursorRef);
+        emitExpressionChild(child, parentRef, cursorRef, childScope, top);
         return;
       }
       if (child.type === 'Element') {
         if (importedNames.has(child.name)) {
           const ref = emitComponentChild(child, parentRef, cursorRef);
-          componentAdoptions.push({ node: child, ref });
+          // A self-adopted child leaves its root in place on destroy (the
+          // root belongs to this tree), so a branch tracks the root of a tag
+          // at its top level and removes it with the branch's other nodes.
+          if (top) builder.add(`  if (__wizzProblems.length === 0) ${childScope}.nodes.push(${ref});`);
+          componentAdoptions.push({ node: child, ref, sc: childScope, conditional: branchDepth > 0 });
           return;
         }
-        emitElementChild(child, parentRef, cursorRef);
+        emitElementChild(child, parentRef, cursorRef, childScope, top);
         return;
       }
       if (child.type === 'IfBlock') {
-        emitIfBlock(child, parentRef, cursorRef, emitFlattenedChild);
+        emitIfBlock(child, parentRef, cursorRef, emitFlattenedChild, childScope, top);
         return;
       }
       if (child.type === 'EachBlock') {
-        emitEachBlock(child, parentRef, cursorRef);
+        emitEachBlock(child, parentRef, cursorRef, childScope, top);
         return;
       }
       throw compilerDiagnostic(CODES.generator.hydrationUnsupportedNode, `Hydration does not support ${child.type} nodes.`);
     };
 
-    children.forEach(emitFlattenedChild);
+    children.forEach((child) => emitFlattenedChild(child, sc, false));
 
     // Every template position was consumed: the flattened child count must
     // match exactly, including the empty run an untaken branch leaves behind.
@@ -635,13 +770,27 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     const componentNode = adoption.node;
     const idLiteral = JSON.stringify(String(componentNode.componentId));
     const headOwnerArg = headActive ? `, __wizzHeadOwner + ${JSON.stringify(`/${componentNode.componentId}`)}` : '';
-    builder.add('  if (__wizzProblems.length === 0) {').indent();
-    builder.add(`    const __wizzSlice_${componentNode.componentId} = __wizzReadSlice(__wizzState, ${idLiteral});`);
-    builder.add(`    const __wizzChild_${componentNode.componentId} = __wizzHydrate_${componentNode.name}.hydrateRoot(${adoption.ref}, ${buildComponentPropsSource(componentNode)}, __wizzSlice_${componentNode.componentId}${headOwnerArg});`);
-    builder.add(`    __wizzChildren.push(__wizzChild_${componentNode.componentId});`);
+    const childName = `__wizzChild_${componentNode.componentId}`;
     const hasReactiveProps = (componentNode.attributes || []).some((attribute) => attribute.dynamic && attribute.dependencies?.length > 0);
+    // A tag in any conditional branch has a ref only when its branch was the
+    // one delivered; an untaken branch leaves ref null (and a reactive branch
+    // mounts its children later when the branch is created).
+    builder.add(adoption.conditional
+      ? `  if (__wizzProblems.length === 0 && ${adoption.ref}) {`
+      : '  if (__wizzProblems.length === 0) {').indent();
+    builder.add(`    const __wizzSlice_${componentNode.componentId} = __wizzReadSlice(__wizzState, ${idLiteral});`);
+    builder.add(`    const ${childName} = __wizzHydrate_${componentNode.name}.hydrateRoot(${adoption.ref}, ${buildComponentPropsSource(componentNode)}, __wizzSlice_${componentNode.componentId}${headOwnerArg});`);
+    if (adoption.sc) {
+      // Owned by the branch scope rather than the component-wide list, so
+      // replacing the branch destroys the child.
+      builder.add(hasReactiveProps
+        ? `    ${adoption.sc}.drop.push(() => { ${childName}.destroy(); __wizzComponent_${componentNode.componentId} = null; });`
+        : `    ${adoption.sc}.drop.push(() => ${childName}.destroy());`);
+    } else {
+      builder.add(`    __wizzChildren.push(${childName});`);
+    }
     if (hasReactiveProps) {
-      builder.add(`    __wizzComponent_${componentNode.componentId} = __wizzChild_${componentNode.componentId};`);
+      builder.add(`    __wizzComponent_${componentNode.componentId} = ${childName};`);
     }
     builder.dedent().add('  }');
   }
@@ -683,7 +832,9 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
   builder.add('    while (__wizzHost.childNodes.length > 0) __wizzHost.removeChild(__wizzHost.childNodes[0]);');
   builder.add('    return null;');
   builder.dedent().add('  }');
-  builder.add('  __wizzPendingListeners.forEach((pending) => __wizzListen(pending[0], pending[1], pending[2]));');
+  builder.add(blocks.scopedListeners
+    ? '  __wizzPendingListeners.forEach((pending) => { if (pending[3]) pending[3].push(__wizzOn(pending[0], pending[1], pending[2])); else __wizzListen(pending[0], pending[1], pending[2]); });'
+    : '  __wizzPendingListeners.forEach((pending) => __wizzListen(pending[0], pending[1], pending[2]));');
   builder.add(headActive
     ? '  return { node: __wizzRoot, __wizzChildren, __wizzLists, __wizzOwnHead: __wizzHeadNodes };'
     : '  return { node: __wizzRoot, __wizzChildren, __wizzLists };');

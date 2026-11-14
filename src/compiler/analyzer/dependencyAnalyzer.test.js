@@ -64,3 +64,42 @@ test('tracks prop dependencies in dynamic attributes', () => {
 
   assert.deepEqual(paragraph.attributes[0].dependencies, ['start']);
 });
+
+test('tags if blocks with the reactive dependencies of their test', () => {
+  const payload = analyzeDependencies(parseComponent(
+    "<script>let a = 1; let b = { c: 2 }; const fixed = 3;</script>"
+    + "<main>{#if a === b.c}<p>x</p>{:else}<i>y</i>{/if}{#if fixed === 3}<u>z</u>{/if}{#if a + a === 2}<s>w</s>{/if}</main>"
+  ));
+  const [both, constant, repeated] = payload.template.children[0].children;
+
+  // Member access depends on its root object; each name is listed once.
+  assert.deepEqual(both.dependencies, ['a', 'b']);
+  assert.deepEqual(repeated.dependencies, ['a']);
+  // A test reading no reactive state gets an empty array, never undefined:
+  // the generators treat that as "selected once, at mount".
+  assert.deepEqual(constant.dependencies, []);
+});
+
+test('still analyzes both branches of an if block after tagging its test', () => {
+  const payload = analyzeDependencies(parseComponent(
+    "<script>let open = true; let label = 'a'; export let tone = 'x';</script>"
+    + "<main>{#if open}<p title={tone}>{label}</p>{:else}<i>{tone}</i>{/if}</main>"
+  ));
+  const block = payload.template.children[0].children[0];
+
+  assert.deepEqual(block.dependencies, ['open']);
+  assert.deepEqual(block.consequent[0].attributes[0].dependencies, ['tone']);
+  assert.deepEqual(block.consequent[0].children[0].dependencies, ['label']);
+  assert.deepEqual(block.alternate[0].children[0].dependencies, ['tone']);
+});
+
+test('a nested if block and an if test over a prop are tagged too', () => {
+  const payload = analyzeDependencies(parseComponent(
+    "<script>export let visible = true; let inner = 1;</script>"
+    + "<main>{#if visible}<div>{#if inner === 1}<b>x</b>{/if}</div>{/if}</main>"
+  ));
+  const outer = payload.template.children[0].children[0];
+
+  assert.deepEqual(outer.dependencies, ['visible']);
+  assert.deepEqual(outer.consequent[0].children[0].dependencies, ['inner']);
+});

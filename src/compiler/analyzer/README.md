@@ -137,6 +137,8 @@ This nested recursive walker visits the full template tree. At every `Expression
 node.dependencies = Array.from(extractIdentifiers(node.expressionAST));
 ```
 
+An `IfBlock` gets the same treatment for its condition: `node.dependencies = Array.from(extractIdentifiers(node.testAST))`. The generators read this to decide whether the block is reactive — a non-empty array means the test is re-evaluated when one of those names changes; an empty array means the branch is selected once, at mount. Both branches (`consequent` and `alternate`) are then walked explicitly.
+
 It then walks `children` when present. Text nodes, regular elements, and expressions without a parsed AST are otherwise left unchanged. The traversal is recursive so dependencies are attached at any nesting depth.
 
 ### `idAssigner.js` - DOM Update Targets

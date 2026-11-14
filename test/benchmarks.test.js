@@ -46,6 +46,13 @@ function createInstrumentedDocument() {
           return find(this);
         },
         appendChild(node) { this.childNodes.push(node); },
+        // Moves an attached node, as list reconciliation and block branches do.
+        insertBefore(node, referenceNode) {
+          const existing = this.childNodes.indexOf(node);
+          if (existing !== -1) this.childNodes.splice(existing, 1);
+          const index = referenceNode == null ? -1 : this.childNodes.indexOf(referenceNode);
+          this.childNodes.splice(index === -1 ? this.childNodes.length : index, 0, node);
+        },
         removeChild(node) { this.childNodes.splice(this.childNodes.indexOf(node), 1); },
         addEventListener(eventName, listener) {
           this.listeners[eventName] = listener;
@@ -166,6 +173,62 @@ test('benchmark fixture mounts and tears down a 121-element static tree without 
   assert.ok(mountDuration >= 0);
   t.diagnostic(`121-element static tree mounted in ${mountDuration.toFixed(2)} ms`);
 });
+test('benchmark fixture rebuilds a 100-row branch per toggle and never leaks a listener', (t) => {
+  // Reactive {#if} (issue #71) around a keyed list whose rows carry on:
+  // handlers (issue #70): every toggle drops or builds the whole branch, so
+  // the per-toggle cost and the listener balance are pinned exactly.
+  const scheduled = [];
+  const flush = () => { while (scheduled.length > 0) scheduled.shift()(); };
+  const document = createInstrumentedDocument();
+  const { target, component } = mountFixture('benchmark-blocks', document, (callback) => scheduled.push(callback));
+  const main = target.childNodes[0];
+  const [toggle, drop] = main.childNodes;
+  const rowButtons = () => main.childNodes[2].childNodes.filter((node) => node.name === 'li').map((item) => item.childNodes[0]);
+
+  // main, two buttons, the list, and an li + button per row.
+  assert.equal(document.metrics.elements, 4 + 200);
+  assert.equal(document.metrics.addedListeners, 2 + 100);
+  assert.equal(document.metrics.queries, 0);
+
+  // Removing one row releases exactly its listener and creates nothing.
+  rowButtons()[40].dispatchEvent('click');
+  flush();
+  drop.dispatchEvent('click');
+  flush();
+  assert.equal(rowButtons().length, 99);
+  assert.equal(document.metrics.elements, 4 + 200);
+  assert.equal(document.metrics.removedListeners, 1);
+
+  const cycles = 20;
+  const elementsBefore = document.metrics.elements;
+  const addedBefore = document.metrics.addedListeners;
+  const removedBefore = document.metrics.removedListeners;
+  const start = performance.now();
+  for (let cycle = 0; cycle < cycles; cycle++) {
+    toggle.dispatchEvent('click');
+    flush();
+    assert.equal(main.childNodes[2].name, 'p');
+    toggle.dispatchEvent('click');
+    flush();
+    assert.equal(main.childNodes[2].name, 'ul');
+  }
+  const toggleDuration = performance.now() - start;
+
+  // Per cycle: one <p>, then the list with 99 rows (ul + 99 li + 99 buttons).
+  assert.equal(document.metrics.elements - elementsBefore, cycles * (1 + 1 + 99 * 2));
+  assert.equal(document.metrics.addedListeners - addedBefore, cycles * 99);
+  assert.equal(document.metrics.removedListeners - removedBefore, cycles * 99);
+  assert.equal(document.metrics.addedListeners - document.metrics.removedListeners, 2 + 99, 'live listeners never grow');
+  assert.equal(main.childNodes.length, 4, 'two buttons, one branch root, one anchor');
+  assert.equal(document.metrics.queries, 0);
+
+  component.destroy();
+  assert.deepEqual(target.childNodes, []);
+  assert.equal(document.metrics.addedListeners, document.metrics.removedListeners);
+  assert.ok(toggleDuration >= 0);
+  t.diagnostic(`${cycles} drop/rebuild cycles of a 99-row listener-bearing branch completed in ${toggleDuration.toFixed(2)} ms`);
+});
+
 test('hydration adopts delivered markup with zero DOM creation and exact reactive writes', async (t) => {
   const document = createInstrumentedDocument();
   // The hydratable module carries a second named export alongside the

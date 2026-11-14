@@ -44,9 +44,9 @@ The `.wizz` template language is deliberately small. Read this table before desi
 | Area | Supported | Current limit | How it fails | Working pattern |
 | --- | --- | --- | --- | --- |
 | Expressions `{...}` | Identifiers, member access (`a.b`), integer and string literals, `+ - * /`, `===`, and parentheses. | No calls, ternaries, `!`, `!==`, `<`/`>`, `&&`/`\|\|`, indexing (`a[0]`), template literals, decimals, or array/object literals. | Compile error (WIZZ-P033) | Compute the value in a script handler into a reactive `let` and render `{label}`. There are no computed values, so recompute it in every handler that changes its inputs. |
-| `{#if}` | `{#if cond}...{:else}...{/if}`, nesting, events, and components inside branches; expressions inside the taken branch stay reactive. | The branch is chosen once, at mount; changing the condition later does not swap branches. No `{:else if}`. | Silent non-update (`{:else if}`: WIZZ-P033) | Render every state and toggle visibility with a reactive class plus CSS: `class={'panel' + openClass}`. Chain conditions by nesting `{#if}` inside `{:else}`. |
+| `{#if}` | `{#if cond}...{:else}...{/if}`, nesting, events, lists, and components inside branches. The test is re-evaluated whenever a reactive `let` or prop it reads changes, and the branch is replaced: the old one leaves the DOM with its listeners and child components, and the new one is built from current state. | No `{:else if}`. A test that reads only `const` values is evaluated once, at mount. A replaced branch is rebuilt, so DOM state inside it (typed input text, scroll position, a child component's own state) is not kept. | `{:else if}`: compile error (WIZZ-P033); `const` test and lost branch state: silent | Chain conditions by nesting `{#if}` inside `{:else}`. Keep state that must survive a hidden branch in a script `let`, or keep the element mounted and toggle it with `hidden={flag}`. |
 | `{#each}` collection | A bare identifier naming a top-level `let` array, keyed `(item.id)` or keyless. | No member collections (`state.items`) or index alias (`item, i`). A `const` collection renders once. In-place mutation (`items.push(x)`) does not update. | Syntax: WIZZ-P002; `const` and mutation: silent non-update | Reassign the array: `items = [...items, x]`. Store any index or flag you need on the items themselves. |
-| `{#each}` body | Exactly one native root element per item; its text and dynamic attributes update. | No `on:` directives (WIZZ-G006), imported components (WIZZ-G004), or nested `{#if}`/`{#each}` (WIZZ-G005); one root element only (WIZZ-G003); the block must sit inside a native element. | Compile error | Delegate events: put `on:click={pick}` on the list's parent element, render `data-id={item.id}` on each row, and read `event.target.closest('[data-id]').dataset.id` in `pick`. Precompute per-row variants (class suffix, label) as item fields. |
+| `{#each}` body | Exactly one native root element per item; its text and dynamic attributes update. `on:` handlers anywhere in the item run with the item variable in scope (`on:click={() => remove(item.id)}`); they attach per item and detach when the item is removed. | No imported components (WIZZ-G004) or nested `{#if}`/`{#each}` (WIZZ-G005); one root element only (WIZZ-G003); the block must sit inside a native element. A handler expression is evaluated once per item, so `on:click={makeHandler(item)}` keeps the handler built from the item's first value. | Compile error; a stale `makeHandler(item)`: silent | Write per-row handlers as inline arrows, which read the item when they run: `on:click={() => pick(item.id)}`. Precompute per-row variants (class suffix, label) as item fields. |
 | Dynamic attributes | `name={expr}` updates reactively; `value`, `checked`, and `disabled` are set as DOM properties. HTML boolean attributes (`hidden`, `required`, `readonly`, `open`, `inert`, `multiple`, ...) are present when the value is truthy and removed when it is falsy, so `hidden={false}` shows the element. Any other attribute is removed when the value is `null` or `undefined`. | Outside the boolean list, `false` renders the string `"false"` rather than removing the attribute, because `aria-*`, `draggable`, and `spellcheck` give `"false"` its own meaning. | Silent | Hold `null` in state to drop a non-boolean attribute (`let tip = null;` with `title={tip}`). |
 | Quoted attribute values | Static text: `class="card"`. | Braces inside quotes are not interpolated: `class="card {kind}"` renders the literal text. | Silent | Use one expression for the whole value: `class={'card ' + kind}`. |
 | Event handlers | `on:<event>={handler}` with a named script function or an inline arrow; assignments inside inline arrows update the DOM (`on:input={(e) => name = e.target.value}`). | There is no `bind:`; an unknown directive such as `bind:value` becomes a plain attribute. An assignment nested in an expression (`ok ? a = 1 : 0`, `(a = 1)`) does not schedule an update. | Silent | Two-way inputs pair `value={name}` with `on:input={(e) => name = e.target.value}`. Write each mutation as its own statement, or move the logic into a named function. |
@@ -158,7 +158,7 @@ Print what you have installed with:
 wizz --version
 ```
 
-which prints the compiler and contract version triple, for example `wizz 1.21.0 (compiler 1.21.0, syntax 1.4.3, output 1.11.0)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
+which prints the compiler and contract version triple, for example `wizz 1.22.0 (compiler 1.22.0, syntax 1.5.0, output 1.12.0)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
 
 `wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
 
@@ -270,11 +270,31 @@ For arrays of primitives, or any collection where positional identity is enough,
 
 A keyless block reconciles by array index: on reassignment each rendered row updates in place with the item now at its position, rows are appended as the collection grows, and rows beyond the new length are removed. Rows are reused by position, not by item identity.
 
-In both forms the collection must be a reactive `let` for updates to run (a `const` collection renders once at mount), the block must be nested inside a native element, and the body must contain exactly one native root element. Each blocks do not support imported components, event directives, or nested `if`/`each` blocks inside the repeated content yet; these are compile-time errors rather than silently ignored.
+In both forms the collection must be a reactive `let` for updates to run (a `const` collection renders once at mount), the block must be nested inside a native element, and the body must contain exactly one native root element. Each blocks do not support imported components or nested `if`/`each` blocks inside the repeated content yet; these are compile-time errors rather than silently ignored.
+
+Event directives work anywhere inside the repeated content, and their handlers see the item variable:
+
+```wizz
+<script>
+  let entries = [{ id: 1, name: 'Egg' }];
+
+  function remove(id) {
+    entries = entries.filter((entry) => entry.id !== id);
+  }
+</script>
+
+<ul>
+  {#each entries as entry (entry.id)}
+    <li>{entry.name} <button on:click={() => remove(entry.id)}>Delete</button></li>
+  {/each}
+</ul>
+```
+
+Each rendered item gets its own listeners; they are attached when the item is created and removed when the item leaves the list (or the component is destroyed). An inline arrow reads the item when it runs, so it always sees the item's current value — including after a keyed item is replaced by a new object. The handler expression itself is evaluated once per item, so prefer `on:click={() => pick(item.id)}` over `on:click={makeHandler(item)}`, which would keep the handler built from the item's first value.
 
 ## Conditional Rendering
 
-Select a branch during mounting with an `if` block and optional `else` branch:
+Render content conditionally with an `if` block and optional `else` branch:
 
 ```wizz
 {#if section === 'About'}
@@ -284,7 +304,28 @@ Select a branch during mounting with an `if` block and optional `else` branch:
 {/if}
 ```
 
-Conditions currently support the Wizz expression grammar, including identifiers, member access, string literals, and strict equality. A conditional branch is selected at mount time; changing a reactive condition does not yet replace an already-rendered branch.
+Conditions currently support the Wizz expression grammar, including identifiers, member access, string literals, and strict equality.
+
+An `if` block is reactive: when a reactive `let` or prop its condition reads changes, the condition is re-evaluated and, if the result flips, the rendered branch is replaced in place.
+
+```wizz
+<script>
+  let error = '';
+
+  function validate(event) {
+    error = event.target.value === '' ? 'Please enter a food name.' : '';
+  }
+</script>
+
+<form>
+  <input on:input={validate} />
+  {#if error}
+    <p class="error">{error}</p>
+  {/if}
+</form>
+```
+
+Replacing a branch removes its nodes from the DOM, detaches the event listeners inside it, and destroys any imported components it rendered; the new branch is built from the current state. Because the branch is rebuilt rather than hidden, DOM state inside it (text typed into an input, scroll position, a child component's own state) does not survive being hidden — keep such state in a script `let`, or keep the element mounted and toggle it with `hidden={flag}`. A condition that reads only `const` values never changes, so it is evaluated once at mount.
 
 ## Lifecycle Hooks
 
@@ -516,7 +557,7 @@ As a consumer of generated modules, within one `output` major version every gene
 A breaking change to either contract bumps its major version and the compiler's major version. Every compiled module is stamped with all three versions on its first line, so build artifacts stay traceable to the compiler that produced them:
 
 ```js
-// Generated by Wizz 1.21.0 (component syntax 1.4.3, generated output 1.11.0). Edits will be overwritten.
+// Generated by Wizz 1.22.0 (component syntax 1.5.0, generated output 1.12.0). Edits will be overwritten.
 ```
 
 `compile()` also returns the frozen version table as its `version` field.
@@ -544,7 +585,7 @@ const { source } = compile(homeSource, { filePath: 'src/pages/Home.wizz', hydrat
 
 The generated module keeps its default `mountComponent(target, props)` export and additionally exports `hydrateComponent(target, props, state)`. Hydration adopts the server-rendered DOM in place — verifying tags, `data-wizz-id` attributes, and text contents against the template AST — attaches event listeners after the walk passes, and drives the usual reactive updates. On any mismatch it emits one `console.warn('[wizz] hydration mismatch: …')`, clears the mount point, and falls back to a full client render, so a failed hydration is always safe.
 
-The server-renderable surface covers everything with a deterministic initial rendering: static markup, text interpolations, dynamic attributes, top-level props, the initially-taken `{#if}` branch, `{#each}` lists (browser target's body restrictions apply: one root element per item, no components, no `on:` directives), and **imported component tags**. A component tag renders by calling the child's own server module, so the surface is defined recursively — a page is server-renderable when its entire component tree is. Child state snapshots serialize under the framework-reserved `__wizz` key (`state.__wizz.components["<componentId>"]`); reactive variable names cannot start with `__wizz`, so the namespace stays framework-owned. Event handlers and lifecycle hooks remain client-only, and author scripts that read browser globals (e.g. `document.location`) are the author's responsibility — the compile gate passes but `renderComponent()` fails at runtime, exactly like any nondeterministic module state in other frameworks. Server output produces no source map.
+The server-renderable surface covers everything with a deterministic initial rendering: static markup, text interpolations, dynamic attributes, top-level props, the `{#if}` branch selected at render time (the client replaces it when its condition changes), `{#each}` lists (browser target's body restrictions apply: one root element per item, no components; `on:` directives are client-only and never rendered), and **imported component tags**. A component tag renders by calling the child's own server module, so the surface is defined recursively — a page is server-renderable when its entire component tree is. Child state snapshots serialize under the framework-reserved `__wizz` key (`state.__wizz.components["<componentId>"]`); reactive variable names cannot start with `__wizz`, so the namespace stays framework-owned. Event handlers and lifecycle hooks remain client-only, and author scripts that read browser globals (e.g. `document.location`) are the author's responsibility — the compile gate passes but `renderComponent()` fails at runtime, exactly like any nondeterministic module state in other frameworks. Server output produces no source map.
 
 ### Component trees, eligibility, and nested hydration
 

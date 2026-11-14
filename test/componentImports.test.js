@@ -258,11 +258,14 @@ test('a built component-importing page delivers and hydrates through real genera
   const metricsBefore = { ...document.metrics };
   const component = clientModule.hydrateComponent(target, {}, state);
 
-  // Zero recreation anywhere in the graph, no mismatch warnings.
+  // Zero recreation anywhere in the graph, no mismatch warnings. The single
+  // text node is the anchor of the reactive `{#if visible}` block: like a
+  // list anchor, an empty text node cannot survive HTML serialization, so
+  // hydration creates it after the adopted branch.
   assert.equal(warnings.length, 0);
   assert.ok(component);
   assert.equal(document.metrics.elements, metricsBefore.elements);
-  assert.equal(document.metrics.textNodes, metricsBefore.textNodes);
+  assert.equal(document.metrics.textNodes, metricsBefore.textNodes + 1);
   assert.equal(document.metrics.addedListeners, metricsBefore.addedListeners + 1);
 
   // The child's adopted button stays reactive through its own module. The

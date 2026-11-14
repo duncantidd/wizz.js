@@ -1,0 +1,19 @@
+<script>
+  let open = true;
+  let picked = -1;
+  let rows = Array.from({ length: 100 }, (unused, index) => ({ id: index, label: 'Row ' + index }));
+
+  function toggle() {
+    open = !open;
+  }
+
+  function pick(id) {
+    picked = id;
+  }
+
+  function drop() {
+    rows = rows.filter((row) => row.id !== picked);
+  }
+</script>
+
+<main><button on:click={toggle}>Toggle</button><button on:click={drop}>Drop {picked}</button>{#if open}<ul>{#each rows as row (row.id)}<li><button on:click={() => pick(row.id)}>{row.label}</button></li>{/each}</ul>{:else}<p>Closed</p>{/if}</main>
