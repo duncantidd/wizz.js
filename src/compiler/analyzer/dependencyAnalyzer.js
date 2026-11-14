@@ -62,6 +62,10 @@ function analyzeDependencies(astPayload) {
     }
 
     if (node.type === 'IfBlock') {
+      // The test's dependencies decide whether the block is reactive: the
+      // generators re-evaluate it when one of them changes, and emit a
+      // mount-time-only branch when there are none.
+      node.dependencies = Array.from(extractIdentifiers(node.testAST));
       // The parser's `children` alias repoints to the alternate at {:else},
       // so a children-only walk would miss consequent content in blocks with
       // an else branch. Both branches are walked explicitly instead.

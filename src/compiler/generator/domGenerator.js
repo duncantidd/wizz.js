@@ -2,6 +2,25 @@
 const { CodeBuilder } = require('./codeBuilder');
 const { CODES, compilerDiagnostic } = require('../diagnostics.js');
 const { attributeWriteSource } = require('./attributePolicy');
+const { analyzeBlocks, eachHasListeners, isEventAttribute, isReactiveIf, makerName, ifRecheckSource } = require('./blockScopes');
+
+/**
+ * Validates an `on:` directive and returns its listener parts.
+ * @param {Object} attribute - The `on:` attribute.
+ * @param {WeakMap<Object, string>} handlerSources - Instrumented handler sources.
+ * @returns {{eventName: string, handler: string}}
+ */
+function eventListenerParts(attribute, handlerSources) {
+  const eventName = attribute.name.slice(3);
+  const handlerExpression = attribute.value?.trim();
+  if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(eventName)) {
+    throw compilerDiagnostic(CODES.generator.invalidEventDirective, `Invalid event directive '${attribute.name}'.`);
+  }
+  if (!handlerExpression) {
+    throw compilerDiagnostic(CODES.generator.eventMissingHandler, `Event directive '${attribute.name}' requires a handler expression.`);
+  }
+  return { eventName, handler: handlerSources.get(attribute) ?? handlerExpression };
+}
 
 // Component attributes are props, not DOM attributes: imported component tags
 // create no element, so native attribute semantics never apply to them.
@@ -60,7 +79,16 @@ function collectComponentRefNames(templateAST, componentImports = []) {
 }
 
 /**
- * Generates the create() lifecycle function for a component.
+ * Generates the create() lifecycle function for a component, followed by one
+ * branch-maker function per branch of every reactive `{#if}` block.
+ *
+ * Makers sit beside create() at factory scope and take `(parent, anchor)`,
+ * so the hydration walk can call the same ones when an adopted block later
+ * changes branch. Each returns the scope record described in blockScopes.js.
+ * Inside a maker (and inside an each item) listeners attach through
+ * `__wizzOn` and are owned by the enclosing scope's `__wizzDrop` array rather
+ * than the component-wide `__wizzListeners`, so a replaced branch or a
+ * removed item takes its listeners with it.
  * @param {Object} templateAST - The enriched template AST.
  * @param {Array} [componentImports] - Imported component descriptors.
  * @param {WeakMap<Object, string>} [handlerSources] - Instrumented `on:`
@@ -70,8 +98,13 @@ function collectComponentRefNames(templateAST, componentImports = []) {
  * @returns {string} The generated JavaScript string.
  */
 function generateCreateFunction(templateAST, componentImports = [], handlerSources = new WeakMap(), updateTargets = new Map()) {
-  const builder = new CodeBuilder();
+  let builder = new CodeBuilder();
   let nodeCounter = 0;
+  const { ifIds } = analyzeBlocks(templateAST);
+  const makerSources = [];
+  // The block scope being emitted: null for the component scope, otherwise
+  // the update-target variables the current branch maker assigns.
+  let scope = null;
   const importedComponents = new Set(componentImports.map((component) => component.name));
 
   builder.add('function __wizzCreate(__wizzCtx) {')
@@ -83,7 +116,44 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
   // A map to keep track of which JS variable name corresponds to which AST node
   const nodeVariables = new Map();
 
-  function walk(node, parentVarName) {
+  // Attaches a created node. A branch's own top-level nodes go in front of the
+  // block anchor and are tracked for removal; everything else is appended.
+  function attach(parentVarName, varName, top, track = true) {
+    if (!top) {
+      builder.add(`${parentVarName}.appendChild(${varName});`);
+      return;
+    }
+    builder.add(`${parentVarName}.insertBefore(${varName}, __wizzAnchor);`);
+    if (track) builder.add(`__wizzNodes.push(${varName});`);
+  }
+
+  function emitMaker(id, key, children) {
+    const outerBuilder = builder;
+    const outerScope = scope;
+    builder = new CodeBuilder();
+    scope = { targets: [] };
+    const name = makerName(id, key);
+    builder.add(`function ${name}(__wizzParent, __wizzAnchor) {`)
+      .indent()
+      .add('const __wizzLists = [];')
+      .add('const __wizzDrop = [];')
+      .add('const __wizzChildMounts = [];')
+      .add('const __wizzNodes = [];');
+    children.forEach((child) => walk(child, '__wizzParent', true));
+    if (scope.targets.length > 0) {
+      // update() guards its writes on these, so a dropped branch is skipped.
+      builder.add(`__wizzDrop.push(() => { ${scope.targets.join(' = ')} = null; });`);
+    }
+    builder.add('return { lists: __wizzLists, drop: __wizzDrop, mounts: __wizzChildMounts, nodes: __wizzNodes };')
+      .dedent()
+      .add('}');
+    makerSources.push(builder.generate());
+    builder = outerBuilder;
+    scope = outerScope;
+    return name;
+  }
+
+  function walk(node, parentVarName, top = false) {
     if (node.type === 'EachBlock') {
       if (!parentVarName) throw compilerDiagnostic(CODES.generator.eachOutsideElement, 'Each blocks must be nested inside an element.');
       const contentNodes = node.children.filter((child) => child.type !== 'Text' || child.value.trim() !== '');
@@ -97,11 +167,14 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
       const createName = `__wizzCreateItem_${listId}`;
       const updateName = `__wizzUpdateList_${listId}`;
       const itemRoot = contentNodes[0];
+      // Items with listeners own them through a per-record `drop` array.
+      const hasListeners = eachHasListeners(node);
 
-      builder.add(`const ${anchorName} = document.createTextNode("");`)
-        .add(`${parentVarName}.appendChild(${anchorName});`)
-        .add(`const ${recordsName} = new Map();`)
+      builder.add(`const ${anchorName} = document.createTextNode("");`);
+      attach(parentVarName, anchorName, top);
+      builder.add(`const ${recordsName} = new Map();`)
         .add(`function ${createName}(${node.item}) {`).indent();
+      if (hasListeners) builder.add('const __wizzDrop = [];');
 
       const listNodeVariables = new Map();
       function walkListNode(listNode, listParentName) {
@@ -111,15 +184,17 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
           if (importedComponents.has(listNode.name)) {
             throw compilerDiagnostic(CODES.generator.componentInsideEach, 'Imported components are not supported inside each blocks.');
           }
-          const eventAttribute = (listNode.attributes || []).find((attribute) => attribute.name.startsWith('on:'));
-          if (eventAttribute) {
-            throw compilerDiagnostic(CODES.generator.eventInsideEach, `Event directive '${eventAttribute.name}' is not supported inside each blocks yet.`);
-          }
           builder.add(`const ${listVarName} = document.createElement(${JSON.stringify(listNode.name)});`);
           for (const attribute of listNode.attributes || []) {
             if (attribute.dynamic) {
               builder.add(attributeWriteSource(listVarName, attribute.name, attribute.value));
-            } else if (!attribute.name.startsWith('on:')) {
+            } else if (isEventAttribute(attribute)) {
+              // The handler expression is evaluated once per item, with the
+              // item variable in scope; update() below keeps that variable
+              // pointing at the item's latest value.
+              const { eventName, handler } = eventListenerParts(attribute, handlerSources);
+              builder.add(`__wizzDrop.push(__wizzOn(${listVarName}, ${JSON.stringify(eventName)}, ${handler}));`);
+            } else {
               builder.add(attribute.value === null
                 ? `${listVarName}.setAttribute(${JSON.stringify(attribute.name)}, "");`
                 : `${listVarName}.setAttribute(${JSON.stringify(attribute.name)}, ${JSON.stringify(attribute.value)});`);
@@ -139,8 +214,17 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
       const itemRootName = walkListNode(itemRoot, null);
       builder.add('return {')
         .indent()
-        .add(`node: ${itemRootName},`)
-        .add(`update(${node.item}) {`).indent();
+        .add(`node: ${itemRootName},`);
+      if (hasListeners) {
+        // Handlers close over the item parameter, so an update rebinds it:
+        // a keyed item replaced by a new object must not leave its handlers
+        // reading the old one.
+        builder.add('drop: __wizzDrop,')
+          .add('update(__wizzItem) {').indent()
+          .add(`${node.item} = __wizzItem;`);
+      } else {
+        builder.add(`update(${node.item}) {`).indent();
+      }
 
       function emitListUpdates(listNode) {
         const listVarName = listNodeVariables.get(listNode);
@@ -174,21 +258,54 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
         .add(`${parentVarName}.insertBefore(__wizzRecord.node, ${anchorName});`)
         .add('__wizzNext.set(__wizzKey, __wizzRecord);')
         .dedent().add('});')
-        .add(`${recordsName}.forEach((__wizzRecord, __wizzKey) => { if (!__wizzNext.has(__wizzKey)) ${parentVarName}.removeChild(__wizzRecord.node); });`)
+        .add(hasListeners
+          ? `${recordsName}.forEach((__wizzRecord, __wizzKey) => { if (!__wizzNext.has(__wizzKey)) { ${parentVarName}.removeChild(__wizzRecord.node); for (const __wizzDropItem of __wizzRecord.drop) __wizzDropItem(); } });`
+          : `${recordsName}.forEach((__wizzRecord, __wizzKey) => { if (!__wizzNext.has(__wizzKey)) ${parentVarName}.removeChild(__wizzRecord.node); });`)
         .add(`${recordsName}.clear();`)
         .add(`__wizzNext.forEach((__wizzRecord, __wizzKey) => ${recordsName}.set(__wizzKey, __wizzRecord));`)
         .dedent().add('}')
         .add(`${updateName}(${node.collection});`)
         .add(`__wizzLists.push((__wizzChanged) => { if (__wizzChanged.${node.collection}) ${updateName}(${node.collection}); });`);
+      if (hasListeners || top) {
+        // The owning scope releases the live records: their listeners always,
+        // and their nodes when the list sits directly in a replaced branch
+        // (deeper lists leave the DOM with the element that holds them).
+        builder.add('__wizzDrop.push((__wizzDetach) => {').indent()
+          .add(`${recordsName}.forEach((__wizzRecord) => {`).indent();
+        if (hasListeners) builder.add('for (const __wizzDropItem of __wizzRecord.drop) __wizzDropItem();');
+        if (top) builder.add(`if (__wizzDetach) ${parentVarName}.removeChild(__wizzRecord.node);`);
+        builder.dedent().add('});')
+          .add(`${recordsName}.clear();`)
+          .dedent().add('});');
+      }
       return null;
     }
     if (node.type === 'IfBlock') {
+      if (isReactiveIf(node)) {
+        // The anchor marks the block's position; branch nodes always sit in
+        // front of it.
+        const id = ifIds.get(node);
+        const anchorName = `__wizzIfAnchor_${id}`;
+        const blockName = `__wizzIf_${id}`;
+        builder.add(`const ${anchorName} = document.createTextNode("");`);
+        attach(parentVarName, anchorName, top);
+        const consequentMaker = emitMaker(id, 1, node.consequent || []);
+        const alternateMaker = node.alternate ? emitMaker(id, 0, node.alternate) : 'null';
+        builder.add(`const ${blockName} = __wizzIfBlock(${parentVarName}, ${anchorName}, () => (${node.test}), [${alternateMaker}, ${consequentMaker}], -1, null);`)
+          // Child mounts are deferred with the rest of this scope's.
+          .add(`${blockName}.sync({}, true, __wizzChildMounts);`)
+          .add(`__wizzLists.push((__wizzChanged) => ${blockName}.sync(__wizzChanged, ${ifRecheckSource(node)}));`)
+          .add(`__wizzDrop.push(${blockName}.drop);`);
+        return null;
+      }
+      // No reactive dependency: the test can never change after mount, so the
+      // branch is selected inline and its content belongs to the enclosing scope.
       builder.add(`if (${node.test}) {`).indent();
-      node.consequent.forEach((child) => walk(child, parentVarName));
+      node.consequent.forEach((child) => walk(child, parentVarName, top));
       builder.dedent();
       if (node.alternate) {
         builder.add('} else {').indent();
-        node.alternate.forEach((child) => walk(child, parentVarName));
+        node.alternate.forEach((child) => walk(child, parentVarName, top));
         builder.dedent();
       }
       builder.add('}');
@@ -212,15 +329,26 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
         // Children mount after this tree is attached, so a placeholder holds
         // the tag's position until the child inserts its root before it. It is
         // removed straight after, leaving the DOM hydration would adopt.
-        builder.add(`const ${varName} = document.createTextNode("");`)
-          .add(`${parentVarName}.appendChild(${varName});`)
-          .add('__wizzChildMounts.push(() => {').indent();
-        if (hasReactiveProps) {
+        if (hasReactiveProps && node.componentId == null) {
+          throw compilerDiagnostic(CODES.generator.missingComponentId, `Component <${node.name}> is missing its componentId; run the analyzer before generation.`);
+        }
+        builder.add(`const ${varName} = document.createTextNode("");`);
+        // The placeholder is never tracked: the mount below removes it.
+        attach(parentVarName, varName, top, false);
+        builder.add('__wizzChildMounts.push(() => {').indent();
+        if (scope) {
+          // A child mounted in a branch is owned by that branch's scope, not
+          // the component-wide list, so replacing the branch destroys it.
+          builder.add(`const __wizzChild = ${node.name}(${parentVarName}, ${propsSource}, ${varName});`);
+          if (hasReactiveProps) {
+            builder.add(`__wizzComponent_${node.componentId} = __wizzChild;`)
+              .add(`__wizzDrop.push(() => { __wizzChild.destroy(); __wizzComponent_${node.componentId} = null; });`);
+          } else {
+            builder.add('__wizzDrop.push(() => __wizzChild.destroy());');
+          }
+        } else if (hasReactiveProps) {
           // The mounted instance is kept in a factory-scope reference so
           // update() can deliver prop changes without remounting.
-          if (node.componentId == null) {
-            throw compilerDiagnostic(CODES.generator.missingComponentId, `Component <${node.name}> is missing its componentId; run the analyzer before generation.`);
-          }
           const refName = `__wizzComponent_${node.componentId}`;
           builder.add(`${refName} = ${node.name}(${parentVarName}, ${propsSource}, ${varName});`);
           builder.add(`__wizzChildren.push(${refName});`);
@@ -241,16 +369,11 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
             builder.add(attributeWriteSource(varName, attr.name, attr.value));
             return;
           }
-          if (attr.name.startsWith('on:')) {
-            const eventName = attr.name.slice(3);
-            const handlerExpression = attr.value?.trim();
-            if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(eventName)) {
-              throw compilerDiagnostic(CODES.generator.invalidEventDirective, `Invalid event directive '${attr.name}'.`);
-            }
-            if (!handlerExpression) {
-              throw compilerDiagnostic(CODES.generator.eventMissingHandler, `Event directive '${attr.name}' requires a handler expression.`);
-            }
-            builder.add(`__wizzListen(${varName}, ${JSON.stringify(eventName)}, ${handlerSources.get(attr) ?? handlerExpression});`);
+          if (isEventAttribute(attr)) {
+            const { eventName, handler } = eventListenerParts(attr, handlerSources);
+            builder.add(scope
+              ? `__wizzDrop.push(__wizzOn(${varName}, ${JSON.stringify(eventName)}, ${handler}));`
+              : `__wizzListen(${varName}, ${JSON.stringify(eventName)}, ${handler});`);
             return;
           }
 
@@ -268,12 +391,13 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
       builder.add(`const ${varName} = document.createTextNode(String(${node.value}));`);
     }
 
-    if (updateTargets.has(node)) builder.add(`${updateTargets.get(node)} = ${varName};`);
-
-    // If this node has a parent, append it immediately
-    if (parentVarName && varName) {
-      builder.add(`${parentVarName}.appendChild(${varName});`);
+    if (updateTargets.has(node)) {
+      builder.add(`${updateTargets.get(node)} = ${varName};`);
+      if (scope) scope.targets.push(updateTargets.get(node));
     }
+
+    // If this node has a parent, attach it immediately
+    if (parentVarName && varName) attach(parentVarName, varName, top);
 
     // Traverse children
     if (node.children && Array.isArray(node.children)) {
@@ -299,7 +423,7 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
         .dedent()
         .add('}');
 
-  return builder.generate();
+  return [builder.generate(), ...makerSources].join('\n');
 }
 
-module.exports = { generateCreateFunction, collectComponentRefNames, buildComponentPropsSource };
+module.exports = { generateCreateFunction, collectComponentRefNames, buildComponentPropsSource, eventListenerParts };

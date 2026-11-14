@@ -84,6 +84,7 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 	  ├── README.md                 Generator contracts and module reference
 	  ├── codeBuilder.js            Indented source-code builder
 	  ├── attributePolicy.js        Shared dynamic-attribute policy: property names, boolean presence, null/undefined removal
+	  ├── blockScopes.js            Block ownership: reactive {#if} analysis, scope records, and the emitted __wizzIfBlock/__wizzDropScope/__wizzOn helpers
 	  ├── domGenerator.js           Emits create() DOM construction function
 	  ├── updateGenerator.js        Emits update() and names the nodes it writes to (collectUpdateTargets)
 	  ├── assignmentInterceptor.js  Syntax-aware rewriter for reactive script mutations
@@ -100,7 +101,7 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 
 `src/compiler/index.test.js` and `src/compiler/errorAugmenter.test.js` hold the focused Node tests for the public `compile()` contract and its file-path error behavior.
 
-`test/benchmarks.test.js` compiles representative benchmark fixtures and pins operation-count regressions for batched repeated updates, tracked-listener teardown, a 121-element static tree, and hydration's zero-DOM-creation adoption walk. It reports local timings without enforcing machine-dependent time limits.
+`test/benchmarks.test.js` compiles representative benchmark fixtures and pins operation-count regressions for batched repeated updates, tracked-listener teardown, a 121-element static tree, a listener-bearing 100-row `{#if}` branch rebuilt per toggle, and hydration's zero-DOM-creation adoption walk. It reports local timings without enforcing machine-dependent time limits.
 
 `test/hydration.test.js` exercises the full server-render → deliver → hydrate → update → destroy cycle: `compileServer()` renders the hydration fixture to HTML plus a serialized state script, a browser-faithful HTML parser places the markup in a mount point, the `hydratable` client module adopts it without creating any nodes, and event-driven reactive updates land on the adopted DOM. Tampered text, empty or mistagged mount points, and injected whitespace each produce exactly one mismatch warning followed by a clean client-render fallback. The same file pins the head cycle end to end: a delivered `wizz:head` run (marker-delimited in the document head, tagged with owner paths) is adopted with zero created nodes, claimed (ownership re-tagged, titles fronted, markers consumed), and released on destroy so a static shell title resumes; a tampered delivered title strips the run and remounts a fresh head with no duplicates.
 

@@ -588,10 +588,10 @@ const TEMPLATE_LIMITS = Object.freeze([
   },
   {
     area: '`{#if}`',
-    supported: '`{#if cond}...{:else}...{/if}`, nesting, events, and components inside branches; expressions inside the taken branch stay reactive.',
-    limit: 'The branch is chosen once, at mount; changing the condition later does not swap branches. No `{:else if}`.',
-    failure: 'Silent non-update (`{:else if}`: WIZZ-P033)',
-    workaround: 'Render every state and toggle visibility with a reactive class plus CSS: `class={\'panel\' + openClass}`. Chain conditions by nesting `{#if}` inside `{:else}`.'
+    supported: '`{#if cond}...{:else}...{/if}`, nesting, events, lists, and components inside branches. The test is re-evaluated whenever a reactive `let` or prop it reads changes, and the branch is replaced: the old one leaves the DOM with its listeners and child components, and the new one is built from current state.',
+    limit: 'No `{:else if}`. A test that reads only `const` values is evaluated once, at mount. A replaced branch is rebuilt, so DOM state inside it (typed input text, scroll position, a child component\'s own state) is not kept.',
+    failure: '`{:else if}`: compile error (WIZZ-P033); `const` test and lost branch state: silent',
+    workaround: 'Chain conditions by nesting `{#if}` inside `{:else}`. Keep state that must survive a hidden branch in a script `let`, or keep the element mounted and toggle it with `hidden={flag}`.'
   },
   {
     area: '`{#each}` collection',
@@ -602,10 +602,10 @@ const TEMPLATE_LIMITS = Object.freeze([
   },
   {
     area: '`{#each}` body',
-    supported: 'Exactly one native root element per item; its text and dynamic attributes update.',
-    limit: 'No `on:` directives (WIZZ-G006), imported components (WIZZ-G004), or nested `{#if}`/`{#each}` (WIZZ-G005); one root element only (WIZZ-G003); the block must sit inside a native element.',
-    failure: 'Compile error',
-    workaround: 'Delegate events: put `on:click={pick}` on the list\'s parent element, render `data-id={item.id}` on each row, and read `event.target.closest(\'[data-id]\').dataset.id` in `pick`. Precompute per-row variants (class suffix, label) as item fields.'
+    supported: 'Exactly one native root element per item; its text and dynamic attributes update. `on:` handlers anywhere in the item run with the item variable in scope (`on:click={() => remove(item.id)}`); they attach per item and detach when the item is removed.',
+    limit: 'No imported components (WIZZ-G004) or nested `{#if}`/`{#each}` (WIZZ-G005); one root element only (WIZZ-G003); the block must sit inside a native element. A handler expression is evaluated once per item, so `on:click={makeHandler(item)}` keeps the handler built from the item\'s first value.',
+    failure: 'Compile error; a stale `makeHandler(item)`: silent',
+    workaround: 'Write per-row handlers as inline arrows, which read the item when they run: `on:click={() => pick(item.id)}`. Precompute per-row variants (class suffix, label) as item fields.'
   },
   {
     area: 'Dynamic attributes',
@@ -705,12 +705,14 @@ additionally escape ".
 
 Directives:
 - on:<event>={handler} — native browser event names; client-only.
-- {#if condition} ... {:else} ... {/if} — branch chosen at mount time.
+- {#if condition} ... {:else} ... {/if} — the branch is replaced when a
+  reactive let or prop the condition reads changes.
 - {#each items as item (item.id)} ... {/each} — keyed, or keyless for
   positional identity. The collection must be a reactive let, the block
   must sit inside a native element, and the body must contain exactly one
-  native root element. Each bodies do not support components, on:
-  directives, or nested blocks (compile-time errors, never silent).
+  native root element. on: handlers inside the body see the item
+  variable: on:click={() => remove(item.id)}. Each bodies do not support
+  components or nested blocks (compile-time errors, never silent).
 
 Components:
 - Import a component with a default import from a .wizz path and render it

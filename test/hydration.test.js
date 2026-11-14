@@ -1527,3 +1527,295 @@ test('issue #72: a truthy server-rendered boolean attribute is adopted bare and 
   assert.equal('hidden' in section.attributes, false);
   component.destroy();
 });
+
+// --- Reactive {#if} (issue #71) and on: inside {#each} (issue #70) ---
+// Every behavior is asserted on a fresh mount and on adopted server markup:
+// hydration must hand the same block machinery the same ownership create()
+// builds, so the two can never drift apart.
+const outline = (node) => (node.nodeType === 3
+  ? JSON.stringify(node.nodeValue)
+  : `${node.tagName.toLowerCase()}[${node.childNodes.filter((child) => child.nodeType !== 8).map(outline).join(' ')}]`);
+const fireEvent = async (node, eventName = 'click') => {
+  node.dispatchEvent(eventName);
+  await flushUpdates();
+};
+const liveListeners = (document) => document.metrics.addedListeners - document.metrics.removedListeners;
+
+for (const [mode, mount] of Object.entries(mountBothWays)) {
+  test(`${mode}: issue #71: a reactive if block swaps branches and keeps its place`, async (t) => {
+    const source = '<script>\nlet open = true;\nlet label = "a";\nfunction toggle() { open = !open; }\nfunction rename() { label = label + "!"; }\n</script>'
+      + '<main><button on:click={toggle}>t</button>{#if open}<p on:click={rename}>{label}</p>{:else}<i>closed</i>{/if}<footer>end</footer></main>';
+    const { target, component, document } = await mount(t, source);
+    const main = target.childNodes[0];
+    const [button] = elementsNamed(target, 'button');
+    assert.equal(outline(main), 'main[button["t"] p["a"] "" footer["end"]]');
+
+    // Reactive content inside the live branch, through its own listener.
+    const paragraph = elementsNamed(target, 'p')[0];
+    await fireEvent(paragraph);
+    assert.equal(outline(main), 'main[button["t"] p["a!"] "" footer["end"]]');
+
+    await fireEvent(button);
+    assert.equal(outline(main), 'main[button["t"] i["closed"] "" footer["end"]]');
+    assert.equal(paragraph.listeners.click, undefined, 'the replaced branch released its listener');
+    assert.equal(liveListeners(document), 1, 'only the toggle listener is left');
+
+    await fireEvent(button);
+    assert.equal(outline(main), 'main[button["t"] p["a!"] "" footer["end"]]');
+    assert.notEqual(elementsNamed(target, 'p')[0], paragraph, 'the branch is rebuilt from current state');
+    await fireEvent(elementsNamed(target, 'p')[0]);
+    assert.equal(outline(main), 'main[button["t"] p["a!!"] "" footer["end"]]');
+
+    component.destroy();
+    assert.deepEqual(target.childNodes, []);
+    assert.equal(liveListeners(document), 0, 'every listener was released');
+  });
+
+  test(`${mode}: issue #71: an initially untaken block without an else appears later`, async (t) => {
+    const source = '<script>\nlet error = "";\nfunction fail() { error = "Required"; }\nfunction clear() { error = ""; }\n</script>'
+      + '<form on:submit={fail} on:reset={clear}><input />{#if error}<p class="error">{error}</p>{/if}</form>';
+    const { target, component } = await mount(t, source);
+    const form = target.childNodes[0];
+    assert.equal(outline(form), 'form[input[] ""]');
+    await fireEvent(form, 'submit');
+    assert.equal(outline(form), 'form[input[] p["Required"] ""]');
+    await fireEvent(form, 'reset');
+    assert.equal(outline(form), 'form[input[] ""]');
+    component.destroy();
+  });
+
+  test(`${mode}: issue #71: nested blocks and a list directly in a branch tear down together`, async (t) => {
+    const source = '<script>\nlet outer = true;\nlet inner = false;\nlet xs = ["a", "b"];\nfunction a() { outer = !outer; }\nfunction b() { inner = !inner; }\nfunction add() { xs = [...xs, "c"]; }\n</script>'
+      + '<ul on:click={a} on:keydown={b} on:keyup={add}>{#if outer}{#each xs as x}<li>{x}</li>{/each}{#if inner}<li class="deep">deep</li>{/if}{:else}<li>none</li>{/if}</ul>';
+    const { target, component } = await mount(t, source);
+    const list = target.childNodes[0];
+    // Two items, the list anchor, the inner block anchor, the outer anchor.
+    assert.equal(outline(list), 'ul[li["a"] li["b"] "" "" ""]');
+
+    await fireEvent(list, 'keydown');
+    assert.equal(outline(list), 'ul[li["a"] li["b"] "" li["deep"] "" ""]');
+    await fireEvent(list, 'keyup');
+    assert.equal(outline(list), 'ul[li["a"] li["b"] li["c"] "" li["deep"] "" ""]');
+
+    await fireEvent(list);
+    assert.equal(outline(list), 'ul[li["none"] ""]', 'items, both inner anchors, and the nested branch all left');
+
+    // State the dropped blocks read keeps changing without effect.
+    await fireEvent(list, 'keyup');
+    await fireEvent(list, 'keydown');
+    assert.equal(outline(list), 'ul[li["none"] ""]');
+
+    await fireEvent(list);
+    assert.equal(outline(list), 'ul[li["a"] li["b"] li["c"] li["c"] "" "" ""]');
+    component.destroy();
+    assert.deepEqual(target.childNodes, []);
+  });
+
+  test(`${mode}: issue #71: a child component is destroyed and remounted with its branch`, async (t) => {
+    const parentSource = '<script>\nimport Counter from "./Counter.wizz";\nlet open = true;\nfunction toggle() { open = !open; }\n</script>'
+      + '<main><h1 on:click={toggle}>t</h1>{#if open}<Counter />{/if}<p>end</p></main>';
+    const childSource = '<script>\nlet count = 0;\nfunction increment() { count += 1; }\n</script><section><button on:click={increment}>Clicks: {count}</button></section>';
+    const { target, component, document } = await mount(t, parentSource, childSource);
+    const main = target.childNodes[0];
+    const [heading] = elementsNamed(target, 'h1');
+    assert.equal(outline(main), 'main[h1["t"] section[button["Clicks: " "0"]] "" p["end"]]');
+
+    const firstButton = elementsNamed(target, 'button')[0];
+    await fireEvent(firstButton);
+    assert.equal(textOf(firstButton), 'Clicks: 1');
+
+    // Dropping the branch destroys the child: its root leaves the parent
+    // (also when the child had adopted that root) and its listener goes.
+    await fireEvent(heading);
+    assert.equal(outline(main), 'main[h1["t"] "" p["end"]]');
+    assert.equal(firstButton.listeners.click, undefined);
+    assert.equal(liveListeners(document), 1);
+
+    // The branch comes back with a brand-new child instance, in place.
+    await fireEvent(heading);
+    assert.equal(outline(main), 'main[h1["t"] section[button["Clicks: " "0"]] "" p["end"]]');
+    const secondButton = elementsNamed(target, 'button')[0];
+    assert.notEqual(secondButton, firstButton);
+    await fireEvent(secondButton);
+    assert.equal(textOf(secondButton), 'Clicks: 1');
+
+    component.destroy();
+    assert.deepEqual(target.childNodes, []);
+    assert.equal(liveListeners(document), 0);
+  });
+
+  test(`${mode}: issue #71: a child in an untaken branch mounts when the branch is first taken`, async (t) => {
+    const parentSource = '<script>\nimport Counter from "./Counter.wizz";\nlet open = false;\nlet label = "x";\nfunction toggle() { open = !open; }\nfunction rename() { label = "y"; }\n</script>'
+      + '<main on:click={toggle} on:keydown={rename}>{#if open}<div><Counter text={label} /></div>{:else}<i>none</i>{/if}</main>';
+    const { target, component } = await mount(t, parentSource, labelChildSource);
+    const main = target.childNodes[0];
+    assert.equal(outline(main), 'main[i["none"] ""]');
+
+    // A prop dependency changes while the child does not exist.
+    await fireEvent(main, 'keydown');
+    assert.equal(outline(main), 'main[i["none"] ""]');
+
+    await fireEvent(main);
+    assert.equal(textOf(elementsNamed(target, 'span')[0]), 'y', 'the child mounts with the current prop value');
+    await fireEvent(main);
+    assert.equal(outline(main), 'main[i["none"] ""]');
+    component.destroy();
+    assert.deepEqual(target.childNodes, []);
+  });
+
+  test(`${mode}: issue #70: a row's on: handler removes that row`, async (t) => {
+    const source = '<script>\nlet entries = [{ id: 1, name: "Egg" }, { id: 2, name: "Tea" }, { id: 3, name: "Rice" }];\nfunction remove(id) { entries = entries.filter((entry) => entry.id !== id); }\nfunction add() { entries = [...entries, { id: 9, name: "Fig" }]; }\n</script>'
+      + '<main on:keydown={add}><ul>{#each entries as entry (entry.id)}<li>{entry.name}<button on:click={() => remove(entry.id)}>Delete</button></li>{/each}</ul></main>';
+    const { target, component, document } = await mount(t, source);
+    const main = target.childNodes[0];
+    const names = () => elementsNamed(target, 'li').map((item) => item.childNodes[0].nodeValue);
+    assert.deepEqual(names(), ['Egg', 'Tea', 'Rice']);
+    assert.equal(liveListeners(document), 4, 'one per row plus the root');
+
+    const teaButton = elementsNamed(target, 'button')[1];
+    await fireEvent(teaButton);
+    assert.deepEqual(names(), ['Egg', 'Rice']);
+    assert.equal(teaButton.listeners.click, undefined, 'the removed row released its listener');
+    assert.equal(liveListeners(document), 3);
+
+    // A row created after mount gets a working listener of its own.
+    await fireEvent(main, 'keydown');
+    assert.deepEqual(names(), ['Egg', 'Rice', 'Fig']);
+    await fireEvent(elementsNamed(target, 'button')[2]);
+    assert.deepEqual(names(), ['Egg', 'Rice']);
+
+    await fireEvent(elementsNamed(target, 'button')[0]);
+    await fireEvent(elementsNamed(target, 'button')[0]);
+    assert.deepEqual(names(), []);
+    assert.equal(liveListeners(document), 1);
+
+    component.destroy();
+    assert.equal(liveListeners(document), 0);
+  });
+
+  test(`${mode}: issue #70: handlers read the item's replacement after a keyed update`, async (t) => {
+    const source = '<script>\nlet rows = [{ id: 1, qty: 1 }, { id: 2, qty: 5 }];\nlet seen = "none";\nfunction read(row) { seen = String(row.qty); }\nfunction bump() { rows = rows.map((row) => ({ id: row.id, qty: row.qty + 1 })); }\n</script>'
+      + '<main on:keydown={bump}><ul>{#each rows as row (row.id)}<li on:click={() => read(row)}>{row.qty}</li>{/each}</ul><p>{seen}</p></main>';
+    const { target, component } = await mount(t, source);
+    const main = target.childNodes[0];
+    const items = elementsNamed(target, 'li');
+    await fireEvent(main, 'keydown');
+    await fireEvent(main, 'keydown');
+    assert.deepEqual(elementsNamed(target, 'li'), items, 'keyed nodes are retained across updates');
+    await fireEvent(items[1]);
+    assert.equal(textOf(elementsNamed(target, 'p')[0]), '7');
+    await fireEvent(items[0]);
+    assert.equal(textOf(elementsNamed(target, 'p')[0]), '3');
+    component.destroy();
+  });
+
+  test(`${mode}: issue #70: item listeners inside a reactive branch leave with the branch`, async (t) => {
+    const source = '<script>\nlet open = true;\nlet picked = "none";\nlet tags = ["a", "b"];\nfunction toggle() { open = !open; }\nfunction pick(tag) { picked = tag; }\n</script>'
+      + '<main on:keydown={toggle}><p>{picked}</p>{#if open}<ul>{#each tags as tag}<li on:click={() => pick(tag)}>{tag}</li>{/each}</ul>{/if}</main>';
+    const { target, component, document } = await mount(t, source);
+    const main = target.childNodes[0];
+    const items = elementsNamed(target, 'li');
+    await fireEvent(items[1]);
+    assert.equal(textOf(elementsNamed(target, 'p')[0]), 'b');
+
+    await fireEvent(main, 'keydown');
+    assert.deepEqual(items.map((item) => item.listeners.click), [undefined, undefined]);
+    assert.equal(liveListeners(document), 1);
+
+    await fireEvent(main, 'keydown');
+    await fireEvent(elementsNamed(target, 'li')[0]);
+    assert.equal(textOf(elementsNamed(target, 'p')[0]), 'a');
+    component.destroy();
+    assert.equal(liveListeners(document), 0);
+  });
+}
+
+test('issue #71: hydrating a reactive block creates only its anchor', async (t) => {
+  const source = '<script>\nlet open = true;\nfunction toggle() { open = !open; }\n</script>'
+    + '<main on:click={toggle}>{#if open}<p>shown</p>{:else}<i>hidden</i>{/if}</main>';
+  const { document, clientModule, metricsBefore, warnings, render } = await loadGeneratedModules(t, source);
+  const { html, state } = render();
+  assert.equal(html, '<main><!-- --><p>shown</p><!-- --></main>');
+  const target = deliverMarkup(document, html);
+  const delivered = target.childNodes[0].childNodes.find((node) => node.nodeType === 1);
+  const component = clientModule.hydrateComponent(target, {}, state);
+
+  assert.deepEqual(warnings, []);
+  assert.equal(document.metrics.elements, metricsBefore.elements, 'adoption creates no elements');
+  assert.equal(elementsNamed(target, 'p')[0], delivered, 'the delivered branch is adopted, not rebuilt');
+  assert.equal(outline(target.childNodes[0]), 'main[p["shown"] ""]');
+
+  // The first swap after adoption removes the adopted nodes and builds the
+  // other branch through the shared maker.
+  await fireEvent(target.childNodes[0]);
+  assert.equal(outline(target.childNodes[0]), 'main[i["hidden"] ""]');
+  assert.equal(document.metrics.elements, metricsBefore.elements + 1);
+  component.destroy();
+});
+
+test('issue #71: a mismatch inside a reactive branch falls back cleanly', async (t) => {
+  const source = '<script>\nlet open = true;\nfunction toggle() { open = !open; }\nfunction noop() {}\n</script>'
+    + '<main on:click={toggle}>{#if open}<p on:click={noop}>shown</p>{:else}<i>hidden</i>{/if}</main>';
+  const { document, clientModule, warnings, render } = await loadGeneratedModules(t, source);
+  const { html, state } = render();
+  // The server rendered the taken branch; deliver the other one instead.
+  const target = deliverMarkup(document, html.replace('<p>shown</p>', '<i>hidden</i>'));
+  const tampered = target.childNodes[0];
+  const addedBefore = document.metrics.addedListeners;
+  const component = clientModule.hydrateComponent(target, {}, state);
+
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /^\[wizz\] hydration mismatch: expected <p> at index 0 of <main>/);
+  assert.notEqual(target.childNodes[0], tampered, 'the tampered tree was replaced');
+  // The abandoned walk attached nothing: listeners wait for a passing walk.
+  assert.equal(tampered.listeners.click, undefined);
+  assert.equal(document.metrics.addedListeners, addedBefore + 2, 'only the fallback mount attached listeners');
+  assert.equal(outline(target.childNodes[0]), 'main[p["shown"] ""]');
+
+  // The fallback is a normal reactive mount.
+  await fireEvent(target.childNodes[0]);
+  assert.equal(outline(target.childNodes[0]), 'main[i["hidden"] ""]');
+  component.destroy();
+  assert.deepEqual(target.childNodes, []);
+  assert.equal(liveListeners(document), 0);
+});
+
+test('issue #70: hydration adopts rows with listeners without recreating them', async (t) => {
+  const source = '<script>\nlet entries = [{ id: 1, name: "Egg" }, { id: 2, name: "Tea" }];\nfunction remove(id) { entries = entries.filter((entry) => entry.id !== id); }\n</script>'
+    + '<ul>{#each entries as entry (entry.id)}<li>{entry.name}<button on:click={() => remove(entry.id)}>x</button></li>{/each}</ul>';
+  const { document, clientModule, metricsBefore, warnings, render } = await loadGeneratedModules(t, source);
+  const { html, state } = render();
+  // Listeners are client-only: the delivered markup carries no trace of them.
+  assert.equal(html, '<ul><li>Egg<button>x</button></li><li>Tea<button>x</button></li></ul>');
+  const target = deliverMarkup(document, html);
+  const deliveredItems = elementsNamed(target, 'li');
+  const component = clientModule.hydrateComponent(target, {}, state);
+
+  assert.deepEqual(warnings, []);
+  assert.equal(document.metrics.elements, metricsBefore.elements);
+  assert.equal(document.metrics.addedListeners, metricsBefore.addedListeners + 2, 'one listener per adopted row');
+
+  await fireEvent(elementsNamed(target, 'button')[0]);
+  assert.deepEqual(elementsNamed(target, 'li'), [deliveredItems[1]], 'the surviving row is still the delivered node');
+  component.destroy();
+  assert.equal(liveListeners(document), 0);
+});
+
+test('issue #70: a tampered row falls back without leaving adopted-row listeners behind', async (t) => {
+  const source = '<script>\nlet entries = [{ id: 1, name: "Egg" }, { id: 2, name: "Tea" }];\nfunction remove(id) { entries = entries.filter((entry) => entry.id !== id); }\n</script>'
+    + '<ul>{#each entries as entry (entry.id)}<li>{entry.name}<button on:click={() => remove(entry.id)}>x</button></li>{/each}</ul>';
+  const { document, clientModule, warnings, render } = await loadGeneratedModules(t, source);
+  const { html, state } = render();
+  // The first row verifies (queueing its listener); the second does not.
+  const target = deliverMarkup(document, html.replace('Tea', 'Coffee'));
+  const firstButton = elementsNamed(target, 'button')[0];
+  const component = clientModule.hydrateComponent(target, {}, state);
+
+  assert.equal(warnings.length, 1);
+  assert.equal(firstButton.listeners.click, undefined, 'the verified row never received its queued listener');
+  assert.deepEqual(elementsNamed(target, 'li').map((item) => item.childNodes[0].nodeValue), ['Egg', 'Tea']);
+  await fireEvent(elementsNamed(target, 'button')[1]);
+  assert.deepEqual(elementsNamed(target, 'li').map((item) => item.childNodes[0].nodeValue), ['Egg']);
+  component.destroy();
+  assert.equal(liveListeners(document), 0);
+});

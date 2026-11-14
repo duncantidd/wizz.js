@@ -344,7 +344,7 @@ test('rejects each bodies that do not hold exactly one root element', () => {
   );
 });
 
-test('rejects nested blocks, imported components, and event directives inside each bodies', () => {
+test('rejects nested blocks and imported components inside each bodies', () => {
   // A block as the body root trips the shape check; the per-node
   // restrictions fire for content nested inside the body root element.
   assert.throws(
@@ -362,9 +362,26 @@ test('rejects nested blocks, imported components, and event directives inside ea
     // The each-body restriction fires before component vouching is consulted.
     /Imported components are not supported inside each blocks/
   );
+});
+
+test('accepts event directives inside each bodies and keeps them out of the markup', async () => {
+  // Issue #70: listeners are client-only, so the gate validates the
+  // directive and the renderer emits nothing for it.
+  const source = '<script>\nlet items = [{ id: 1, label: "a" }, { id: 2, label: "b" }];\nfunction go() {}\n</script><main><ul>{#each items as item (item.id)}<li><button on:click={() => go(item.id)}>{item.label}</button></li>{/each}</ul></main>';
+  assert.doesNotThrow(() => assertServerRenderable(analyze(source)));
+  const { html } = await renderSource(source);
+  assert.equal(html, '<main><ul><li><button>a</button></li><li><button>b</button></li></ul></main>');
+  assert.doesNotMatch(html, /on:|click|go\(/);
+});
+
+test('each-body event directives are validated like any other', () => {
   assert.throws(
-    () => assertServerRenderable(analyze('<main>{#each items as item}<button on:click={go}>x</button>{/each}</main>')),
-    /Event directive 'on:click' is not supported inside each blocks yet/
+    () => assertServerRenderable(analyze('<main>{#each items as item}<button on:click>x</button>{/each}</main>')),
+    (error) => error.code === 'WIZZ-G012' && /Event directive 'on:click' requires a handler expression\./.test(error.message)
+  );
+  assert.throws(
+    () => assertServerRenderable(analyze('<main>{#each items as item}<button on:my-event={go}>x</button>{/each}</main>')),
+    (error) => error.code === 'WIZZ-G013' && /Invalid event directive 'on:my-event'\./.test(error.message)
   );
 });
 

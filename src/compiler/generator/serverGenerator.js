@@ -69,8 +69,8 @@ function __wizzSerializeInitialState(state) {
  *
  * Both targets must agree on the surface, so these rules mirror the browser
  * generator exactly: `{#each}` bodies hold one root element with no nested
- * blocks, imported components, or event directives (domGenerator's
- * walkListNode restrictions), component tags take no children and no event
+ * blocks or imported components (domGenerator's walkListNode restrictions;
+ * their event directives are validated and never rendered), component tags take no children and no event
  * directives (buildComponentPropsSource), and event directives on regular
  * elements are validated with identical messages. Only the first root
  * element is rendered by both targets, so root-level nodes are not gated.
@@ -147,7 +147,8 @@ function assertServerRenderable(astPayload, options = {}) {
 
   // Each bodies mirror the browser target's list-node restrictions exactly:
   // one root element, Text/Expression/Element children only, no nested
-  // blocks, no imported components, and no event directives.
+  // blocks, and no imported components. Event directives are client-only and
+  // validated like any other; the markup never carries them.
   const assertEachBody = (node) => {
     const contentNodes = node.children.filter((child) => child.type !== 'Text' || child.value.trim() !== '');
     if (contentNodes.length !== 1 || contentNodes[0].type !== 'Element') {
@@ -165,9 +166,7 @@ function assertServerRenderable(astPayload, options = {}) {
           throw compilerDiagnostic(CODES.generator.voidWithChildren, `Void element <${listNode.name}> cannot have children at ${where(listNode)}.`);
         }
         for (const attribute of listNode.attributes || []) {
-          if (attribute.name.startsWith('on:')) {
-            throw compilerDiagnostic(CODES.generator.eventInsideEach, `Event directive '${attribute.name}' is not supported inside each blocks yet at ${where(listNode)}.`);
-          }
+          if (attribute.name.startsWith('on:')) assertEventDirective(attribute);
         }
         (listNode.children || []).forEach(assertListNode);
       }
@@ -415,7 +414,8 @@ function generateServerComponent(astPayload, options = {}) {
       return;
     }
     if (node.type === 'IfBlock') {
-      // The server renders the initially-taken branch, evaluated against the
+      // The server renders the branch the test selects at render time (the
+      // client replaces it later if the test changes), evaluated against the
       // render-time state — the same expression the hydration walk
       // re-evaluates against the seeded state, so both targets select the
       // same branch. Markers sit at the block's own boundaries, never inside

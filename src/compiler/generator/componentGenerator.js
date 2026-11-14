@@ -15,6 +15,7 @@ const { generateHydrationFunction } = require('./hydrationGenerator');
 const { scopeCss } = require('../analyzer/cssScanner.js');
 const { VERSIONS } = require('../version.js');
 const { attributeWriteSource, needsAttributeHelper, __wizzAttr } = require('./attributePolicy');
+const { analyzeBlocks, __wizzOn, __wizzDropScope, __wizzIfBlock } = require('./blockScopes');
 
 // Defined flush-left and emitted verbatim via Function.prototype.toString so
 // the generated module carries exactly this head-management implementation
@@ -378,6 +379,25 @@ function generateComponent(astPayload, options = {}) {
     builder.add('');
   }
 
+  // Block scope helpers (see blockScopes.js): reactive if blocks need the
+  // block and scope-drop helpers, and listeners owned by a branch or an each
+  // item attach through __wizzOn. Templates with neither keep byte-identical
+  // output.
+  const blocks = analyzeBlocks(astPayload.template);
+  if (blocks.ifIds.size > 0 || blocks.scopedListeners) {
+    builder.add('// --- Block Helpers ---');
+    if (blocks.scopedListeners) {
+      builder.add(__wizzOn.toString());
+      builder.add('');
+    }
+    if (blocks.ifIds.size > 0) {
+      builder.add(__wizzDropScope.toString());
+      builder.add('');
+      builder.add(__wizzIfBlock.toString());
+      builder.add('');
+    }
+  }
+
   // Persistent state helpers are emitted from their in-generator definitions
   // (same pattern as the head helpers) so every generated module carries
   // exactly this implementation. Components without persistent state keep
@@ -458,6 +478,11 @@ function generateComponent(astPayload, options = {}) {
                     .add('__wizzListeners.push({ node, eventName, handler });')
                     .dedent()
                     .add('}');
+      if (blocks.needsDrop) {
+        // The component scope's disposers: reactive if blocks and the
+        // listeners of live each items, released by destroy().
+        builder.add('const __wizzDrop = [];');
+      }
       builder.add('function __wizzQueueUpdate(__wizzChanged) {')
                         .indent()
                         .add('if (!__wizzMounted) return;')
@@ -806,8 +831,13 @@ function generateComponent(astPayload, options = {}) {
   builder.add('destroy() {')
         .indent()
       .add('__wizzDestroyed = true;')
-      .add('__wizzDestroyHooks.forEach((hook) => hook());')
-      .add('__wizzChildren.forEach((component) => component.destroy());');
+      .add('__wizzDestroyHooks.forEach((hook) => hook());');
+  if (blocks.needsDrop) {
+    // Not detaching: the root is removed below as a whole. This destroys the
+    // children live branches own and removes branch and item listeners.
+    builder.add('__wizzDrop.forEach((drop) => drop(false));');
+  }
+  builder.add('__wizzChildren.forEach((component) => component.destroy());');
   if (ownHead || ownStyle) {
     // Released after the child cascade so a child's head returns to the
     // document before this component's is removed; shared styles survive
@@ -848,26 +878,34 @@ function generateComponent(astPayload, options = {}) {
  */
 function collectHandlerSources(templateAST, reactiveNames, persistentVars, propNames) {
   const sources = new WeakMap();
-  function walk(node) {
+  function walk(node, shadowed = new Set()) {
+    const activeProps = shadowed.size > 0 ? propNames.filter((name) => !shadowed.has(name)) : propNames;
+    const activeReactive = shadowed.size > 0 ? reactiveNames.filter((name) => !shadowed.has(name)) : reactiveNames;
+    const activePersistent = shadowed.size > 0 ? persistentVars.filter((entry) => !shadowed.has(entry.name)) : persistentVars;
     for (const attribute of node.attributes || []) {
       if (!attribute.name.startsWith('on:') || typeof attribute.value !== 'string') continue;
-      if (propNames.length > 0) {
-        const [first] = findHandlerMutations(attribute.value, propNames);
+      if (activeProps.length > 0) {
+        const [first] = findHandlerMutations(attribute.value, activeProps);
         if (first) {
           throw compilerDiagnostic(CODES.generator.propAssignment, `Props are read-only: '${first.name}' cannot be assigned in the '${attribute.name}' handler.`);
         }
       }
-      sources.set(attribute, interceptHandlerExpression(attribute.value, reactiveNames, persistentVars));
+      sources.set(attribute, interceptHandlerExpression(attribute.value, activeReactive, activePersistent));
     }
     // The parser's `children` alias repoints to the alternate at {:else},
     // so both branches are walked explicitly.
     if (node.type === 'IfBlock') {
-      (node.consequent || []).forEach(walk);
-      (node.alternate || []).forEach(walk);
+      (node.consequent || []).forEach((child) => walk(child, shadowed));
+      (node.alternate || []).forEach((child) => walk(child, shadowed));
       return;
     }
-    (node.children || []).forEach(walk);
-    (node.alternate || []).forEach(walk);
+    // An each block's item binding is a parameter of its item factory, so it
+    // shadows any top-level prop, reactive, or persistent binding of the same name.
+    const childShadowed = node.type === 'EachBlock' && node.item
+      ? new Set([...shadowed, node.item])
+      : shadowed;
+    (node.children || []).forEach((child) => walk(child, childShadowed));
+    (node.alternate || []).forEach((child) => walk(child, childShadowed));
   }
   if (reactiveNames.length > 0 || propNames.length > 0) walk(templateAST);
   return sources;
