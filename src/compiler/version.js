@@ -138,13 +138,30 @@
 // used to stay put now follows its test — lifts a documented "not supported
 // yet" limit and follows the precedent of the 1.21.0 attribute policy.
 //
+// compiler 1.22.1 / syntax 1.5.1 / output 1.12.0: a quoted attribute value that
+// holds an expression (`class="card {tone}"`) is a compile error, WIZZ-P055
+// (issue #64). Such values were always static, so the braces rendered
+// literally with no hint. Braces whose content is not an expression
+// (`data-x='{"a":1}'`) stay literal. Syntax patch: the catalog grows
+// additively and the rejected form never did what its author intended.
+// Output is unchanged.
+//
+
+// compiler 1.22.1 / syntax 1.5.1 / output 1.12.0: a quoted attribute value
+// that holds an expression (`class="card {tone}"`) is a compile error,
+// WIZZ-P055 (issue #64). Such values were always static, so the braces
+// rendered literally with no hint. Braces whose content is not an expression
+// (`data-x='{"a":1}'`) stay literal. Syntax patch: the catalog grows
+// additively and the rejected form never did what its author intended.
+// Output is unchanged.
+//
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.22.0',
-  syntax: '1.5.0',
+  compiler: '1.22.1',
+  syntax: '1.5.1',
   output: '1.12.0'
 });
 

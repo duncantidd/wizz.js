@@ -258,6 +258,8 @@ Prefix parselets handle identifiers, numbers, and grouped expressions. Infix par
 
 `integrateExpressions()` recursively visits a template AST. For each `Expression` node, it calls `lexExpression(node.value)` and `parseExpression(tokens)`, then assigns the result to `node.expressionAST`.
 
+Static (quoted) attribute values are checked too: a `{...}` group inside one whose content parses as an expression (`class="card {tone}"`) throws `WIZZ-P055`, naming the attribute and suggesting the unquoted form (`class={"card " + tone}`). Brace groups that are not expressions (`'{"a":1}'`, `{}`) stay literal text, and `on:` attributes are skipped.
+
 It intentionally mutates and returns the same AST. The mutation preserves template node identity for callers while enriching it with compiler-ready expression structure. Keeping the original `value` alongside `expressionAST` also preserves the source form for diagnostics or future transforms.
 
 The error wrapper is a key boundary in the pipeline. Expression lexer/parser locations are local to the interpolation; this module translates them using `node.loc.start` and throws a `SyntaxError` in component coordinates:
