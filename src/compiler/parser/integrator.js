@@ -2,6 +2,55 @@ const { lexExpression } = require('./expressionLexer.js');
 const { parseExpression } = require('./prattParser.js');
 const { CODES, compilerDiagnostic } = require('../diagnostics.js');
 
+// Quoted attribute values are static (issue #64). A `{name}` inside one would
+// render literally with no hint, so it is rejected when its braces hold a
+// valid expression. Assumption (conservative): braces whose content does not
+// parse as an expression (`data-x='{"a":1}'`, `{}`) stay legitimate literal
+// text, so existing static values keep compiling.
+const QUOTED_BRACES = /\{([^{}]*)\}/g;
+
+// A brace group counts as interpolation only when its content is a valid
+// expression.
+function isExpression(source) {
+  if (!source.trim()) return false;
+  try {
+    parseExpression(lexExpression(source));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Builds the `+` form of a quoted value for the suggestion (template literals
+// are not in the expression grammar). A leading string literal keeps `{a}{b}`
+// from becoming numeric addition.
+function concatenation(value) {
+  const parts = [];
+  let last = 0;
+  for (const match of value.matchAll(QUOTED_BRACES)) {
+    if (!isExpression(match[1])) continue;
+    if (match.index > last) parts.push(JSON.stringify(value.slice(last, match.index)));
+    else if (!parts.length && match[0] !== value) parts.push('""');
+    parts.push(match[1].trim());
+    last = match.index + match[0].length;
+  }
+  if (last < value.length) parts.push(JSON.stringify(value.slice(last)));
+  return parts.join(' + ');
+}
+
+function rejectQuotedInterpolation(attribute, node) {
+  const { name, value } = attribute;
+  if (typeof value !== 'string' || name.startsWith('on:') || !value.includes('{')) return;
+
+  const match = [...value.matchAll(QUOTED_BRACES)].find((candidate) => isExpression(candidate[1]));
+  if (!match) return;
+  const at = node.loc?.start ? ` at ${node.loc.start.line}:${node.loc.start.column}` : '';
+  throw compilerDiagnostic(
+    CODES.parser.quotedAttributeInterpolation,
+    `Attribute '${name}' on <${node.name}>${at} is quoted, so '${match[0]}' would render literally. Quoted attribute values are static; use a dynamic value such as ${name}={${concatenation(value)}}.`
+  );
+}
+
 /**
  * Recursively walks the Template AST and parses the raw strings inside 'Expression' nodes.
  * @param {Object} node - The current AST node being evaluated
@@ -41,7 +90,10 @@ function integrateExpressions(node) {
 
   if (node.type === 'Element') {
     for (const attribute of node.attributes || []) {
-      if (!attribute.dynamic) continue;
+      if (!attribute.dynamic) {
+        rejectQuotedInterpolation(attribute, node);
+        continue;
+      }
       try {
         attribute.expressionAST = parseExpression(lexExpression(attribute.value));
       } catch (error) {

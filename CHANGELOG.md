@@ -11,6 +11,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed — Expressions in Quoted Attribute Values Are Diagnosed (issue #64; compiler 1.22.0 → 1.22.1, syntax 1.5.0 → 1.5.1, output unchanged at 1.12.0)
+
+#### Fixed
+
+- `class="card {tone}"` and `title="{tone}"` compiled cleanly and rendered the braces literally (#64). Quoted attribute values are static, so an expression inside one is now the compile error **WIZZ-P055**, located at the element and naming the attribute, with the working form as the suggestion: `class={"card " + tone}` (or `title={tone}` when the whole value is one expression). It applies to native elements and component tags; `on:` directives and brace-delimited values are unaffected.
+- Only brace groups whose content parses as an expression are rejected. `data-config='{"a":1}'`, `{}`, `{ }`, stray `{`/`}`, and `{a b}` stay literal text, so existing static values that merely contain braces keep compiling. Simple concatenation inside quotes is deliberately not added to the grammar; the diagnostic points at the unquoted form instead.
+
+#### Changed
+
+- `integrator.js` runs the check while integrating element attributes (`rejectQuotedInterpolation`), reusing the expression lexer and parser. `diagnostics.js` adds `quotedAttributeInterpolation: 'WIZZ-P055'`.
+- The template limits table (`scripts/mcpTools.js`, the README's "Template Language at a Glance", and the MCP `language_contract`/`project_overview` output) moves "Quoted attribute values" from Silent to compile error WIZZ-P055.
+- Versions: **syntax patch** (the catalog grows additively, and the rejected form never did what its author meant), **compiler patch**, output unchanged. `package.json` follows the compiler.
+
+#### Migration
+
+- A component that wrote `attr="… {expr} …"` and shipped the literal braces now fails to compile. Rewrite it as `attr={"… " + expr}`, or, if the braces really are meant literally, make the content not an expression (for example `{ }`-free text) or build the string in a script variable and bind `attr={label}`. The Wizz documentation site had three such attributes (prose with literal `{handler}`, `{closed}`, `{'--accent: ...'}`) and now binds them unquoted.
+
+#### Tests
+
+- `integrator.test.js`: rejection with code and located message for class and single-quoted values, the bare-expression and `+` concatenation suggestions (including a leading-expression value), component tags and nested elements, braces that must stay literal (`{}`, JSON, unbalanced, `{a b}`, `{1 2}`), and dynamic/boolean/`on:` attributes left alone. `mcpTools.test.js` moves the quoted-value row from the silent-limit test to the compile-error test.
+
 ### Added — Reactive `{#if}` Blocks and `on:` Inside `{#each}` (issues #71, #70; compiler 1.21.0 → 1.22.0, syntax 1.4.3 → 1.5.0, output 1.11.0 → 1.12.0)
 
 #### Added

@@ -47,3 +47,48 @@ test('maps multiline expression errors to the correct template line', () => {
     /Template Expression Error at 2:1 - Unexpected character '\$'/
   );
 });
+// Issue #64: quoted attribute values are static, so a `{expression}` inside
+// one is a located diagnostic instead of silent literal output.
+const integrateSource = (source) => integrateExpressions(parseTemplate(tokenize(source)));
+
+test('rejects an expression inside a quoted class value (WIZZ-P055)', () => {
+  assert.throws(
+    () => integrateSource('<div class="card {tone}"></div>'),
+    (error) => error.code === 'WIZZ-P055'
+      && /Attribute 'class' on <div>/.test(error.message)
+      && error.message.includes("'{tone}'")
+      && error.message.includes('class={"card " + tone}')
+  );
+});
+
+test('suggests the bare dynamic form when the whole quoted value is one expression', () => {
+  assert.throws(
+    () => integrateSource("<p title='{tone}'></p>"),
+    (error) => error.code === 'WIZZ-P055' && error.message.includes('title={tone}')
+  );
+});
+
+test('rejects interpolation on component tags and nested elements too', () => {
+  assert.throws(() => integrateSource('<main><Card label="{x + 1}" /></main>'), { code: 'WIZZ-P055' });
+  assert.throws(() => integrateSource('<main><ul><li data-id="a{id}b"></li></ul></main>'), { code: 'WIZZ-P055' });
+});
+
+test('keeps braces that are not expressions as literal static text', () => {
+  for (const value of ['{}', '{ }', '{"a":1}', '{', '}', '}{', '{{', 'a { b', '{a b}', '{1 2}']) {
+    const ast = integrateSource(`<div data-x='${value}'></div>`);
+    assert.equal(ast.children[0].attributes[0].value, value);
+  }
+});
+
+test('leaves dynamic, boolean, and on: attributes alone', () => {
+  const ast = integrateSource('<button class={tone} hidden on:click="{go}">x</button>');
+  assert.equal(ast.children[0].attributes[0].dynamic, true);
+  assert.equal(ast.children[0].attributes[1].value, null);
+});
+
+test('suggestion keeps string concatenation when the value starts with an expression', () => {
+  assert.throws(
+    () => integrateSource('<i class="{a}{b}"></i>'),
+    (error) => error.message.includes('class={"" + a + b}')
+  );
+});

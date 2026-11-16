@@ -113,9 +113,13 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // each bodies used to reject is accepted. Output minor: block helpers,
   // branch makers, and scope-owned listeners are additive; the module surface
   // is unchanged.
+  // compiler 1.22.1 / syntax 1.5.1: WIZZ-P055 rejects an expression inside a
+  // quoted attribute value (issue #64); syntax patch, output unchanged.
+  // compiler 1.22.1 / syntax 1.5.1: WIZZ-P055 rejects an expression inside a
+  // quoted attribute value (issue #64); syntax patch, output unchanged.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.22.0',
-    syntax: '1.5.0',
+    compiler: '1.22.1',
+    syntax: '1.5.1',
     output: '1.12.0'
   });
 });
@@ -133,7 +137,7 @@ test('the version table is frozen so callers cannot mutate the contract', () => 
     'use strict';
     VERSIONS.syntax = '9.9.9';
   }, TypeError);
-  assert.equal(VERSIONS.syntax, '1.5.0');
+  assert.equal(VERSIONS.syntax, '1.5.1');
 });
 
 test('the compiler major version leads or matches every contract major version', () => {
