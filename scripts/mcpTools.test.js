@@ -216,8 +216,8 @@ test('language_contract documents the version triple, language surface, and diag
   const { text } = await registry.call('language_contract', {});
   // The literal triple is pinned deliberately: a version bump fails this
   // test until the contract text has been reviewed against the compiler.
-  assert.match(text, /compiler 1\.22\.0, syntax 1\.5\.0, output 1\.12\.0/);
-  // Reviewed for 1.22.0: reactive {#if} and on: handlers in each bodies.
+  assert.match(text, /compiler 1\.22\.1, syntax 1\.5\.1, output 1\.12\.0/);
+  // Reviewed for 1.22.1 (quoted-attribute diagnostic, issue #64; supersedes 1.22.0): reactive {#if} and on: handlers in each bodies.
   assert.match(text, /the branch is replaced when a\n  reactive let or prop the condition reads changes/);
   assert.match(text, /on:click=\{\(\) => remove\(item\.id\)\}/);
   assert.match(text, /export let/);
@@ -670,6 +670,7 @@ test('every documented compile-error limit fails with the code the table cites',
     // Expressions row: each excluded form is WIZZ-P033.
     ...['a.b()', 'a ? 1 : 2', '!a', 'a !== 1', 'a < 1', 'a && 1', 'a || 1', 'a[0]', '`x${a}`', 'a + 1.5', '[1]', '@html a']
       .map((expression) => [`expression ${expression}`, component('let a = { b: 1 };', `<p>{${expression}}</p>`), 'WIZZ-P033']),
+    ['quoted attribute interpolation', component('let kind = "x";', '<div class="card {kind}"></div>'), 'WIZZ-P055'],
     ['{:else if}', component('let a = 1;', '<div>{#if a === 1}<b>a</b>{:else if a === 2}<i>b</i>{/if}</div>'), 'WIZZ-P033'],
     ['each member collection', component('let s = { xs: [] };', '<ul>{#each s.xs as x}<li>{x}</li>{/each}</ul>'), 'WIZZ-P002'],
     ['each index alias', component('let xs = [];', '<ul>{#each xs as x, i}<li>{x}</li>{/each}</ul>'), 'WIZZ-P002'],
@@ -711,8 +712,8 @@ test('every documented silent limit compiles and generates the documented behavi
   assert.match(attributes, /__wizzAttr\([^,]+, "aria-pressed", a\)/);
   assert.match(attributes, /\.disabled = a;/);
 
-  // Quoted values are literal text.
-  assert.match(generated(component('let kind = "x";', '<div class="card {kind}"></div>')), /setAttribute\("class", "card \{kind\}"\)/);
+  // Braces in quotes that hold no expression stay literal text.
+  assert.match(generated(component('let kind = "x";', '<div data-x=\'{"a":1}\'></div>')), /setAttribute\("data-x", "\{\\"a\\":1\}"\)/);
 
   // Assignments nested in an expression schedule no update; bind: is a
   // plain attribute.

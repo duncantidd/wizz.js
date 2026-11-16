@@ -617,8 +617,8 @@ const TEMPLATE_LIMITS = Object.freeze([
   {
     area: 'Quoted attribute values',
     supported: 'Static text: `class="card"`.',
-    limit: 'Braces inside quotes are not interpolated: `class="card {kind}"` renders the literal text.',
-    failure: 'Silent',
+    limit: 'Braces inside quotes are not interpolated, so `class="card {kind}"` is rejected instead of rendering literal text. Braces that hold no expression (`data-x=\'{"a":1}\'`) stay literal.',
+    failure: 'Compile error (WIZZ-P055)',
     workaround: 'Use one expression for the whole value: `class={\'card \' + kind}`.'
   },
   {
