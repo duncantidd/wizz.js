@@ -1786,3 +1786,45 @@ test('shellLinksExtractedStyles agrees with the shell copy for a missing input s
   writeFile(path.join(projectDirectory, 'index.html'), SHELL_WITH_HEAD);
   assert.equal(shellLinksExtractedStyles(inputDirectory), true);
 });
+
+// --- Untracked-assignment warnings (issue #73) ---
+
+const UNTRACKED_SOURCE = '<script>\nlet count = 0;\nfunction bump() { g(count += 1); }\nfunction g() {}\n</script><main on:click={bump}>{count}</main>';
+
+test('human builds print untracked-assignment warnings and still succeed', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'App.wizz'), UNTRACKED_SOURCE);
+
+  const warned = [];
+  const logger = { ...createLogger(), warn: (line) => warned.push(line) };
+  const result = buildProject(inputDirectory, outputDirectory, logger);
+  assert.deepEqual(result, { compiledCount: 1, failedCount: 0 });
+  assert.equal(warned.length, 1);
+  assert.match(warned[0], /^Warning WIZZ-G026: 'count' is assigned where the update scheduler does not see it, so the DOM will not update at .*App\.wizz:3:21\./);
+  assert.equal(fs.existsSync(path.join(outputDirectory, 'App.js')), true);
+
+  // A logger without warn() receives the line through log().
+  const logged = [];
+  buildProject(inputDirectory, outputDirectory, { log: (line) => logged.push(line), error: () => {} });
+  assert.ok(logged.some((line) => line.startsWith('Warning WIZZ-G026: ')));
+});
+
+test('the JSON build envelope carries warnings beside errors without failing ok', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'App.wizz'), UNTRACKED_SOURCE);
+
+  const result = buildProject(inputDirectory, outputDirectory, createLogger(), { json: true });
+  assert.equal(result.ok, true);
+  assert.equal(result.diagnostics.length, 1);
+  const [warning] = result.diagnostics;
+  assert.deepEqual({ ...warning, message: undefined }, {
+    code: 'WIZZ-G026', severity: 'warning', message: undefined, file: 'App.wizz', line: 3, column: 21
+  });
+  assert.match(warning.message, / at App\.wizz:3:21\. /);
+});

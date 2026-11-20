@@ -11,7 +11,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Added — Conditionals, Comparisons, Logical Operators, and Calls in Template Expressions (issue #69; compiler 1.22.1 → 1.23.0, syntax 1.5.1 → 1.6.0, output unchanged at 1.12.0)
+### Added — Two-Way Bindings and Untracked-Assignment Warnings (issue #73; ships in the same unreleased compiler 1.23.0 and syntax 1.6.0 as issue #69; output 1.12.0 → 1.13.0)
+
+#### Added
+
+- `bind:value={name}` on `<input>`, `<textarea>`, and `<select>`, and `bind:checked={done}` on `<input type="checkbox">`, two-way with a top-level `let` (#73). `type="number"`/`"range"` inputs bind numbers, with an empty field as `null`. Bound `let`s may be persistent; bindings work inside `{#if}` branches, server-render their value, and hydrate.
+- `src/compiler/parser/bindings.js`: `desugarBindings()` rewrites each binding into exactly what an author writes by hand, a dynamic `value`/`checked` attribute plus an inline `on:input`/`on:change` handler assigning the bound name, so every later stage handles it with its existing machinery. It runs last in `parseComponent()` because it needs the script declarations.
+- Binding diagnostics, located at the element:
+  - **WIZZ-P062** — unsupported binding: another property (`bind:group`, `bind:this`), another element, `bind:value` on a checkbox/radio/file input, `bind:checked` off a checkbox, a dynamic `type`, a component tag, or a binding inside an `{#each}` body.
+  - **WIZZ-P063** — invalid target: not brace-delimited, not a plain identifier, a prop, a `const`, or undeclared.
+  - **WIZZ-P064** — an explicit `value`/`checked` beside the binding, or one property bound twice.
+- **WIZZ-G026**, the compiler's first warning: a reactive variable assigned where the update scheduler does not see it — call arguments, conditions, object literals, template interpolations, unbraced `if`/`else`/loop bodies, chained targets, and `on:` values that are not functions (`on:click={count = 1}` runs once, at mount). `compile()` results carry an additive `warnings` array of diagnostic-shaped records with `severity: 'warning'`; warnings never fail a compile.
+- `assignmentInterceptor.js`: `findUntrackedMutations()`/`findUntrackedHandlerMutations()` report what the rewriter leaves alone. Parameter defaults, declaration bindings (destructuring defaults included), class fields, `obj.count = 1`, and names shadowed by a parameter (expression-bodied arrows included) or a local declaration are excluded. `src/compiler/generator/untrackedWarnings.js` turns the findings into records located in the component file.
+- The parser handoff gains `scriptSource` (the unmodified script text) and `scriptStart` (its component position). Removing `export let` lines shifts `rawScript`'s lines, so warnings scan the original text to report exact file coordinates.
+
+#### Changed
+
+- Inline handlers whose whole body is a parenthesized assignment, `on:input={(e) => (name = e.target.value)}`, are instrumented like the unparenthesized form. Before, the parentheses put the assignment in expression position, so state changed with no update and no error. Object-literal bodies (`() => ({ a: 1 })`) and declaration starts stay as they were.
+- `attributePolicy.js`: `attributeWriteSource()` takes a `bind` option; the value half of a numeric binding writes through the module-scope `__wizzSetNumber(node, value)` helper, which leaves a field alone when it already shows the state's value. Without it, a half-typed `1.` (which the browser reports as `''`) would be erased. The helper is emitted only when a numeric binding exists.
+- `build.js`: human builds print `Warning WIZZ-G026: …` after a file's "Compiled" line (through `logger.warn` when the logger has one); `--json` adds warning records to `diagnostics` without changing `ok` or the `wizz-build-diagnostics@1` record shape.
+- MCP: `component_diagnostics` lists warnings after errors with `ok` still errors-only (summaries read "N diagnostic(s), M warning(s)"; project-wide mode lists files with warnings), and `create_or_update_component` writes a component that only has warnings and returns them. The limits table gains a Bindings row; the Event handlers row now names WIZZ-G026 instead of "Silent"; `language_contract` documents `bind:` and warnings.
+- Versions: the compiler (1.23.0) and syntax (1.6.0) bumps from issue #69 are unreleased, so they cover this work too. **Output minor**, 1.12.0 → 1.13.0: numeric bindings add a module helper and parenthesized-assignment handlers gain their update call. Every other module is byte-identical apart from the version header, and the module surface is unchanged.
+
+- Review follow-ups (same unreleased versions):
+  - `bind:` on a `<wizz:head>` child is WIZZ-P062. The head block is pruned from the template before desugaring, so it is now desugared on its own; before, `<meta bind:value={x}>` compiled to a literal `bind:value` attribute in the document head.
+  - An `async function` arrow body, parenthesized or not (`() => (async function () { count = 1 })`), stays an expression. It was moved into statement position, where an anonymous `async function` is a SyntaxError at module load.
+  - A `for (let count = 0; count < n; count++)` header no longer clears its declaration at its own `;`s. The braced loop body is now shadowed for the rewrite as well, so a loop variable named like a reactive `let` is no longer instrumented as component state, and WIZZ-G026 no longer fires on the header's update clause. Over an unbraced body the declaration covers that one statement and cannot leak into the next block.
+  - Expression-bodied arrow parameters stop shadowing at a new statement (semicolon-less scripts) and at a ternary `:` the arrow did not open, so WIZZ-G026 is no longer suppressed for the rest of the script or the other branch.
+  - Defaults of generator parameters (`function* (count = 1)`), computed methods (`[k](count = 1)`), and methods named by reserved words (`delete(…)`, `get(…)`, `async get(…)`) are recognized as parameters, not WIZZ-G026 sites.
+
+#### Migration
+
+- A handler written `(e) => (x = …)` now updates the DOM. Code that relied on it not updating had a silent bug. If the assigned name is a prop, the handler now fails with WIZZ-G015, like the unparenthesized form always did.
+- Projects that compile with warnings keep building; review each WIZZ-G026 site and make the assignment a statement of its own.
+- Hand-written `value={x}` + `on:input` pairs keep working unchanged; `bind:value` is optional sugar for them.
+
+#### Known limits
+
+- A server-rendered `<textarea>` or `<select>` shows its bound value only after hydration, because the server writes `value` as an attribute, which those elements do not display. This is the existing behavior of `value={...}` on them.
+- `{#each}` item bodies re-render only when their collection changes, which is why bindings are rejected there; any item text or attribute that reads outer state has the same staleness.
+
+#### Tests
+
+- `parser/bindings.test.js`: desugared shapes for text, number, range, textarea, select, and checkbox bindings; nested `{#if}` branches; persistent targets; an author `on:input` beside a binding; every WIZZ-P062/P063/P064 case, including each-body bindings and an item variable shadowing the bound name.
+- `generator/assignmentInterceptor.test.js`: parenthesized bodies (nested pairs, async, trailing comments, prop detection) and the forms left alone; untracked reporting across expression position, unbraced bodies, chains, and update operators; every excluded form; expression-arrow shadow scoping; rewriting unchanged by the analysis; handler analysis.
+- `generator/untrackedWarnings.test.js`: records located in the component with imports and props in place, first-line column offsets, handler warnings in template order across branches, each-item shadowing, bind handlers and clean components without warnings, and records without a file.
+- `generator/attributePolicy.test.js`: the numeric write path, `__wizzSetNumber` against half-typed and equal-but-differently-spelled values, and `needsNumberBindHelper`.
+- `index.test.js`: `bind:` on every target beside an author handler, and the `warnings` contract (non-fatal, collect mode, clean components, no server repeat, none on failure).
+- `test/endToEnd.test.js` + `test/fixtures/bindings.wizz`: a mounted component edits text, number (including a cleared field), checkbox, select, and a parenthesized textarea handler into state and back. `test/hydration.test.js`: bound controls server-render their values, hydrate without recreation, stay two-way across a reactive branch, and drop the branch's listener.
+- `build.test.js` and `mcpTools.test.js`: warnings in human and JSON builds, in `component_diagnostics` (inline and project-wide) and on a successful write; the limits table's new compile-error cases.
+
+### Added — Conditionals, Comparisons, Logical Operators, and Calls in Template Expressions (issue #69; compiler 1.22.1 → 1.23.0, syntax 1.5.1 → 1.6.0; output 1.12.0 for this change alone, 1.13.0 for the release once issue #73 is included)
 
 #### Added
 

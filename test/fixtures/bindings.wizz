@@ -1,0 +1,17 @@
+<script>
+  let name = 'Ada';
+  let calories = 250;
+  let done = false;
+  let meal = 'lunch';
+  let note = '';
+  function reset() { name = ''; calories = 0; done = true; meal = 'dinner'; }
+</script>
+<main>
+  <input bind:value={name} />
+  <input type="number" bind:value={calories} />
+  <input type="checkbox" bind:checked={done} />
+  <select bind:value={meal}><option value="lunch">Lunch</option><option value="dinner">Dinner</option></select>
+  <textarea on:input={(e) => (note = e.target.value)}></textarea>
+  <button on:click={reset}>Reset</button>
+  <p>{name}|{calories === null ? 'empty' : calories * 2}|{done ? 'done' : 'todo'}|{meal}|{note}</p>
+</main>

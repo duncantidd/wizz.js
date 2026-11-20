@@ -584,7 +584,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
       if (listNode.type !== 'Element' || !varName) return;
       for (const attribute of listNode.attributes || []) {
         if (!attribute.dynamic) continue;
-        builder.add(`        ${attributeWriteSource(varName, attribute.name, attribute.value)}`);
+        builder.add(`        ${attributeWriteSource(varName, attribute.name, attribute.value, { bind: attribute.bind })}`);
       }
       (listNode.children || []).forEach((child, childIndex) => {
         if (child.type === 'Expression') builder.add(`        ${varName}.childNodes[${childIndex}].nodeValue = String(${child.value});`);
@@ -604,7 +604,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
         builder.add(`    const ${varName} = document.createElement(${JSON.stringify(listNode.name)});`);
         for (const attribute of listNode.attributes || []) {
           if (attribute.dynamic) {
-            builder.add(`    ${attributeWriteSource(varName, attribute.name, attribute.value)}`);
+            builder.add(`    ${attributeWriteSource(varName, attribute.name, attribute.value, { bind: attribute.bind })}`);
           } else if (isEventAttribute(attribute)) {
             const { eventName, handler } = eventListenerParts(attribute, handlerSources);
             builder.add(`    __wizzDrop.push(__wizzOn(${varName}, ${JSON.stringify(eventName)}, ${handler}));`);
@@ -634,7 +634,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
       if (listNode.type === 'Element') {
         for (const attribute of listNode.attributes || []) {
           if (!attribute.dynamic) continue;
-          builder.add(`        ${attributeWriteSource(varName, attribute.name, attribute.value)}`);
+          builder.add(`        ${attributeWriteSource(varName, attribute.name, attribute.value, { bind: attribute.bind })}`);
         }
         (listNode.children || []).forEach((child, childIndex) => {
           if (child.type === 'Expression') builder.add(`        ${varName}.childNodes[${childIndex}].nodeValue = String(${child.value});`);

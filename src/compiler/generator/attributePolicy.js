@@ -46,16 +46,30 @@ function __wizzAttr(node, name, value, boolean) {
   else node.setAttribute(name, boolean ? '' : String(value));
 }
 
+// The value writer for `bind:value` on `type="number"`/`"range"` inputs
+// (issue #73). While an author types `1.` or `-`, the browser reports the
+// input's value as '' (not yet a valid number), which the binding stores as
+// null; writing that back unconditionally would erase the half-typed text.
+// Comparing in the number domain first leaves the field alone whenever it
+// already shows the state's value, as Svelte does.
+function __wizzSetNumber(node, value) {
+  const next = value == null ? null : value;
+  if ((node.value === '' ? null : +node.value) !== next) node.value = next === null ? '' : next;
+}
+
 /**
  * Source for one statement writing a dynamic attribute onto an element node.
  * @param {string} nodeRef - Expression naming the element.
  * @param {string} name - The attribute name.
  * @param {string} valueSource - The author expression source.
- * @param {{ properties?: boolean }} [options] - `properties: false` disables
- *   the value/checked/disabled property path (head nodes use attributes only).
+ * @param {{ properties?: boolean, bind?: string|null }} [options] -
+ *   `properties: false` disables the value/checked/disabled property path
+ *   (head nodes use attributes only). `bind: 'number'` marks the value half
+ *   of a numeric `bind:value`, written through `__wizzSetNumber`.
  * @returns {string} A complete statement.
  */
-function attributeWriteSource(nodeRef, name, valueSource, { properties = true } = {}) {
+function attributeWriteSource(nodeRef, name, valueSource, { properties = true, bind = null } = {}) {
+  if (bind === 'number') return `__wizzSetNumber(${nodeRef}, ${valueSource});`;
   // HTML attribute names are case-insensitive but DOM properties are not, so
   // `DISABLED={x}` must still assign the lowercase `.disabled` property.
   const lower = String(name).toLowerCase();
@@ -106,7 +120,31 @@ function needsAttributeHelper(root,{ properties = true, componentNames = new Set
   return visit(root);
 }
 
+/**
+ * Whether any element in the template carries the value half of a numeric
+ * `bind:value`, so `__wizzSetNumber` must be emitted. Walks template nodes
+ * only, never expression ASTs.
+ * @param {object} root - Template AST.
+ * @returns {boolean}
+ */
+function needsNumberBindHelper(root) {
+  const stack = [root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node || typeof node !== 'object') continue;
+    if (Array.isArray(node)) {
+      for (const child of node) stack.push(child);
+      continue;
+    }
+    if ((node.attributes || []).some((attribute) => attribute.bind === 'number')) return true;
+    stack.push(node.children, node.consequent, node.alternate);
+  }
+  return false;
+}
+
 module.exports = {
+  needsNumberBindHelper,
+  __wizzSetNumber,
   PROPERTY_ATTRIBUTES,
   BOOLEAN_ATTRIBUTES,
   isBooleanAttribute,

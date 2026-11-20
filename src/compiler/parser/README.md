@@ -22,7 +22,8 @@ component source
   -> extractComponentImports
   -> extractProps
   -> scanState
-  -> { template, script, rawScript, head, style, imports, props }
+  -> desugarBindings
+  -> { template, script, rawScript, scriptSource, scriptStart, head, style, imports, props }
 ```
 
 The parser is build-time Node.js code. It does not execute component JavaScript or create DOM nodes. Its job is to preserve enough source structure and location data for the analyzer and generator to make correct later decisions.
@@ -172,6 +173,9 @@ This is the module downstream compiler stages should use. It owns the ordering o
 7. `extractComponentImports()` lifts `.wizz` imports out of the script.
 8. `extractProps()` lifts `export let` prop declarations out of the script and records them.
 9. `scanState()` turns recognized declarations into lightweight metadata.
+10. `desugarBindings()` rewrites `bind:` directives into their attribute and handler halves; it runs last because it needs the declarations.
+
+The facade also returns `scriptSource`, the unmodified script text (imports and `export let` lines still in place), and `scriptStart`, the component position of its first character (`null` without a script). Removing prop declarations shifts `rawScript`'s lines, so analyses that report component coordinates (the WIZZ-G026 warnings) scan `scriptSource` instead.
 
 It throws `TypeError` unless `source` is a string. A component without `<script>` receives `script: []`, `rawScript: ''`, `imports: []`, and `props: []`, keeping the compiler handoff stable and avoiding special cases downstream.
 
@@ -319,6 +323,28 @@ The default expression runs to the first `;` back at the declaration's own nesti
 `persist()` cannot initialize a prop: a default whose text starts with `persist\s*\(` throws a located `SyntaxError` (`persist() cannot initialize the prop '<name>'; props are parent-owned…`), because a prop's value is parent-owned and storage-reading it client-side would split ownership between two components.
 
 `RESERVED_PROP_NAMES` is the set of names that cannot be props: strict-mode reserved words, the generated closure's `props` parameter, `__proto__`, and every `__wizz`-prefixed name, which the framework reserves for generated identifiers.
+
+### `bindings.js` - Two-Way Binding Desugaring
+
+**Export:** `desugarBindings(template, { script, imports })`
+
+`bind:value={name}` and `bind:checked={done}` (issue #73) are sugar. Each becomes exactly what an author writes by hand, in place in the element's attribute list:
+
+```js
+// <input bind:value={name} />
+{ name: 'value', value: 'name', dynamic: true, expressionAST, bind: 'value' }
+{ name: 'on:input', value: '(__wizzEvent) => { name = __wizzEvent.target.value; }', bindFor: 'value' }
+```
+
+Every later stage already handles both halves: the dependency analyzer tracks the attribute, the generator's inline-handler interception queues the update (and routes persistent state through its storage write), branches and hydration attach the listener in their own scopes, and the server renders the attribute and skips `on:`. `<select>` and checkboxes listen to `change`, everything else to `input`. A static `type="number"` or `"range"` coerces (`'' ? null : +value`) and marks the attribute `bind: 'number'`, which the generators write through the `__wizzSetNumber` guard. The handler's parameter carries the reserved `__wizz` prefix, so it cannot shadow the bound name.
+
+Diagnostics, all located at the element:
+
+- **WIZZ-P062** (`unsupportedBinding`): a property other than `value`/`checked`; an element other than `<input>`/`<textarea>`/`<select>`; `bind:value` on a checkbox, radio, or file input; `bind:checked` on anything but a checkbox; a dynamic `type`; an imported component tag; a binding inside an `{#each}` body (an item re-renders only when its collection changes, so the state-to-control half would go stale, and an item variable could shadow the bound name).
+- **WIZZ-P063** (`invalidBindingTarget`): a quoted or bare value, a target that is not a plain identifier, a prop (read-only), a `const`, or an undeclared name.
+- **WIZZ-P064** (`conflictingBinding`): an explicit `value`/`checked` beside the binding, or the same property bound twice.
+
+An author `on:input` beside `bind:value` is kept; both listeners attach, the author's first in source order.
 
 ### `stateScanner.js` - Lightweight Script Declaration Scanner
 

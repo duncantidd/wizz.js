@@ -6,6 +6,7 @@ const { generateServerComponent } = require('./generator/serverGenerator.js');
 const { augmentErrorWithFile, buildDiagnosticRecord } = require('./errorAugmenter.js');
 const { createSourceMap } = require('./sourceMapGenerator.js');
 const { VERSIONS } = require('./version.js');
+const { collectUntrackedWarnings } = require('./generator/untrackedWarnings.js');
 
 /**
  * Compiles a raw component source string into a mountable ES module.
@@ -44,11 +45,13 @@ const { VERSIONS } = require('./version.js');
  *   `'error'` severity, a single-line file-qualified message, and the
  *   source location. Collect mode never throws for compile failures; any
  *   other value is rejected before compiling.
- * @returns {{ source: string, payload: Object, sourceMap: Object|null, version: Object, diagnostics?: Array }}
+ * @returns {{ source: string, payload: Object, sourceMap: Object|null, version: Object, warnings: Array, diagnostics?: Array }}
  *   The generated module source, final analyzed handoff payload, optional
  *   source map, and frozen compatibility versions (`compiler`, `syntax`,
- *   `output`) the component was compiled with — plus `diagnostics` when
- *   collect mode is requested.
+ *   `output`) the component was compiled with; `warnings`, records shaped
+ *   like diagnostics with `severity: 'warning'` (WIZZ-G026: a reactive name
+ *   assigned where no update is scheduled), which never fail the compile —
+ *   plus `diagnostics` when collect mode is requested.
  */
 function compile(source, options = {}) {
   const optionObject = options && typeof options === 'object' ? options : {};
@@ -71,7 +74,11 @@ function compile(source, options = {}) {
       source: generatedSource,
       payload,
       sourceMap: createSourceMap(source, generatedSource, filePath, payload.rawScript),
-      version: VERSIONS
+      version: VERSIONS,
+      // Non-fatal findings (issue #73): state assigned where the update
+      // scheduler never hears about it. Reported by the client compile only;
+      // compileServer() would repeat the same findings for the same source.
+      warnings: collectUntrackedWarnings(payload, filePath)
     };
     if (collectDiagnostics) result.diagnostics = [];
     return result;

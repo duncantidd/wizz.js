@@ -14,7 +14,7 @@ const { assertAuthorNames } = require('./reservedNames');
 const { generateHydrationFunction } = require('./hydrationGenerator');
 const { scopeCss } = require('../analyzer/cssScanner.js');
 const { VERSIONS } = require('../version.js');
-const { attributeWriteSource, needsAttributeHelper, __wizzAttr } = require('./attributePolicy');
+const { attributeWriteSource, needsAttributeHelper, needsNumberBindHelper, __wizzAttr, __wizzSetNumber } = require('./attributePolicy');
 const { analyzeBlocks, __wizzOn, __wizzDropScope, __wizzIfBlock } = require('./blockScopes');
 
 // Defined flush-left and emitted verbatim via Function.prototype.toString so
@@ -376,6 +376,13 @@ function generateComponent(astPayload, options = {}) {
     || (ownHead && needsAttributeHelper(astPayload.head, { properties: false }))) {
     builder.add('// --- Attribute Helper ---');
     builder.add(__wizzAttr.toString());
+    builder.add('');
+  }
+  // Numeric bind:value writes guard half-typed input (issue #73); emitted
+  // only when such a binding exists.
+  if (needsNumberBindHelper(astPayload.template)) {
+    builder.add('// --- Binding Helper ---');
+    builder.add(__wizzSetNumber.toString());
     builder.add('');
   }
 
