@@ -131,3 +131,16 @@ test('templates without bindings are untouched', () => {
   assert.deepEqual(input.attributes.map((attribute) => attribute.name), ['value', 'on:input']);
   assert.equal('bind' in input.attributes[0], false);
 });
+
+test('bindings inside <wizz:head> are WIZZ-P062, not literal head attributes', () => {
+  for (const template of [
+    '<wizz:head><meta name="x" bind:value={name} /></wizz:head><p>{name}</p>',
+    '<wizz:head><title bind:value={name}>T</title></wizz:head><p>{name}</p>',
+    '<wizz:head><link rel="x" bind:checked={done} /></wizz:head><p>{name}</p>'
+  ]) {
+    assert.throws(() => parse(template), (error) => error.code === 'WIZZ-P062' && /bindings work on <input>, <textarea>, and <select>/.test(error.message), template);
+  }
+  // A head without bindings is untouched.
+  const payload = parse('<wizz:head><meta name="x" content={name} /></wizz:head><p>{name}</p>');
+  assert.deepEqual(payload.head.children[0].attributes.map((attribute) => attribute.name), ['name', 'content']);
+});

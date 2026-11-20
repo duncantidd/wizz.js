@@ -33,6 +33,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - MCP: `component_diagnostics` lists warnings after errors with `ok` still errors-only (summaries read "N diagnostic(s), M warning(s)"; project-wide mode lists files with warnings), and `create_or_update_component` writes a component that only has warnings and returns them. The limits table gains a Bindings row; the Event handlers row now names WIZZ-G026 instead of "Silent"; `language_contract` documents `bind:` and warnings.
 - Versions: the compiler (1.23.0) and syntax (1.6.0) bumps from issue #69 are unreleased, so they cover this work too. **Output minor**, 1.12.0 → 1.13.0: numeric bindings add a module helper and parenthesized-assignment handlers gain their update call. Every other module is byte-identical apart from the version header, and the module surface is unchanged.
 
+- Review follow-ups (same unreleased versions):
+  - `bind:` on a `<wizz:head>` child is WIZZ-P062. The head block is pruned from the template before desugaring, so it is now desugared on its own; before, `<meta bind:value={x}>` compiled to a literal `bind:value` attribute in the document head.
+  - An `async function` arrow body, parenthesized or not (`() => (async function () { count = 1 })`), stays an expression. It was moved into statement position, where an anonymous `async function` is a SyntaxError at module load.
+  - A `for (let count = 0; count < n; count++)` header no longer clears its declaration at its own `;`s. The braced loop body is now shadowed for the rewrite as well, so a loop variable named like a reactive `let` is no longer instrumented as component state, and WIZZ-G026 no longer fires on the header's update clause. Over an unbraced body the declaration covers that one statement and cannot leak into the next block.
+  - Expression-bodied arrow parameters stop shadowing at a new statement (semicolon-less scripts) and at a ternary `:` the arrow did not open, so WIZZ-G026 is no longer suppressed for the rest of the script or the other branch.
+  - Defaults of generator parameters (`function* (count = 1)`), computed methods (`[k](count = 1)`), and methods named by reserved words (`delete(…)`, `get(…)`, `async get(…)`) are recognized as parameters, not WIZZ-G026 sites.
+
 #### Migration
 
 - A handler written `(e) => (x = …)` now updates the DOM. Code that relied on it not updating had a silent bug. If the assigned name is a prop, the handler now fails with WIZZ-G015, like the unparenthesized form always did.

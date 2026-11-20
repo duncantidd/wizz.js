@@ -1157,3 +1157,92 @@ test('handler analysis scans the instrumented form, or the raw value when it is 
   assert.deepEqual(findUntrackedMutations('', STATE), []);
   assert.deepEqual(findUntrackedMutations('count = 1', []), []);
 });
+
+// --- Review follow-ups (issue #73) ---
+
+// The emitted handler must parse as an expression, exactly where the
+// generator places it (an addEventListener argument).
+const parsesAsHandler = (source) => {
+  // eslint-disable-next-line no-new-func -- test oracle only, never generated code.
+  new Function('__wizzQueueUpdate', 'count', `'use strict'; return (${source});`);
+  return true;
+};
+
+test('async function bodies are statement hazards, parenthesized or not', () => {
+  for (const handler of [
+    '() => (async function () { count = 1 })',
+    '() => async function () { count = 1 }',
+    '() => ((async function named() { count = 1 }))',
+    '() => async function named() { count = 1 }'
+  ]) {
+    const output = interceptHandlerExpression(handler, REACTIVE);
+    assert.ok(parsesAsHandler(output), output);
+    assert.doesNotMatch(output, /^\(\) => \{ async function/, handler);
+  }
+  // async arrows and a name called async still unwrap and instrument.
+  assert.equal(interceptHandlerExpression('() => (count = async)', REACTIVE), '() => { count = async; __wizzQueueUpdate({ count: true }); }');
+  const asyncArrow = interceptHandlerExpression('() => (async () => { count = 1 })', REACTIVE);
+  assert.ok(parsesAsHandler(asyncArrow), asyncArrow);
+});
+
+test('a for-header let shadows its own header and its body', () => {
+  assert.deepEqual(untracked('for (let count = 0; count < 10; count++) {}'), []);
+  assert.deepEqual(untracked('for (let count = 0; count < 10; count += 1) {}'), []);
+  assert.deepEqual(untracked('for (let i = 0, count = 0; i < 3; i++, count++) { g(count = 1); }'), []);
+  // Without a declaration the header assigns component state, as before.
+  assert.deepEqual(untracked('for (count = 0; count < 10; count++) {}'), ['count@1:6', 'count@1:29']);
+  // The braced body is shadowed for the rewrite too: the loop's own let is
+  // never instrumented as component state.
+  assert.equal(
+    interceptAssignments('for (let count = 0; count < 3; count++) { count = 5; }', ['count']),
+    'for (let count = 0; count < 3; count++) { count = 5; }'
+  );
+});
+
+test('a for-header let over an unbraced body shadows that statement only', () => {
+  // The body statement is the loop's own variable.
+  assert.deepEqual(untracked('for (let count = 0; count < 3; count++) g(count++);'), []);
+  // The body may start on the next line; the statement after it is state again.
+  assert.deepEqual(untracked('for (let count = 0; count < 3; count++)\n  g(count++);\ng(count = 1);'), ['count@3:3']);
+  // Without a semicolon, the declaration must not leak into the next block.
+  const script = 'for (let count = 0; count < 3; count++) g(count)\nfunction f() { count = 1; g(count = 2); }';
+  assert.deepEqual(untracked(script), ['count@2:29']);
+  assert.equal(
+    interceptAssignments(script, ['count']),
+    'for (let count = 0; count < 3; count++) g(count)\nfunction f() { count = 1; __wizzQueueUpdate({ count: true }); g(count = 2); }'
+  );
+});
+
+test('expression-arrow shadowing ends at a new statement without semicolons', () => {
+  const script = 'let count = 0\nconst inc = count => count + 1\nfunction bad(ready) {\n  if (ready) count = 2\n}';
+  assert.deepEqual(untracked(script), ['count@4:14']);
+  // A continuation line keeps the arrow's expression (and its shadowing).
+  assert.deepEqual(untracked('const f = count => count\n  .toString(count = 1)'), []);
+});
+
+test('expression-arrow shadowing ends at a ternary colon it did not open', () => {
+  assert.deepEqual(untracked('const x = ok ? count => count + 1 : (count = 2);'), ['count@1:38']);
+  // A ternary inside the arrow body keeps the parameter shadowed through
+  // its own colon.
+  assert.deepEqual(untracked('const f = count => ok ? (count = 1) : (count = 2);'), []);
+  assert.deepEqual(untracked('const y = a ? count => ok ? 1 : (count = 2) : (count = 3);'), ['count@1:48']);
+});
+
+test('defaults in generator, computed, and reserved-word method parameters are not mutations', () => {
+  for (const source of [
+    'const g = function* (count = 1) { yield count; };',
+    'const g = async function* (count = 1) { yield count; };',
+    'const o = { *gen(count = 1) { yield count; } };',
+    'const o = { [k](count = 1) { return count; } };',
+    'const o = { delete(count = 1) { return count; } };',
+    'const o = { get(count = 1) {} };',
+    'class C { async get(count = 1) {} }',
+    'class C { static delete(count = 1) {} [k](count = 2) {} }'
+  ]) {
+    assert.deepEqual(untracked(source), [], source);
+  }
+  // Control-flow headers still assign.
+  assert.deepEqual(untracked('if (count = 1) {}'), ['count@1:5']);
+  assert.deepEqual(untracked('while (count = 1) {}'), ['count@1:8']);
+  assert.deepEqual(untracked('function f() { if (count = 1) {} }'), ['count@1:20']);
+});

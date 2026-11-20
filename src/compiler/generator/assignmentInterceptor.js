@@ -488,14 +488,23 @@ function scanReactiveMutations(rawScript, reactiveNames, skipped = null) {
   // True when the innermost enclosing groups include a parameter list:
   // `(count = 1) => ...`, `function f(count = 1) {`, a method, or a catch
   // clause. Defaults there declare a parameter rather than mutate state.
+  // Directly inside an object literal or class body a `(...) {` can only be
+  // a method — computed (`[k](...)`) or named by a reserved word
+  // (`delete(...)`, `get(...)`, `async get(...)`) — since control-flow
+  // headers cannot appear there; after `*` it is a generator.
   const isParameterList = (context) => {
     if (context.parameterList === undefined) {
       const closeIndex = findMatchingCloseParen(tokens, context.openIndex);
       const after = closeIndex === -1 ? null : tokens[nextSignificantIndex(tokens, closeIndex + 1)];
       const introducer = tokens[previousSignificantIndex(tokens, context.openIndex - 1)];
+      const methodPosition = context.parentType === 'objectLiteral' || context.parentType === 'classBody';
       context.parameterList = isPunctuator(after, '=>')
-        || (isPunctuator(after, '{') && Boolean(introducer) && introducer.type === 'identifier'
-          && (!RESERVED_WORDS.has(introducer.value) || introducer.value === 'function' || introducer.value === 'catch'));
+        || (isPunctuator(after, '{') && Boolean(introducer) && (
+          methodPosition
+          || isPunctuator(introducer, '*')
+          || (introducer.type === 'identifier'
+            && (!RESERVED_WORDS.has(introducer.value) || introducer.value === 'function' || introducer.value === 'catch'))
+        ));
     }
     return context.parameterList;
   };
@@ -544,6 +553,9 @@ function scanReactiveMutations(rawScript, reactiveNames, skipped = null) {
       return null;
     }
     if (!reactiveNames.has(name) || isShadowed(name) || (arrowShadowed.get(name) ?? 0) > 0) return null;
+    // A for-header declaration (`for (let count = 0; ...; count++)`) shadows
+    // the rest of its own header before the body opens.
+    if (pendingDeclared.includes(name)) return null;
     const before = tokens[previousSignificantIndex(tokens, nameIndex - 1)];
     if (isPunctuator(before, '.') || isPunctuator(before, '?.')) return null;
     if (bindingIndices.has(nameIndex)) return null;
@@ -552,12 +564,37 @@ function scanReactiveMutations(rawScript, reactiveNames, skipped = null) {
     return { name, at: token.start };
   };
 
-  const trackArrowScopes = (index) => {
+  // A scope of untracked-analysis-only shadowing: the parameters of an
+  // expression-bodied arrow, or a for-header declaration over an unbraced
+  // body. It lasts until its expression or statement ends at its own depth:
+  // `,`, `;`, a new statement through ASI, a ternary `:` it did not open, or
+  // a closing bracket that leaves its depth.
+  // `bodyPending` marks a for-header scope whose body statement has not
+  // started yet: the statement start that begins the body must not end it.
+  const pushAnalysisScope = (names, bodyPending = false) => {
+    arrowScopes.push({ names, depth: contexts.length, ternaries: 0, bodyPending });
+    for (const name of names) arrowShadowed.set(name, (arrowShadowed.get(name) ?? 0) + 1);
+  };
+  const trackArrowScopes = (index, startsStatement) => {
     const token = tokens[index];
     while (arrowScopes.length > 0) {
       const scope = arrowScopes[arrowScopes.length - 1];
-      const ends = contexts.length < scope.depth
-        || (contexts.length === scope.depth && token.type === 'punctuator' && (token.value === ',' || token.value === ';'));
+      const atDepth = contexts.length === scope.depth;
+      if (atDepth && startsStatement && scope.bodyPending) {
+        scope.bodyPending = false;
+        break;
+      }
+      if (atDepth && scope.bodyPending) scope.bodyPending = false;
+      let ends = contexts.length < scope.depth
+        || (atDepth && token.type === 'punctuator' && (token.value === ',' || token.value === ';'))
+        || (atDepth && startsStatement);
+      if (!ends && atDepth && isPunctuator(token, ':')) {
+        if (scope.ternaries > 0) {
+          scope.ternaries -= 1;
+          break;
+        }
+        ends = true;
+      }
       if (!ends) break;
       arrowScopes.pop();
       for (const name of scope.names) {
@@ -566,10 +603,11 @@ function scanReactiveMutations(rawScript, reactiveNames, skipped = null) {
         else arrowShadowed.delete(name);
       }
     }
+    if (isPunctuator(token, '?') && arrowScopes.length > 0 && arrowScopes[arrowScopes.length - 1].depth === contexts.length) {
+      arrowScopes[arrowScopes.length - 1].ternaries += 1;
+    }
     if (isPunctuator(token, '=>') && !isPunctuator(tokens[nextSignificantIndex(tokens, index + 1)], '{')) {
-      const names = collectArrowParameters(tokens, index + 1);
-      arrowScopes.push({ names, depth: contexts.length });
-      for (const name of names) arrowShadowed.set(name, (arrowShadowed.get(name) ?? 0) + 1);
+      pushAnalysisScope(collectArrowParameters(tokens, index + 1));
     }
   };
 
@@ -606,7 +644,13 @@ function scanReactiveMutations(rawScript, reactiveNames, skipped = null) {
     }
 
     if (skipped) {
-      trackArrowScopes(index);
+      // A new statement begins at a statement start or, through ASI, at an
+      // identifier on a new line after a completed operand (a continuation
+      // such as a leading `.` or `(` keeps the expression going).
+      // A `)` counts here too, unlike the rewriter's own rule: ending an
+      // analysis scope early can only cost a spurious warning, never a rewrite.
+      trackArrowScopes(index, atStatementStart || (token.newlineBefore && token.type === 'identifier'
+        && (completesOperand || isPunctuator(previousToken, ')'))));
       if (!recorded) {
         const site = untrackedSite(index);
         if (site) skipped.push(site);
@@ -652,13 +696,22 @@ function scanReactiveMutations(rawScript, reactiveNames, skipped = null) {
     }
 
     if (token.value === '(' || token.value === '[') {
-      contexts.push(token.value === '(' ? { type: 'paren', openIndex: index } : { type: 'bracket' });
+      contexts.push(token.value === '(' ? { type: 'paren', openIndex: index, parentType: topContext().type } : { type: 'bracket' });
       atStatementStart = false;
       continue;
     }
 
     if (token.value === ')' || token.value === ']') {
-      if (contexts.length > 1) contexts.pop();
+      const closing = contexts.length > 1 ? contexts.pop() : null;
+      // A for header whose body is not braced: its declarations shadow that
+      // one statement only (for the untracked analysis; nothing is rewritten
+      // in an unbraced body). Moving them out here keeps them from reaching
+      // the next block that opens.
+      if (closing && closing.type === 'paren' && pendingDeclared.length > 0
+        && !isPunctuator(tokens[nextSignificantIndex(tokens, index + 1)], '{')) {
+        const names = pendingDeclared.splice(0);
+        if (skipped) pushAnalysisScope(names, true);
+      }
       atStatementStart = false;
       continue;
     }
@@ -723,7 +776,9 @@ function scanReactiveMutations(rawScript, reactiveNames, skipped = null) {
       atStatementStart = true;
       switchPending = false;
       classPending = false;
-      pendingDeclared.length = 0;
+      // The `;`s inside a for header separate its clauses; the header's
+      // declarations must survive them to reach the loop body.
+      if (topContext().type !== 'paren') pendingDeclared.length = 0;
       continue;
     }
 
@@ -814,6 +869,9 @@ function findReactiveMutations(rawScript, names) {
 // Expression-body starts that would change meaning, or stop parsing, once
 // the body is moved into statement position: `function`/`class` become
 // declarations, and `let [` / `let {` begin a lexical declaration.
+// `async function` is a hazard too (checked as a pair where these are used):
+// an anonymous one is a SyntaxError in statement position, and a named one
+// would become a declaration.
 const STATEMENT_HAZARD_STARTS = new Set(['function', 'class', 'let']);
 
 /**
@@ -898,7 +956,17 @@ function normalizeHandlerExpression(expression) {
   if (isPunctuator(bodyStart, '{')) {
     return matchForward(position) === significant.length - 1 ? expression : null;
   }
-  if (bodyStart.type === 'identifier' && STATEMENT_HAZARD_STARTS.has(bodyStart.value)) return null;
+  // True when the body starting at `cursor` would change meaning, or stop
+  // parsing, as a statement. `async` alone stays an ordinary expression
+  // start: `async () => ...` and an identifier named async.
+  const statementHazardAt = (cursor) => {
+    const token = at(cursor);
+    if (!token || token.type !== 'identifier') return false;
+    if (STATEMENT_HAZARD_STARTS.has(token.value)) return true;
+    const next = at(cursor + 1);
+    return token.value === 'async' && Boolean(next) && next.type === 'identifier' && next.value === 'function';
+  };
+  if (statementHazardAt(position)) return null;
 
   // Issue #73: `(e) => (name = e.target.value)` is the common way to write
   // an assignment-bodied arrow, and the parentheses put the assignment in
@@ -920,7 +988,7 @@ function normalizeHandlerExpression(expression) {
     const contentFirst = at(open + 1);
     const unwrappable = open + 1 < closing
       && !isPunctuator(contentFirst, '{')
-      && !(contentFirst.type === 'identifier' && STATEMENT_HAZARD_STARTS.has(contentFirst.value));
+      && !statementHazardAt(open + 1);
     if (unwrappable) {
       const content = expression.slice(at(open).end, at(closing).start);
       const after = expression.slice(lastToken.end);

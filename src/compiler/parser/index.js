@@ -112,6 +112,10 @@ function parseComponent(source) {
   // 7. Rewrite `bind:` directives into a dynamic attribute plus an inline
   // handler (issue #73). This needs the declarations, so it runs last.
   desugarBindings(integratedTemplateAST, { script: declarations, imports });
+  // The head block was pruned from the template above, so it is walked on
+  // its own: a binding on <title>/<meta>/<link> is WIZZ-P062, never a
+  // literal bind: attribute in the document head.
+  if (headBlock !== null) desugarBindings(headBlock, { script: declarations, imports });
 
   // 8. Return the Final Handoff Object
   return {
