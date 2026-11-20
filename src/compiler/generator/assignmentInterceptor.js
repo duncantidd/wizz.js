@@ -55,6 +55,20 @@ function findMatchingParen(tokens, closeIndex) {
   return -1;
 }
 
+function findMatchingCloseParen(tokens, openIndex) {
+  let depth = 0;
+  for (let index = openIndex; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.type !== 'punctuator') continue;
+    if (token.value === '(') depth += 1;
+    else if (token.value === ')') {
+      depth -= 1;
+      if (depth === 0) return index;
+    }
+  }
+  return -1;
+}
+
 /**
  * Walks a `.x` / `[...]` property chain starting after an identifier.
  * @returns {{ endIndex: number, sawChain: boolean } | null} The token index of
@@ -271,11 +285,13 @@ const DECLARATION_KEYWORDS = new Set(['let', 'const', 'var']);
  * declarators, stopping at the statement's terminating `;` or a for-loop
  * `of`/`in` keyword. Initializer expressions are skipped so their identifiers
  * are never mistaken for bindings.
- * @returns {{ names: string[], endIndex: number }} The declared names and the
- *   token index where scanning stopped.
+ * @returns {{ names: string[], indices: number[], endIndex: number }} The
+ *   declared names, the token index of each, and the token index where
+ *   scanning stopped.
  */
 function collectDeclaredNames(tokens, keywordIndex) {
   const names = [];
+  const indices = [];
   let phase = 'pattern';
   let depth = 0;
   // Depth of a destructuring default (`{ a = fallback }`), which reads names
@@ -315,11 +331,14 @@ function collectDeclaredNames(tokens, keywordIndex) {
 
     // A name before `:` is a destructuring key, not a binding.
     if (token.type === 'identifier' && phase === 'pattern' && defaultDepth === null
-      && !isPunctuator(tokens[nextSignificantIndex(tokens, index + 1)], ':')) names.push(token.value);
+      && !isPunctuator(tokens[nextSignificantIndex(tokens, index + 1)], ':')) {
+      names.push(token.value);
+      indices.push(index);
+    }
     index += 1;
   }
 
-  return { names, endIndex: index };
+  return { names, indices, endIndex: index };
 }
 
 /**
@@ -362,13 +381,24 @@ function collectDeclaredNames(tokens, keywordIndex) {
  * shadow. For-loop header declarations (`for (let item of items)`) shadow the
  * braced body that immediately follows; a header whose body is a bare
  * statement, and computed destructuring keys, pass through untracked.
+ *
+ * With a `skipped` array (issue #73), the scan also records every mutation
+ * of a reactive name it did not rewrite — an assignment in expression
+ * position, an unbraced control-flow body, a chained target, or a statement
+ * whose extent could not be established — as `{ name, at }`. Parameter
+ * defaults, declaration bindings (destructuring defaults included), class
+ * fields, property writes on other objects (`obj.count = 1`), and names
+ * shadowed by a parameter or a block-scoped declaration are not mutations of
+ * component state and are never recorded. Rewriting is unaffected.
  * @param {string} rawScript - The raw JavaScript string from the <script> block.
  * @param {Set<string>} reactiveNames - Reactive variable names.
+ * @param {Array<{ name: string, at: number }> | null} [skipped] - Collector
+ *   for untracked mutations, or null to skip that analysis.
  * @returns {Array<{ name: string, at: number, insertAt: number, semicolonTerminated: boolean, nextIndex: number }>}
  *   One record per detected mutation; `at` is the offset of the mutating
  *   token, the rest describe where a notification insertion would go.
  */
-function scanReactiveMutations(rawScript, reactiveNames) {
+function scanReactiveMutations(rawScript, reactiveNames, skipped = null) {
   const tokens = tokenizeScript(rawScript);
   const templatePairs = matchTemplateTokens(tokens);
   const mutations = [];
@@ -379,6 +409,13 @@ function scanReactiveMutations(rawScript, reactiveNames) {
   let switchPending = false;
   let classPending = false;
   let resumeStatementStartAt = -1;
+  // Untracked-mutation analysis only: binding-name token indices, and the
+  // parameters of expression-bodied arrows (`x => count = x`), which shadow
+  // for the rest of the arrow's expression. Kept apart from shadowedDepths
+  // so the rewrite decisions cannot change.
+  const bindingIndices = new Set();
+  const arrowScopes = [];
+  const arrowShadowed = new Map();
 
   const topContext = () => contexts[contexts.length - 1];
   const isStatementContext = () => ['top', 'block', 'switchBody'].includes(topContext().type);
@@ -448,6 +485,94 @@ function scanReactiveMutations(rawScript, reactiveNames) {
     return null;
   };
 
+  // True when the innermost enclosing groups include a parameter list:
+  // `(count = 1) => ...`, `function f(count = 1) {`, a method, or a catch
+  // clause. Defaults there declare a parameter rather than mutate state.
+  const isParameterList = (context) => {
+    if (context.parameterList === undefined) {
+      const closeIndex = findMatchingCloseParen(tokens, context.openIndex);
+      const after = closeIndex === -1 ? null : tokens[nextSignificantIndex(tokens, closeIndex + 1)];
+      const introducer = tokens[previousSignificantIndex(tokens, context.openIndex - 1)];
+      context.parameterList = isPunctuator(after, '=>')
+        || (isPunctuator(after, '{') && Boolean(introducer) && introducer.type === 'identifier'
+          && (!RESERVED_WORDS.has(introducer.value) || introducer.value === 'function' || introducer.value === 'catch'));
+    }
+    return context.parameterList;
+  };
+  const inParameterList = () => {
+    for (let depth = contexts.length - 1; depth > 0; depth -= 1) {
+      const context = contexts[depth];
+      if (context.type === 'paren' && isParameterList(context)) return true;
+      if (!['paren', 'bracket', 'objectLiteral'].includes(context.type)) return false;
+    }
+    return false;
+  };
+
+  const untrackedSite = (index) => {
+    const token = tokens[index];
+    let name;
+    let nameIndex;
+    if (token.type === 'punctuator' && UPDATE_OPERATORS.has(token.value)) {
+      // A postfix operator belongs to the operand before it, which its own
+      // iteration reports.
+      const before = tokens[previousSignificantIndex(tokens, index - 1)];
+      const postfix = before && !token.newlineBefore && (
+        (before.type === 'identifier' && !OPERATOR_KEYWORDS.has(before.value))
+        || ['number', 'string', 'templateText'].includes(before.type)
+        || (before.type === 'punctuator' && (before.value === ')' || before.value === ']'))
+      );
+      if (postfix) return null;
+      nameIndex = nextSignificantIndex(tokens, index + 1);
+      const target = tokens[nameIndex];
+      if (!target || target.type !== 'identifier') return null;
+      name = target.value;
+    } else if (token.type === 'identifier') {
+      const operator = tokens[nextSignificantIndex(tokens, index + 1)];
+      if (!operator || operator.type !== 'punctuator') return null;
+      let mutates = ASSIGNMENT_OPERATORS.has(operator.value)
+        || (UPDATE_OPERATORS.has(operator.value) && !operator.newlineBefore);
+      if (!mutates && (operator.value === '.' || operator.value === '?.' || operator.value === '[')) {
+        const chain = findPropertyChainEnd(tokens, index + 1);
+        const end = chain && chain.sawChain ? tokens[chain.endIndex] : null;
+        mutates = Boolean(end && end.type === 'punctuator'
+          && (ASSIGNMENT_OPERATORS.has(end.value) || UPDATE_OPERATORS.has(end.value)));
+      }
+      if (!mutates) return null;
+      name = token.value;
+      nameIndex = index;
+    } else {
+      return null;
+    }
+    if (!reactiveNames.has(name) || isShadowed(name) || (arrowShadowed.get(name) ?? 0) > 0) return null;
+    const before = tokens[previousSignificantIndex(tokens, nameIndex - 1)];
+    if (isPunctuator(before, '.') || isPunctuator(before, '?.')) return null;
+    if (bindingIndices.has(nameIndex)) return null;
+    if (topContext().type === 'classBody') return null;
+    if (inParameterList()) return null;
+    return { name, at: token.start };
+  };
+
+  const trackArrowScopes = (index) => {
+    const token = tokens[index];
+    while (arrowScopes.length > 0) {
+      const scope = arrowScopes[arrowScopes.length - 1];
+      const ends = contexts.length < scope.depth
+        || (contexts.length === scope.depth && token.type === 'punctuator' && (token.value === ',' || token.value === ';'));
+      if (!ends) break;
+      arrowScopes.pop();
+      for (const name of scope.names) {
+        const depth = (arrowShadowed.get(name) ?? 0) - 1;
+        if (depth > 0) arrowShadowed.set(name, depth);
+        else arrowShadowed.delete(name);
+      }
+    }
+    if (isPunctuator(token, '=>') && !isPunctuator(tokens[nextSignificantIndex(tokens, index + 1)], '{')) {
+      const names = collectArrowParameters(tokens, index + 1);
+      arrowScopes.push({ names, depth: contexts.length });
+      for (const name of names) arrowShadowed.set(name, (arrowShadowed.get(name) ?? 0) + 1);
+    }
+  };
+
   let previousToken = null;
 
   for (let index = 0; index < tokens.length; index += 1) {
@@ -470,11 +595,21 @@ function scanReactiveMutations(rawScript, reactiveNames) {
     );
     const detectionAllowed = atStatementStart || (token.newlineBefore && completesOperand);
 
+    let recorded = false;
     if (detectionAllowed && isStatementContext()) {
       const mutation = detectMutation(index);
       if (mutation) {
+        recorded = true;
         mutations.push(mutation);
         if (mutation.nextIndex > index) resumeStatementStartAt = mutation.nextIndex;
+      }
+    }
+
+    if (skipped) {
+      trackArrowScopes(index);
+      if (!recorded) {
+        const site = untrackedSite(index);
+        if (site) skipped.push(site);
       }
     }
 
@@ -492,7 +627,8 @@ function scanReactiveMutations(rawScript, reactiveNames) {
         // declarations are the reactive state itself and never shadow.
         if (DECLARATION_KEYWORDS.has(token.value)
           && !isPunctuator(tokens[previousSignificantIndex(tokens, index - 1)], '.')) {
-          const { names } = collectDeclaredNames(tokens, index);
+          const { names, indices } = collectDeclaredNames(tokens, index);
+          if (skipped) for (const bindingIndex of indices) bindingIndices.add(bindingIndex);
           if (names.length > 0) {
             const contextType = topContext().type;
             if (contextType === 'block' || contextType === 'switchBody') {
@@ -516,7 +652,7 @@ function scanReactiveMutations(rawScript, reactiveNames) {
     }
 
     if (token.value === '(' || token.value === '[') {
-      contexts.push({ type: token.value === '(' ? 'paren' : 'bracket' });
+      contexts.push(token.value === '(' ? { type: 'paren', openIndex: index } : { type: 'bracket' });
       atStatementStart = false;
       continue;
     }
@@ -764,6 +900,36 @@ function normalizeHandlerExpression(expression) {
   }
   if (bodyStart.type === 'identifier' && STATEMENT_HAZARD_STARTS.has(bodyStart.value)) return null;
 
+  // Issue #73: `(e) => (name = e.target.value)` is the common way to write
+  // an assignment-bodied arrow, and the parentheses put the assignment in
+  // expression position, where the scanner (correctly) never rewrites. When
+  // parentheses wrap the entire body, the body is their content: unwrap
+  // every such pair and use the content as the block's statement. The value
+  // of the parenthesized expression is the listener's return value, which
+  // addEventListener ignores, so dropping the parentheses is unobservable.
+  // Content that would change meaning as a statement stays wrapped: `({`
+  // is an object literal (a block or label as a statement), and the
+  // statement hazards above would become declarations.
+  if (isPunctuator(bodyStart, '(') && matchForward(position) === significant.length - 1) {
+    let open = position;
+    let closing = significant.length - 1;
+    while (isPunctuator(at(open + 1), '(') && matchForward(open + 1) === closing - 1) {
+      open += 1;
+      closing -= 1;
+    }
+    const contentFirst = at(open + 1);
+    const unwrappable = open + 1 < closing
+      && !isPunctuator(contentFirst, '{')
+      && !(contentFirst.type === 'identifier' && STATEMENT_HAZARD_STARTS.has(contentFirst.value));
+    if (unwrappable) {
+      const content = expression.slice(at(open).end, at(closing).start);
+      const after = expression.slice(lastToken.end);
+      const trailingToken = tokens[tokens.length - 1];
+      const ending = trailingToken.type === 'comment' && trailingToken.value.startsWith('//') ? '\n}' : ' }';
+      return `${expression.slice(0, bodyStart.start)}{ ${content}${after}${ending}`;
+    }
+  }
+
   // An arrow's expression body ends at the first top-level comma; anything
   // after it belongs to an enclosing sequence, which a block cannot hold.
   let depth = 0;
@@ -808,7 +974,44 @@ function findHandlerMutations(expression, names) {
   return normalized === null ? [] : findReactiveMutations(normalized, names);
 }
 
+/**
+ * Reports mutations of reactive names that the rewriter leaves untracked
+ * (issue #73): assignments in expression position, unbraced control-flow
+ * bodies, chained targets. Each one changes state without scheduling an
+ * update, so the DOM silently goes stale.
+ * @param {string} source - Script or handler source.
+ * @param {Iterable<string>} names - Reactive names.
+ * @returns {Array<{ name: string, line: number, column: number }>} Located
+ *   relative to `source`.
+ */
+function findUntrackedMutations(source, names) {
+  if (!source) return [];
+  const nameSet = names instanceof Set ? names : new Set(names || []);
+  if (nameSet.size === 0) return [];
+  const skipped = [];
+  scanReactiveMutations(source, nameSet, skipped);
+  return skipped.map((site) => ({ name: site.name, ...lineAndColumn(source, site.at) }));
+}
+
+/**
+ * The inline-handler counterpart of findUntrackedMutations(): scans the
+ * handler in the form the rewriter instruments (an expression-bodied arrow
+ * becomes a block), so it reports exactly what interception leaves behind.
+ */
+function findUntrackedHandlerMutations(expression, names) {
+  if (typeof expression !== 'string') return [];
+  const normalized = normalizeHandlerExpression(expression);
+  if (normalized !== null) return findUntrackedMutations(normalized, names).map(({ name }) => ({ name }));
+  // A value that is not a function literal (`on:click={count = 1}`) is
+  // emitted untouched: even its statement-level mutations are untracked, and
+  // they run once, when the listener value is evaluated at mount.
+  return [...findReactiveMutations(expression, names), ...findUntrackedMutations(expression, names)]
+    .map(({ name }) => ({ name }));
+}
+
 module.exports = {
+  findUntrackedMutations,
+  findUntrackedHandlerMutations,
   collectDeclaredNames,
   interceptAssignments,
   findReactiveMutations,

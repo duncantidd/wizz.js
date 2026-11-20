@@ -7,6 +7,8 @@ const {
   attributeWriteSource,
   attributeValueSource,
   needsAttributeHelper,
+  needsNumberBindHelper,
+  __wizzSetNumber,
   __wizzAttr
 } = require('./attributePolicy');
 
@@ -172,4 +174,47 @@ test('needsAttributeHelper does not descend into expression ASTs', () => {
   assert.equal(needsAttributeHelper(tree), false);
   tree.children.push({ type: 'Element', name: 'p', attributes: [{ name: 'class', value: 'a', dynamic: true, expressionAST: deep }], children: [] });
   assert.equal(needsAttributeHelper(tree), true);
+});
+
+// --- Numeric bind:value (issue #73) ---
+
+test('a numeric binding writes through __wizzSetNumber; everything else is unchanged', () => {
+  assert.equal(attributeWriteSource('n', 'value', 'age', { bind: 'number' }), '__wizzSetNumber(n, age);');
+  assert.equal(attributeWriteSource('n', 'value', 'name', { bind: 'value' }), 'n.value = name;');
+  assert.equal(attributeWriteSource('n', 'checked', 'done', { bind: 'checked' }), 'n.checked = done;');
+  assert.equal(attributeWriteSource('n', 'value', 'name'), 'n.value = name;');
+});
+
+test('__wizzSetNumber leaves a field that already shows the value alone', () => {
+  const writes = [];
+  const field = (raw) => ({
+    raw,
+    get value() { return this.raw; },
+    set value(next) { writes.push(next); this.raw = String(next); }
+  });
+  // Half-typed input: the browser reports '' while the state is null.
+  __wizzSetNumber(field(''), null);
+  __wizzSetNumber(field(''), undefined);
+  // Same number, different spelling.
+  __wizzSetNumber(field('1.50'), 1.5);
+  __wizzSetNumber(field('7'), 7);
+  assert.deepEqual(writes, []);
+  // Real changes are written; null clears the field.
+  const a = field('7');
+  __wizzSetNumber(a, 8);
+  const b = field('7');
+  __wizzSetNumber(b, null);
+  const c = field('');
+  __wizzSetNumber(c, 0);
+  assert.deepEqual(writes, [8, '', 0]);
+  assert.deepEqual([a.raw, b.raw, c.raw], ['8', '', '0']);
+});
+
+test('needsNumberBindHelper finds numeric bindings anywhere in the template, never in expressions', () => {
+  const input = (bind) => ({ type: 'Element', name: 'input', attributes: [{ name: 'value', value: 'x', dynamic: true, bind }], children: [] });
+  const tree = (node) => ({ type: 'Root', children: [{ type: 'Element', name: 'main', attributes: [], children: [{ type: 'IfBlock', consequent: [], alternate: [node], children: [node] }] }] });
+  assert.equal(needsNumberBindHelper(tree(input('number'))), true);
+  assert.equal(needsNumberBindHelper(tree(input('value'))), false);
+  assert.equal(needsNumberBindHelper(tree(input(undefined))), false);
+  assert.equal(needsNumberBindHelper({ type: 'Root', children: [] }), false);
 });

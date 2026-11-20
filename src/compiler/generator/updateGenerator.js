@@ -120,7 +120,7 @@ function generateUpdateFunction(templateAST, targets = collectUpdateTargets(temp
       for (const attribute of node.attributes || []) {
         if (!attribute.dynamic || !attribute.dependencies?.length) continue;
         for (const dependencyName of attribute.dependencies) {
-          emitWrite(node, dependencyName, (target) => attributeWriteSource(target, attribute.name, attribute.value));
+          emitWrite(node, dependencyName, (target) => attributeWriteSource(target, attribute.name, attribute.value, { bind: attribute.bind }));
         }
       }
 

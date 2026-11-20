@@ -5,6 +5,7 @@ const { extractScriptBlock, extractHeadBlock, extractStyleBlock } = require('./e
 const { extractComponentImports } = require('./componentImportExtractor.js');
 const { extractProps } = require('./propExtractor.js');
 const { scanState } = require('./stateScanner.js');
+const { desugarBindings } = require('./bindings.js');
 
 // Deterministic scope value for styled components: two classic string hashes
 // (FNV-1a and djb2) accumulated over the full component source, mixed and
@@ -23,6 +24,23 @@ function computeStyleScope(source) {
     djb2 = Math.imul(djb2, 33) + code;
   }
   return `s${(Math.imul(fnv ^ djb2, 0x27d4eb2d) >>> 0).toString(36)}`;
+}
+
+// The component position of the first script element's content, matching the
+// element extractScriptBlock() returns (the earliest in source order).
+function findScriptStart(root) {
+  let earliest = null;
+  const stack = [root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (node.type === 'Element' && node.name === 'script') {
+      const start = node.children?.[0]?.loc?.start;
+      if (start && (earliest === null || start.offset < earliest.offset)) earliest = start;
+      continue;
+    }
+    for (const child of node.children || []) stack.push(child);
+  }
+  return earliest;
 }
 
 /**
@@ -44,7 +62,11 @@ function parseComponent(source) {
   // 3. Integrate the Pratt Expression ASTs into the template
   const integratedTemplateAST = integrateExpressions(rawTemplateAST);
 
-  // 4. Extract the <script> block and remove its node from the visual DOM tree
+  // 4. Extract the <script> block and remove its node from the visual DOM tree.
+  // Where its content starts is recorded first, so later analyses of the
+  // original script text (the untracked-assignment warnings) can report
+  // component coordinates.
+  const scriptStart = findScriptStart(integratedTemplateAST);
   const scriptContent = extractScriptBlock(integratedTemplateAST);
   const { imports, script } = extractComponentImports(scriptContent);
 
@@ -85,13 +107,23 @@ function parseComponent(source) {
     isProp: true
   }));
 
-  // 7. Return the Final Handoff Object
+  const declarations = [...propDeclarations, ...scriptDeclarations];
+
+  // 7. Rewrite `bind:` directives into a dynamic attribute plus an inline
+  // handler (issue #73). This needs the declarations, so it runs last.
+  desugarBindings(integratedTemplateAST, { script: declarations, imports });
+
+  // 8. Return the Final Handoff Object
   return {
     template: integratedTemplateAST,
     head: headBlock,
     style,
-    script: [...propDeclarations, ...scriptDeclarations],
+    script: declarations,
     rawScript: scriptWithoutProps || '',
+    // The unmodified script text (imports and props still in place) and the
+    // component position of its first character, or null without a script.
+    scriptSource: scriptContent || '',
+    scriptStart,
     imports,
     props
   };

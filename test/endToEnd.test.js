@@ -237,3 +237,59 @@ test('invalid fixture fails with its file path and source location', () => {
       && /Expected <\/p>, found <\/main> at test\/fixtures\/invalid\.wizz:3:1\./.test(error.message)
   );
 });
+
+test('bindings fixture: bind:value/bind:checked and parenthesized handlers update state both ways (issue #73)', async () => {
+  const { source, target, component } = mountFixture('bindings');
+  const [text, number, checkbox] = target.childNodes[0].childNodes.filter((node) => node.name === 'input');
+  const select = findElement(target, 'select');
+  const textarea = findElement(target, 'textarea');
+  const button = findElement(target, 'button');
+  const paragraph = findElement(target, 'p');
+  const rendered = () => paragraph.childNodes.filter((node) => !node.name).map((node) => node.nodeValue).join('');
+
+  // No bind: survives to the module, and the number guard is emitted.
+  assert.doesNotMatch(source, /bind:/);
+  assert.match(source, /function __wizzSetNumber\(node, value\)/);
+
+  // State flows into the controls at mount.
+  assert.equal(text.value, 'Ada');
+  assert.equal(number.value, 250);
+  assert.equal(checkbox.checked, false);
+  assert.equal(select.value, 'lunch');
+  assert.equal(rendered(), 'Ada|500|todo|lunch|');
+
+  // Control edits flow into state and the rest of the DOM.
+  text.value = 'Grace';
+  text.dispatchEvent('input');
+  number.value = '400';
+  number.dispatchEvent('input');
+  checkbox.checked = true;
+  checkbox.dispatchEvent('change');
+  select.value = 'dinner';
+  select.dispatchEvent('change');
+  textarea.value = 'tasty';
+  textarea.dispatchEvent('input');
+  await flushUpdates();
+  assert.equal(rendered(), 'Grace|800|done|dinner|tasty');
+
+  // A half-typed number reads as '' and is stored as null; the guard leaves
+  // the field's text alone instead of writing '' back.
+  number.value = '';
+  number.dispatchEvent('input');
+  await flushUpdates();
+  assert.equal(rendered(), 'Grace|empty|done|dinner|tasty');
+
+  // Script assignments flow back into the controls.
+  button.dispatchEvent('click');
+  await flushUpdates();
+  assert.equal(text.value, '');
+  assert.equal(number.value, 0);
+  assert.equal(checkbox.checked, true);
+  assert.equal(select.value, 'dinner');
+  assert.equal(rendered(), '|0|done|dinner|tasty');
+
+  component.destroy();
+  assert.deepEqual(text.listeners, {});
+  assert.deepEqual(checkbox.listeners, {});
+  assert.deepEqual(textarea.listeners, {});
+});

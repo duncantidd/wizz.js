@@ -216,8 +216,10 @@ test('language_contract documents the version triple, language surface, and diag
   const { text } = await registry.call('language_contract', {});
   // The literal triple is pinned deliberately: a version bump fails this
   // test until the contract text has been reviewed against the compiler.
-  assert.match(text, /compiler 1\.23\.0, syntax 1\.6\.0, output 1\.12\.0/);
-  // Reviewed for 1.23.0 (expression grammar, issue #69; supersedes 1.22.1): conditionals, comparisons, logical and unary operators, and calls.
+  assert.match(text, /compiler 1\.23\.0, syntax 1\.6\.0, output 1\.13\.0/);
+  // Reviewed for 1.23.0 / output 1.13.0 (issues #69 and #73): the expression grammar, bindings, and G026 warnings.
+  assert.match(text, /- bind:value=\{name\} on <input>, <textarea>, <select>/);
+  assert.match(text, /warning WIZZ-G026/);
   assert.match(text, /the conditional a \? b : c,\ncalls of a function or method/);
   assert.match(text, /the branch is replaced when a\n  reactive let or prop the condition reads changes/);
   assert.match(text, /on:click=\{\(\) => remove\(item\.id\)\}/);
@@ -681,7 +683,16 @@ test('every documented compile-error limit fails with the code the table cites',
     ['each body two roots', component('let xs = [];', '<ul>{#each xs as x}<li>{x}</li><li>{x}</li>{/each}</ul>'), 'WIZZ-G003'],
     ['component children', component(imports, '<div><Card>hi</Card></div>'), 'WIZZ-G008'],
     ['component on:', component(imports, '<div><Card on:click={f} /></div>'), 'WIZZ-G011'],
-    ['component at root', component(imports, '<Card />'), 'WIZZ-G010']
+    ['component at root', component(imports, '<Card />'), 'WIZZ-G010'],
+    // Bindings row.
+    ['bind:group', component('let a = "";', '<main><input bind:group={a} /></main>'), 'WIZZ-P062'],
+    ['bind in each body', component('let a = "";\n  let xs = [];', '<ul>{#each xs as x}<li><input bind:value={a} /></li>{/each}</ul>'), 'WIZZ-P062'],
+    ['bind on component', component("import Card from './Card.wizz';\n  let a = '';", '<main><Card bind:value={a} /></main>'), 'WIZZ-P062'],
+    ['bind dynamic type', component('let a = "";\n  let t = "text";', '<main><input type={t} bind:value={a} /></main>'), 'WIZZ-P062'],
+    ['bind member target', component('let s = { a: "" };', '<main><input bind:value={s.a} /></main>'), 'WIZZ-P063'],
+    ['bind const', component('const a = "";', '<main><input bind:value={a} /></main>'), 'WIZZ-P063'],
+    ['bind prop', component('export let a = "";', '<main><input bind:value={a} /></main>'), 'WIZZ-P063'],
+    ['bind with value', component('let a = "";', '<main><input value={a} bind:value={a} /></main>'), 'WIZZ-P064']
   ];
   for (const [name, source, code] of cases) {
     assert.equal(compileCode(source), code, name);
@@ -724,14 +735,22 @@ test('every documented silent limit compiles and generates the documented behavi
   // Braces in quotes that hold no expression stay literal text.
   assert.match(generated(component('let kind = "x";', '<div data-x=\'{"a":1}\'></div>')), /setAttribute\("data-x", "\{\\"a\\":1\}"\)/);
 
-  // Assignments nested in an expression schedule no update; bind: is a
-  // plain attribute.
-  assert.doesNotMatch(generated(component('let a = 1;\n  let ok = 1;', '<button on:click={() => ok ? a = 2 : 0}>{a}</button>')), /__wizzQueueUpdate\(\{ a/);
-  assert.doesNotMatch(generated(component('let a = 1;', '<button on:click={() => (a = 2)}>{a}</button>')), /__wizzQueueUpdate\(\{ a/);
-  assert.match(generated(component('let name = "";', '<input bind:value={name} />')), /__wizzAttr\([^,]+, "bind:value", name\)/);
+  // Assignments nested in an expression schedule no update, and the compile
+  // says so with a WIZZ-G026 warning.
+  const nested = compile(component('let a = 1;\n  let ok = 1;', '<button on:click={() => ok ? a = 2 : 0}>{a}</button>'));
+  assert.doesNotMatch(nested.source, /__wizzQueueUpdate\(\{ a/);
+  assert.deepEqual(nested.warnings.map((warning) => warning.code), ['WIZZ-G026']);
 });
 
 test('every documented working pattern compiles and is reactive', () => {
+  // Parenthesized assignment bodies and bindings update (issue #73).
+  assert.match(generated(component('let a = 1;', '<button on:click={() => (a = 2)}>{a}</button>')), /__wizzQueueUpdate\(\{ a: true \}\)/);
+  const bound = generated(component('let name = "";\n  let done = false;', '<main><input bind:value={name} /><input type="checkbox" bind:checked={done} /></main>'));
+  assert.match(bound, /\.value = name;/);
+  assert.match(bound, /"input", \(__wizzEvent\) => \{ name = __wizzEvent\.target\.value; __wizzQueueUpdate\(\{ name: true \}\); \}/);
+  assert.match(bound, /"change", \(__wizzEvent\) => \{ done = __wizzEvent\.target\.checked; __wizzQueueUpdate\(\{ done: true \}\); \}/);
+  // A per-row field is a value + on:input pair.
+  assert.match(generated(component('let items = [];\n  function rename(id, v) {}', '<ul>{#each items as item}<li><input value={item.name} on:input={(e) => rename(item.id, e.target.value)} /></li>{/each}</ul>')), /rename\(item\.id, e\.target\.value\)/);
   // Derived value recomputed in a handler.
   assert.match(generated(component("let done = false;\n  let label = 'Open';\n  function toggle() { done = !done; label = done ? 'Done' : 'Open'; }", '<button on:click={toggle}>{label}</button>')), /__wizzQueueUpdate\(\{ label: true \}\)/);
   // A reactive {#if} re-evaluates when its dependency changes (issue #71).
@@ -755,4 +774,41 @@ test('every documented working pattern compiles and is reactive', () => {
   assert.match(generated(component('let name = "";\n  function setName(e) { name = e.target.value; }', '<input value={name} on:input={setName} />')), /function setName\(e\) \{ name = e\.target\.value; __wizzQueueUpdate\(\{ name: true \}\);/);
   // Callback props instead of on: on a component tag.
   assert.match(generated(component("  import Card from './Card.wizz';\n  function select() {}", '<div><Card onSelect={select} /></div>')), /"onSelect": select/);
+});
+
+// --- Untracked-assignment warnings (issue #73) ---
+
+const WARNING_SOURCE = '<script>\nlet count = 0;\nfunction bump() { g(count += 1); }\nfunction g() {}\n</script><main on:click={bump}>{count}</main>';
+
+test('component_diagnostics reports warnings without failing ok', async () => {
+  const root = createProjectFixture();
+  const registry = createRegistry(root);
+  const { structured, text } = await registry.call('component_diagnostics', { source: WARNING_SOURCE, path: 'src/Bump.wizz' });
+  assert.equal(structured.ok, true);
+  assert.deepEqual(structured.diagnostics.map((diagnostic) => [diagnostic.code, diagnostic.severity, diagnostic.line]), [['WIZZ-G026', 'warning', 3]]);
+  assert.match(text, /^src\/Bump\.wizz: 1 diagnostic\(s\), 1 warning\(s\)\n/);
+  assert.match(text, /WIZZ-G026 \[warning\] src\/Bump\.wizz:3:21/);
+
+  // A clean source still reads as clean.
+  const clean = await registry.call('component_diagnostics', { source: '<main>x</main>' });
+  assert.match(clean.text, /^inline\.wizz: no diagnostics\n/);
+
+  // The project-wide mode lists files with warnings and keeps ok.
+  fs.writeFileSync(path.join(root, 'src', 'Bump.wizz'), WARNING_SOURCE);
+  const all = await registry.call('component_diagnostics', { all: true });
+  assert.equal(all.structured.ok, true);
+  assert.match(all.text, /all clean; some with warnings/);
+  assert.match(all.text, /Bump\.wizz:\nWIZZ-G026 \[warning\]/);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('create_or_update_component writes a component with warnings and reports them', async () => {
+  const root = createProjectFixture();
+  const registry = createRegistry(root, true);
+  const created = await registry.call('create_or_update_component', { path: 'src/Bump.wizz', source: WARNING_SOURCE });
+  assert.equal(created.structured.action, 'created');
+  assert.equal(fs.readFileSync(path.join(root, 'src', 'Bump.wizz'), 'utf8'), WARNING_SOURCE);
+  assert.deepEqual(created.structured.diagnostics.map((diagnostic) => diagnostic.code), ['WIZZ-G026']);
+  assert.match(created.text, /^Created src\/Bump\.wizz\.\nWIZZ-G026 \[warning\]/);
+  fs.rmSync(root, { recursive: true, force: true });
 });

@@ -73,6 +73,7 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 	  ├── componentImportExtractor.js Extracts default .wizz imports from component scripts
 	  ├── propExtractor.js          Extracts export let prop declarations from component scripts
 	  ├── stateScanner.js           Recognizes script declarations and persist(key, default) persistent-state markers
+	  ├── bindings.js               Desugars bind:value/bind:checked into a dynamic attribute plus an inline on: handler
 	  └── *.test.js                 Focused Node tests for each parser module
 	├── analyzer/                    2. Parser handoff -> reactive metadata
 	│   ├── README.md                 Analyzer contracts and module reference
@@ -87,7 +88,8 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 	  ├── blockScopes.js            Block ownership: reactive {#if} analysis, scope records, and the emitted __wizzIfBlock/__wizzDropScope/__wizzOn helpers
 	  ├── domGenerator.js           Emits create() DOM construction function
 	  ├── updateGenerator.js        Emits update() and names the nodes it writes to (collectUpdateTargets)
-	  ├── assignmentInterceptor.js  Syntax-aware rewriter for reactive script mutations
+	  ├── assignmentInterceptor.js  Syntax-aware rewriter for reactive script mutations; also finds the mutations it leaves untracked
+	  ├── untrackedWarnings.js      WIZZ-G026 warnings for reactive assignments no update is scheduled for (compile().warnings)
 	  ├── persistInitializer.js     Splices persist(key, default) markers into target-specific initializers
 	  ├── reservedNames.js          Rejects top-level author names generated code cannot make room for (WIZZ-G025)
 	  ├── serverGenerator.js        Emits the server-side HTML string renderer and the static-renderability gate (blocks, components, escaping)

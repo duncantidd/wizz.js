@@ -1877,3 +1877,64 @@ test('issue #69: conditionals, comparisons, unary operators, and calls agree acr
   component.destroy();
   assert.deepEqual(target.childNodes, []);
 });
+
+// --- Two-way bindings (issue #73) ---
+
+test('issue #73: bound controls server-render their values, hydrate without recreation, and stay two-way', async (t) => {
+  const source = '<script>\nlet name = "Ada";\nlet qty = 2;\nlet done = true;\nfunction clear() { name = ""; qty = null; done = false; }\n</script>'
+    + '<main><input bind:value={name} /><input type="number" bind:value={qty} /><input type="checkbox" bind:checked={done} />'
+    + '{#if done}<p><input bind:value={name} /></p>{/if}'
+    + '<b>{name}:{qty}:{done}</b><button on:click={clear}>Clear</button></main>';
+  const { document, clientModule, metricsBefore, warnings, render } = await loadGeneratedModules(t, source);
+  const { html, stateScript } = render();
+
+  assert.match(html, /<input value="Ada"/);
+  assert.match(html, /<input type="number" value="2"/);
+  assert.match(html, /<input type="checkbox" checked/);
+  assert.doesNotMatch(html, /bind:|on:/);
+
+  const target = deliverMarkup(document, html);
+  const component = clientModule.hydrateComponent(target, {}, parseInitialStateScript(stateScript));
+  assert.deepEqual(warnings, []);
+  assert.equal(document.metrics.elements, metricsBefore.elements, 'adoption creates no elements');
+
+  const main = target.firstElementChild;
+  const inputs = elementsNamed(main, 'input');
+  const [text, number, checkbox, branchInput] = inputs;
+  const summary = () => textOf(elementsNamed(main, 'b')[0]);
+  // The initial update writes state into the adopted controls' properties.
+  assert.equal(text.value, 'Ada');
+  assert.equal(checkbox.checked, true);
+  assert.equal(summary(), 'Ada:2:true');
+
+  // Listeners were attached to the adopted nodes, including inside the
+  // reactive branch, and one control's edit reaches the others.
+  text.value = 'Typed';
+  text.dispatchEvent('input');
+  await flushUpdates();
+  assert.equal(summary(), 'Typed:2:true');
+  assert.equal(branchInput.value, 'Typed');
+  branchInput.value = 'Branch';
+  branchInput.dispatchEvent('input');
+  number.value = '7';
+  number.dispatchEvent('input');
+  await flushUpdates();
+  assert.equal(summary(), 'Branch:7:true');
+  assert.equal(text.value, 'Branch');
+
+  // Unchecking drops the branch (and its bound input's listener).
+  checkbox.checked = false;
+  checkbox.dispatchEvent('change');
+  await flushUpdates();
+  assert.equal(elementsNamed(main, 'p').length, 0);
+  assert.deepEqual(branchInput.listeners, {});
+
+  elementsNamed(main, 'button')[0].dispatchEvent('click');
+  await flushUpdates();
+  assert.equal(text.value, '');
+  assert.equal(number.value, '');
+  assert.equal(summary(), ':null:false');
+
+  component.destroy();
+  assert.deepEqual(target.childNodes, []);
+});

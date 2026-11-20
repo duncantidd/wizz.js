@@ -281,15 +281,26 @@ function assertWritableComponentPath(root, relativePath, source) {
  * Compiles proposed component source in collect mode. Collect mode never
  * throws for compile failures, so a clean source yields
  * `{ ok: true, diagnostics: [] }` and a broken one yields every
- * error-severity record for the caller to echo.
+ * error-severity record for the caller to echo. Warning-severity records
+ * (WIZZ-G026, issue #73) follow the errors in `diagnostics` but never make
+ * `ok` false: a component that compiles may be written.
  * @param {string} source - The proposed component source.
  * @param {string} filePathLabel - The label diagnostics are qualified with.
  * @returns {{ ok: boolean, diagnostics: Array<{ code, severity, message, file, line, column }> }}
  */
 function compileGate(source, filePathLabel) {
   const result = compile(source, { filePath: filePathLabel, diagnostics: 'collect' });
-  const diagnostics = result.diagnostics || [];
-  return { ok: diagnostics.length === 0, diagnostics };
+  const errors = result.diagnostics || [];
+  return { ok: errors.length === 0, diagnostics: [...errors, ...(result.warnings || [])] };
+}
+
+// "no diagnostics", or a count that says how many are warnings.
+function diagnosticsSummary(diagnostics) {
+  if (diagnostics.length === 0) return 'no diagnostics';
+  const warnings = diagnostics.filter((diagnostic) => diagnostic.severity === 'warning').length;
+  return warnings === 0
+    ? `${diagnostics.length} diagnostic(s)`
+    : `${diagnostics.length} diagnostic(s), ${warnings} warning(s)`;
 }
 
 /**
@@ -462,9 +473,9 @@ async function componentDiagnosticsHandler(args, { root }) {
     }
     const ok = !discoveryError && files.every((entry) => entry.ok);
     const text = [
-      `Compiled ${files.length} component(s) under ${input.relativePosix}: ${ok ? 'all clean' : `${files.filter((entry) => !entry.ok).length} with diagnostics`}`,
+      `Compiled ${files.length} component(s) under ${input.relativePosix}: ${ok ? 'all clean' : `${files.filter((entry) => !entry.ok).length} with diagnostics`}${files.some((entry) => entry.diagnostics.some((diagnostic) => diagnostic.severity === 'warning')) ? '; some with warnings' : ''}`,
       ...(discoveryError ? [`Discovery error: ${discoveryError}`] : []),
-      ...files.filter((entry) => !entry.ok).map((entry) => `${entry.file}:\n${diagnosticsText(entry.diagnostics)}`)
+      ...files.filter((entry) => entry.diagnostics.length > 0).map((entry) => `${entry.file}:\n${diagnosticsText(entry.diagnostics)}`)
     ].join('\n');
     return {
       text,
@@ -496,7 +507,7 @@ async function componentDiagnosticsHandler(args, { root }) {
     const label = args.path === undefined ? 'inline.wizz' : requireString(args.path, 'path');
     const gate = compileGate(source, label);
     return {
-      text: `${label}: ${gate.ok ? 'no diagnostics' : `${gate.diagnostics.length} diagnostic(s)`}\n${diagnosticsText(gate.diagnostics)}`,
+      text: `${label}: ${diagnosticsSummary(gate.diagnostics)}\n${diagnosticsText(gate.diagnostics)}`,
       structured: { target: label, ok: gate.ok, diagnostics: gate.diagnostics }
     };
   }
@@ -518,7 +529,7 @@ async function componentDiagnosticsHandler(args, { root }) {
   }
   const gate = compileGate(source, guard.relativePosix);
   return {
-    text: `${guard.relativePosix}: ${gate.ok ? 'no diagnostics' : `${gate.diagnostics.length} diagnostic(s)`}\n${diagnosticsText(gate.diagnostics)}`,
+    text: `${guard.relativePosix}: ${diagnosticsSummary(gate.diagnostics)}\n${diagnosticsText(gate.diagnostics)}`,
     structured: { target: guard.relativePosix, ok: gate.ok, diagnostics: gate.diagnostics }
   };
 }
@@ -623,10 +634,17 @@ const TEMPLATE_LIMITS = Object.freeze([
   },
   {
     area: 'Event handlers',
-    supported: '`on:<event>={handler}` with a named script function or an inline arrow; assignments inside inline arrows update the DOM (`on:input={(e) => name = e.target.value}`).',
-    limit: 'There is no `bind:`; an unknown directive such as `bind:value` becomes a plain attribute. An assignment nested in an expression (`ok ? a = 1 : 0`, `(a = 1)`) does not schedule an update.',
-    failure: 'Silent',
-    workaround: 'Two-way inputs pair `value={name}` with `on:input={(e) => name = e.target.value}`. Write each mutation as its own statement, or move the logic into a named function.'
+    supported: '`on:<event>={handler}` with a named script function or an inline arrow; assignments inside inline arrows update the DOM, parenthesized or not (`on:input={(e) => (name = e.target.value)}`).',
+    limit: 'An assignment nested inside an expression (`ok ? a = 1 : 0`, `g(a = 1)`, an unbraced `if (x) a = 1`), in a handler or in the script, does not schedule an update.',
+    failure: 'Compiles with warning WIZZ-G026 (build output, MCP diagnostics, `compile().warnings`)',
+    workaround: 'Write each mutation as its own statement (`a = 1; g(a);`, `if (x) { a = 1; }`), or move the logic into a named function.'
+  },
+  {
+    area: 'Bindings',
+    supported: '`bind:value={name}` on `<input>`, `<textarea>`, and `<select>`, and `bind:checked={done}` on `<input type="checkbox">`, two-way with a top-level `let` (persistent state included). `type="number"`/`"range"` inputs bind numbers, with an empty field as `null`.',
+    limit: 'No `bind:group`, `bind:this`, or other properties; no member targets (`user.name`), props, or `const`s; not on component tags or inside `{#each}` bodies; a bound `<input>` needs a static `type`; no explicit `value`/`checked` beside the binding.',
+    failure: 'Compile error (WIZZ-P062, WIZZ-P063, WIZZ-P064)',
+    workaround: 'Pair `value={...}` with an `on:input` handler for anything a binding does not cover, such as a per-row field: `on:input={(e) => rename(item.id, e.target.value)}`.'
   },
   {
     area: 'Component tags',
@@ -681,7 +699,10 @@ must contain exactly one root element. Top-level optional blocks: <wizz:style>
 
 Script boundary (inside <script>):
 - let declarations are reactive state: template expressions update when a
-  handler mutates them (batched, applied on the next microtask).
+  handler mutates them (batched, applied on the next microtask). Only an
+  assignment that is a statement of its own schedules the update; one nested
+  in an expression (g(count = 1), an unbraced if body) compiles with
+  warning WIZZ-G026.
 - export let declares a prop the parent passes as an attribute on the
   component tag; props are reactive and read-only in the child. A bare
   declaration defaults to undefined.
@@ -708,6 +729,11 @@ additionally escape ".
 
 Directives:
 - on:<event>={handler} — native browser event names; client-only.
+  on:input={(e) => (name = e.target.value)} updates the DOM.
+- bind:value={name} on <input>, <textarea>, <select>, and
+  bind:checked={done} on <input type="checkbox"> — two-way with a top-level
+  let; number and range inputs bind numbers (empty field: null). Not on
+  component tags or inside {#each} bodies (compile errors).
 - {#if condition} ... {:else} ... {/if} — the branch is replaced when a
   reactive let or prop the condition reads changes.
 - {#each items as item (item.id)} ... {/each} — keyed, or keyless for
@@ -721,6 +747,9 @@ Components:
 - Import a component with a default import from a .wizz path and render it
   self-closing inside a native element (<Counter />). Imported component
   tags take no children or event directives; attributes pass as props.
+
+Warnings (compile().warnings, build output, component_diagnostics records
+with severity "warning") never fail a compile.
 
 Stable diagnostics: every author-facing compile failure carries a code —
 WIZZ-P### (parse stage) or WIZZ-G### (generate stage; the WIZZ-A### analyzer
@@ -870,9 +899,11 @@ async function createOrUpdateComponentHandler(args, { root, allowWrite }) {
     return refusalResult('path-refused', relativePath, write.reason);
   }
   const action = exists ? 'updated' : 'created';
+  // The write succeeded; warnings (never errors, the gate refused those)
+  // ride along so the agent sees an untracked assignment immediately.
   return {
-    text: `${action === 'created' ? 'Created' : 'Updated'} ${guard.relativePosix}.`,
-    structured: { action, file: guard.relativePosix, diagnostics: [] }
+    text: `${action === 'created' ? 'Created' : 'Updated'} ${guard.relativePosix}.${gate.diagnostics.length > 0 ? `\n${diagnosticsText(gate.diagnostics)}` : ''}`,
+    structured: { action, file: guard.relativePosix, diagnostics: gate.diagnostics }
   };
 }
 
