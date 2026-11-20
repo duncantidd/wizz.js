@@ -150,3 +150,26 @@ test('new expression forms are tracked in dynamic attributes and if tests', () =
   assert.deepEqual(list.attributes[0].dependencies, ['items']);
   assert.deepEqual(list.children[0].dependencies, ['active', 'items']);
 });
+
+test('long chains the parser accepts are analyzed without exhausting the stack', () => {
+  // The parser builds these iteratively; a recursive analyzer walk overflowed
+  // on the same inputs once they were compiled end to end.
+  const binary = Array.from({ length: 20000 }, (_, i) => (i % 2 ? `f(b${i})` : 'a')).join(' + ');
+  const member = `o${'.n'.repeat(20000)}.f(a)`;
+  const wide = `f(${Array(200000).fill('1').join(',')}, a)`;
+  const payload = analyzeDependencies(parseComponent(
+    `<script>let a = 0; let o = {}; let b3 = 1;</script><main><p>{${binary}}</p><p>{${member}}</p><p>{${wide}}</p></main>`
+  ));
+  const [chain, members, args] = payload.template.children[0].children;
+  assert.deepEqual(chain.children[0].dependencies, ['a', 'b3']);
+  assert.deepEqual(members.children[0].dependencies, ['o', 'a']);
+  assert.deepEqual(args.children[0].dependencies, ['a']);
+});
+
+test('dependency order follows the source left to right across every node type', () => {
+  const payload = analyzeDependencies(parseComponent(
+    "<script>let a = 0; let b = 0; let c = 0; let d = 0; let e = 0; let g = 0;</script>"
+    + '<p>{e ? !d + c.x : f(b, -a) || g}</p>'
+  ));
+  assert.deepEqual(payload.template.children[0].children[0].dependencies, ['e', 'd', 'c', 'b', 'a', 'g']);
+});

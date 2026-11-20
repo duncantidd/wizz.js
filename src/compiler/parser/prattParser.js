@@ -216,7 +216,12 @@ function rejectUnsafeNames(root) {
       case 'BinaryExpression':
       case 'LogicalExpression': stack.push(node.left, node.right); break;
       case 'ConditionalExpression': stack.push(node.test, node.consequent, node.alternate); break;
-      case 'CallExpression': stack.push(node.callee, ...node.arguments); break;
+      case 'CallExpression':
+        // Pushed one at a time: spreading a very wide argument list into
+        // push() would itself exhaust the stack.
+        stack.push(node.callee);
+        for (const argument of node.arguments) stack.push(argument);
+        break;
       default: break;
     }
     if (name !== null && UNSAFE_NAMES.has(name)) {

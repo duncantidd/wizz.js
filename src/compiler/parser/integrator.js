@@ -37,7 +37,14 @@ function concatenationPart(source) {
   const ast = parseExpression(lexExpression(source));
   const binds = ast.type === 'ConditionalExpression' || ast.type === 'LogicalExpression'
     || (ast.type === 'BinaryExpression' && ast.operator !== '*' && ast.operator !== '/');
-  return binds ? `(${source})` : source;
+  return binds && !isParenthesized(source) ? `(${source})` : source;
+}
+
+// True when one pair of parentheses wraps the whole source. `(a) + (b)`
+// starts and ends with parentheses but its inside, `a) + (b`, is not an
+// expression, so it still gets wrapped.
+function isParenthesized(source) {
+  return source.startsWith('(') && source.endsWith(')') && isExpression(source.slice(1, -1));
 }
 
 // Builds the `+` form of a quoted value for the suggestion (template literals

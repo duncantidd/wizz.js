@@ -14,57 +14,64 @@ function analyzeDependencies(astPayload) {
   );
 
   /**
-   * Recursively extracts identifiers from the Pratt AST and checks them against our Set.
+   * Extracts the reactive identifiers an expression AST reads, in source
+   * order. Iterative, like the parser that builds these ASTs: a long
+   * left-associative chain (`a + a + ...`, `o.n.n...`) is as deep as it is
+   * long, and a recursive walk would exhaust the stack on input the parser
+   * accepted. Children are pushed in reverse so they pop left to right,
+   * which keeps the dependency order the recursive walk produced.
    */
-  function extractIdentifiers(exprAST, deps = new Set()) {
-    if (!exprAST) return deps;
+  function extractIdentifiers(root, deps = new Set()) {
+    const stack = root ? [root] : [];
 
-    switch (exprAST.type) {
-      case 'Identifier':
-        if (reactiveVars.has(exprAST.name)) {
-          deps.add(exprAST.name);
-        }
-        break;
+    while (stack.length) {
+      const node = stack.pop();
 
-      case 'BinaryExpression':
-        extractIdentifiers(exprAST.left, deps);
-        extractIdentifiers(exprAST.right, deps);
-        break;
+      switch (node.type) {
+        case 'Identifier':
+          if (reactiveVars.has(node.name)) {
+            deps.add(node.name);
+          }
+          break;
 
-      case 'LogicalExpression':
-        // Both operands count even though one may be short-circuited: which
-        // one runs depends on state, and a change to either can change the
-        // result.
-        extractIdentifiers(exprAST.left, deps);
-        extractIdentifiers(exprAST.right, deps);
-        break;
+        // Both operands of `&&`/`||` count even though one may be
+        // short-circuited: which one runs depends on state, and a change to
+        // either can change the result.
+        case 'BinaryExpression':
+        case 'LogicalExpression':
+          stack.push(node.right, node.left);
+          break;
 
-      case 'UnaryExpression':
-        extractIdentifiers(exprAST.argument, deps);
-        break;
+        case 'UnaryExpression':
+          stack.push(node.argument);
+          break;
 
-      case 'ConditionalExpression':
-        // Every branch counts, not just the one taken at mount: flipping the
-        // test selects the other branch, whose names must already be wired.
-        extractIdentifiers(exprAST.test, deps);
-        extractIdentifiers(exprAST.consequent, deps);
-        extractIdentifiers(exprAST.alternate, deps);
-        break;
+        case 'ConditionalExpression':
+          // Every branch counts, not just the one taken at mount: flipping the
+          // test selects the other branch, whose names must already be wired.
+          stack.push(node.alternate, node.consequent, node.test);
+          break;
 
-      case 'CallExpression':
-        // A reactive `let` holding a function is a dependency like any other
-        // read. What the callee reads internally is invisible here: state a
-        // called function depends on must be passed as an argument
-        // (`{label(count)}`) for the expression to update when it changes.
-        extractIdentifiers(exprAST.callee, deps);
-        for (const argument of exprAST.arguments) extractIdentifiers(argument, deps);
-        break;
+        case 'CallExpression':
+          // A reactive `let` holding a function is a dependency like any other
+          // read. What the callee reads internally is invisible here: state a
+          // called function depends on must be passed as an argument
+          // (`{label(count)}`) for the expression to update when it changes.
+          // Pushed one at a time: spreading a wide argument list would
+          // itself overflow the stack.
+          for (let i = node.arguments.length - 1; i >= 0; i -= 1) stack.push(node.arguments[i]);
+          stack.push(node.callee);
+          break;
 
-      case 'MemberExpression':
-        // For object access like `user.name`, the root object `user` is the actual state dependency
-        extractIdentifiers(exprAST.object, deps);
-        // We do NOT recursively check `exprAST.property` because 'name' is just a string key, not a standalone variable.
-        break;
+        case 'MemberExpression':
+          // For object access like `user.name`, the root object `user` is the
+          // state dependency; `name` is just a key, not a standalone variable.
+          stack.push(node.object);
+          break;
+
+        default:
+          break;
+      }
     }
 
     return deps;

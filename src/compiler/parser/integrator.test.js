@@ -149,3 +149,25 @@ test('brace groups the extended grammar still rejects stay literal in quoted val
     assert.equal(ast.children[0].attributes[0].value, value);
   }
 });
+
+test('dynamic attribute strings may contain braces, escaped quotes, and unicode escapes (issue #69 review)', () => {
+  const ast = integrateSource(String.raw`<div class={on ? "}" : "{"} title={on ? 'it\'s {x}' : "\u{7B}"} data-x={f("}")}></div>`);
+  const [klass, title, data] = ast.children[0].attributes;
+  assert.equal(klass.expressionAST.type, 'ConditionalExpression');
+  assert.deepEqual(klass.expressionAST.consequent, { type: 'Literal', value: '}' });
+  assert.deepEqual(title.expressionAST.consequent, { type: 'Literal', value: "it's {x}" });
+  assert.deepEqual(title.expressionAST.alternate, { type: 'Literal', value: '{' });
+  assert.deepEqual(data.expressionAST.arguments, [{ type: 'Literal', value: '}' }]);
+});
+
+test('the quoted-value suggestion does not double already-parenthesized operands', () => {
+  assert.throws(
+    () => integrateSource('<div class="card {(a ? 1 : 2)}"></div>'),
+    (error) => error.message.includes('class={"card " + (a ? 1 : 2)}')
+  );
+  // Parentheses around parts, not the whole, still need the outer pair.
+  assert.throws(
+    () => integrateSource('<div class="card {(a) - (b)}"></div>'),
+    (error) => error.message.includes('class={"card " + ((a) - (b))}')
+  );
+});

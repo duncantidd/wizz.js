@@ -9,6 +9,8 @@ const STATES = {
   BEFORE_ATTRIBUTE_VALUE: 'BEFORE_ATTRIBUTE_VALUE',
   ATTRIBUTE_VALUE: 'ATTRIBUTE_VALUE',
   ATTRIBUTE_EXPRESSION: 'ATTRIBUTE_EXPRESSION',
+  ATTRIBUTE_EXPRESSION_STRING: 'ATTRIBUTE_EXPRESSION_STRING',
+  ATTRIBUTE_EXPRESSION_ESCAPE: 'ATTRIBUTE_EXPRESSION_ESCAPE',
   AFTER_ATTRIBUTE_VALUE: 'AFTER_ATTRIBUTE_VALUE',
   SELF_CLOSING_START_TAG: 'SELF_CLOSING_START_TAG',
   TAG_CLOSE: 'TAG_CLOSE',
@@ -224,7 +226,19 @@ function tokenize(input) {
         break;
 
       case STATES.ATTRIBUTE_EXPRESSION:
-        if (char === '{') {
+        // A dynamic attribute value is a template expression, whose only
+        // strings are '…' and "…", so quote tracking is exact there and a
+        // brace inside a string (`class={on ? "}" : "a"}`) is text, as in
+        // STATES.EXPRESSION. `on:` handler values are full JavaScript —
+        // comments, regex literals, and template literals can hold an
+        // unpaired quote — so (conservatively) they keep plain brace
+        // counting rather than risk swallowing the closing brace of a
+        // handler that compiles today.
+        if ((char === '"' || char === "'") && !attributeName.startsWith('on:')) {
+          quote = char;
+          attributeValue += char;
+          state = STATES.ATTRIBUTE_EXPRESSION_STRING;
+        } else if (char === '{') {
           expressionDepth += 1;
           attributeValue += char;
         } else if (char === '}') {
@@ -238,6 +252,17 @@ function tokenize(input) {
         } else {
           attributeValue += char;
         }
+        break;
+
+      case STATES.ATTRIBUTE_EXPRESSION_STRING:
+        attributeValue += char;
+        if (char === '\\') state = STATES.ATTRIBUTE_EXPRESSION_ESCAPE;
+        else if (char === quote) state = STATES.ATTRIBUTE_EXPRESSION;
+        break;
+
+      case STATES.ATTRIBUTE_EXPRESSION_ESCAPE:
+        attributeValue += char;
+        state = STATES.ATTRIBUTE_EXPRESSION_STRING;
         break;
 
       case STATES.AFTER_ATTRIBUTE_VALUE:

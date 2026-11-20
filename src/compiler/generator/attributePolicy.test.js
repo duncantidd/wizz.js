@@ -159,3 +159,17 @@ test('needsAttributeHelper finds helper-written dynamic attributes anywhere in t
   assert.equal(needsAttributeHelper(cyclic), false);
   assert.equal(needsAttributeHelper(null), false);
 });
+
+test('needsAttributeHelper does not descend into expression ASTs', () => {
+  // A 50k-deep expression AST would overflow a walk that entered it; the
+  // template nodes around it are still scanned.
+  let deep = { type: 'Identifier', name: 'a' };
+  for (let i = 0; i < 50000; i += 1) deep = { type: 'MemberExpression', object: deep, property: { type: 'Identifier', name: 'n' } };
+  const tree = { type: 'Root', children: [
+    { type: 'Expression', value: 'a', expressionAST: deep },
+    { type: 'IfBlock', testAST: deep, consequent: [], alternate: [], children: [] }
+  ] };
+  assert.equal(needsAttributeHelper(tree), false);
+  tree.children.push({ type: 'Element', name: 'p', attributes: [{ name: 'class', value: 'a', dynamic: true, expressionAST: deep }], children: [] });
+  assert.equal(needsAttributeHelper(tree), true);
+});

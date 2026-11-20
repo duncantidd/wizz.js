@@ -120,7 +120,7 @@ Today, the parser sets `isReactive: true` for recognized `let` declarations and 
 
 #### `extractIdentifiers(exprAST, deps = new Set())`
 
-This nested helper walks an expression AST and adds only recognized reactive names to `deps`.
+This nested helper walks an expression AST and adds only recognized reactive names to `deps`, in source order. The walk is iterative (an explicit stack, children pushed in reverse so they pop left to right): the parser builds long left-associative chains (`a + a + ...`, `o.n.n...`) without recursion, and a recursive walk here would overflow on input the parser accepted.
 
 - For `Identifier`, it records the identifier only when its name is in `reactiveVars`.
 - For `BinaryExpression` and `LogicalExpression`, it walks `left` then `right`. Both operands of `&&`/`||` count even when one is short-circuited at mount: which one runs depends on state.

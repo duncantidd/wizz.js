@@ -15,7 +15,14 @@ const OPERATORS = ['===', '!==', '<=', '>=', '&&', '||', '+', '-', '*', '/', '.'
 // untouched either way — the cooked value only feeds the AST.
 const ESCAPES = { n: '\n', t: '\t', r: '\r', b: '\b', f: '\f', v: '\v', 0: '\0' };
 
-const isLineTerminator = (char) => char === '\n' || char === '\r' || char === ' ' || char === ' ';
+const isLineTerminator = (char) => char === '\n' || char === '\r' || char === '\u2028' || char === '\u2029';
+
+// Sticky, so each escape is matched in place (O(escape length)) instead of
+// slicing the rest of the input. The braced unicode form takes any number of
+// hex digits, leading zeros included, as JavaScript does; the code point
+// bound is checked after matching.
+const HEX_ESCAPE = /[0-9a-fA-F]{2}/y;
+const UNICODE_ESCAPE = /[0-9a-fA-F]{4}|\{([0-9a-fA-F]+)\}/y;
 
 function lexExpression(input) {
   if (typeof input !== 'string') {
@@ -114,10 +121,9 @@ function lexExpression(input) {
             // Hex and unicode escapes are cooked exactly as JavaScript cooks
             // them; a malformed one is a SyntaxError when the generated
             // module loads, so it is rejected here instead.
-            const rest = input.slice(current + 1);
-            const match = escaped === 'x'
-              ? rest.match(/^[0-9a-fA-F]{2}/)
-              : rest.match(/^(?:[0-9a-fA-F]{4}|\{([0-9a-fA-F]{1,6})\})/);
+            const pattern = escaped === 'x' ? HEX_ESCAPE : UNICODE_ESCAPE;
+            pattern.lastIndex = current + 1;
+            const match = pattern.exec(input);
             const codePoint = match ? parseInt(match[1] ?? match[0], 16) : NaN;
             if (!match || codePoint > 0x10ffff) {
               throw compilerDiagnostic(CODES.parser.invalidExpressionLiteral, `Invalid '\\${escaped}' escape in string at ${line}:${column}.`);

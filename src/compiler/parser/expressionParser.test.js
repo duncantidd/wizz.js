@@ -284,11 +284,11 @@ test('cooks string escapes and rejects ones that would not load', () => {
   assert.equal(parse(String.raw`'it\'s'`).value, "it's");
   assert.equal(parse(String.raw`"a\"b\\c"`).value, 'a"b\\c');
   assert.equal(parse(String.raw`'\n\t\0'`).value, '\n\t\0');
-  assert.equal(parse(String.raw`'\x41B\u{1F600}\q'`).value, 'AB\u{1F600}q');
+  assert.equal(parse(String.raw`'\x41\u0042\u{1F600}\q'`).value, 'AB\u{1F600}q');
   assert.equal(parse("'a\\\nb'").value, 'ab');
   assert.equal(parse("'a\\\r\nb'").value, 'ab');
   // U+2028 is legal inside a string literal since ES2019.
-  assert.equal(parse("'a b'").value, 'a b');
+  assert.equal(parse("'a\u2028b'").value, 'a\u2028b');
   for (const source of [String.raw`'\1'`, String.raw`'\00'`, String.raw`'\8'`, String.raw`'\x4'`, String.raw`'\u12'`, String.raw`'\u{110000}'`, String.raw`'\u{}'`]) {
     assert.equal(codeOf(source), 'WIZZ-P057', source);
   }
@@ -425,4 +425,29 @@ test('fuzz: every accepted expression is valid strict JavaScript and evaluates t
     assert.ok(same(evaluate(ast, SCOPE), runAsJs(source)), source);
   }
   assert.ok(accepted > 2500, `only ${accepted} generated expressions were accepted`);
+});
+
+// --- Review follow-ups ---
+
+test('the safety pass handles very wide argument lists without exhausting the stack', () => {
+  // Spreading 200k arguments into Array.prototype.push overflowed the stack.
+  const wide = `f(${Array(200000).fill('1').join(',')})`;
+  const ast = parse(wide);
+  assert.equal(ast.arguments.length, 200000);
+  // An unsafe name buried at the end of the list is still found.
+  const unsafe = `f(${Array(200000).fill('1').join(',')},eval)`;
+  assert.equal(codeOf(unsafe), 'WIZZ-P060');
+});
+
+test('braced unicode escapes accept leading zeros and keep the code point bound', () => {
+  assert.equal(parse(String.raw`'\u{0000041}'`).value, 'A');
+  assert.equal(parse(String.raw`'\u{000000000010FFFF}'`).value, String.fromCodePoint(0x10ffff));
+  assert.equal(codeOf(String.raw`'\u{0110000}'`), 'WIZZ-P057');
+  assert.equal(codeOf(String.raw`'\u{41'`), 'WIZZ-P057');
+  // Each escape is matched in place, so escape-heavy strings lex in linear
+  // time (the old per-escape slice copied the rest of the input each time).
+  const escapes = String.raw`\x41`.repeat(100000);
+  const started = Date.now();
+  assert.equal(parse(`'${escapes}'`).value.length, 100000);
+  assert.ok(Date.now() - started < 2000, 'escape-heavy string lexed too slowly');
 });
