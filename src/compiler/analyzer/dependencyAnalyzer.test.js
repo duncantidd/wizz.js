@@ -103,3 +103,73 @@ test('a nested if block and an if test over a prop are tagged too', () => {
   assert.deepEqual(outer.dependencies, ['visible']);
   assert.deepEqual(outer.consequent[0].children[0].dependencies, ['inner']);
 });
+
+test('conditional expressions depend on the test and on every branch', () => {
+  // The branch not taken at mount must be wired too: flipping the test
+  // selects it, and an update guard keyed only on the test would then render
+  // a stale value from the other branch's state.
+  const payload = analyzeDependencies(parseComponent(
+    "<script>let n = 0; let one = 'a'; let many = 'b'; const fixed = 'c';</script>"
+    + "<p>{n === 0 ? fixed : n === 1 ? one : many}</p>"
+  ));
+  assert.deepEqual(payload.template.children[0].children[0].dependencies, ['n', 'one', 'many']);
+});
+
+test('logical and unary operands are dependencies, short-circuited or not', () => {
+  const payload = analyzeDependencies(parseComponent(
+    "<script>let a = 0; let b = 1; let c = 2;</script>"
+    + "<p>{!a && b || -c}</p><p>{true && null}</p>"
+  ));
+  const [first, second] = payload.template.children;
+  assert.deepEqual(first.children[0].dependencies, ['a', 'b', 'c']);
+  // `true`/`false`/`null` are literals, never treated as names.
+  assert.deepEqual(second.children[0].dependencies, []);
+});
+
+test('calls depend on their arguments and on a reactive callee, not on plain functions', () => {
+  const payload = analyzeDependencies(parseComponent(
+    "<script>let entries = []; let formatter = (x) => x; let user = { name: 'a' };"
+    + " function plural(n) { return n === 1 ? '' : 's'; }</script>"
+    + "<p>{plural(entries.length)}</p><p>{formatter(1)}</p><p>{user.name.toUpperCase()}</p><p>{plural(1)}</p>"
+  ));
+  const [args, callee, method, none] = payload.template.children;
+  assert.deepEqual(args.children[0].dependencies, ['entries']);
+  assert.deepEqual(callee.children[0].dependencies, ['formatter']);
+  assert.deepEqual(method.children[0].dependencies, ['user']);
+  // A function reading state internally is invisible to the analyzer: with
+  // no reactive argument the call is evaluated at mount and never again.
+  assert.deepEqual(none.children[0].dependencies, []);
+});
+
+test('new expression forms are tracked in dynamic attributes and if tests', () => {
+  const payload = analyzeDependencies(parseComponent(
+    "<script>let items = []; let active = false;</script>"
+    + "<ul class={items.length === 0 ? 'entries is-empty' : 'entries'}>{#if !active && items.length > 0}<li>x</li>{/if}</ul>"
+  ));
+  const list = payload.template.children[0];
+  assert.deepEqual(list.attributes[0].dependencies, ['items']);
+  assert.deepEqual(list.children[0].dependencies, ['active', 'items']);
+});
+
+test('long chains the parser accepts are analyzed without exhausting the stack', () => {
+  // The parser builds these iteratively; a recursive analyzer walk overflowed
+  // on the same inputs once they were compiled end to end.
+  const binary = Array.from({ length: 20000 }, (_, i) => (i % 2 ? `f(b${i})` : 'a')).join(' + ');
+  const member = `o${'.n'.repeat(20000)}.f(a)`;
+  const wide = `f(${Array(200000).fill('1').join(',')}, a)`;
+  const payload = analyzeDependencies(parseComponent(
+    `<script>let a = 0; let o = {}; let b3 = 1;</script><main><p>{${binary}}</p><p>{${member}}</p><p>{${wide}}</p></main>`
+  ));
+  const [chain, members, args] = payload.template.children[0].children;
+  assert.deepEqual(chain.children[0].dependencies, ['a', 'b3']);
+  assert.deepEqual(members.children[0].dependencies, ['o', 'a']);
+  assert.deepEqual(args.children[0].dependencies, ['a']);
+});
+
+test('dependency order follows the source left to right across every node type', () => {
+  const payload = analyzeDependencies(parseComponent(
+    "<script>let a = 0; let b = 0; let c = 0; let d = 0; let e = 0; let g = 0;</script>"
+    + '<p>{e ? !d + c.x : f(b, -a) || g}</p>'
+  ));
+  assert.deepEqual(payload.template.children[0].children[0].dependencies, ['e', 'd', 'c', 'b', 'a', 'g']);
+});

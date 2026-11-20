@@ -1,0 +1,14 @@
+<script>
+  let entries = [];
+  let dismissed = false;
+  function plural(n) { return n === 1 ? 'entry' : 'entries'; }
+  function add() { entries = [...entries, { calories: 600 }]; }
+  function dismiss() { dismissed = true; }
+</script>
+<main class={entries.length === 0 ? 'entries is-empty' : 'entries'}>
+  <button on:click={add}>Add</button>
+  <a on:click={dismiss}>Dismiss</a>
+  <p>{entries.length === 0 ? 'No entries yet' : entries.length + ' ' + plural(entries.length)}</p>
+  <span>{entries.length > 2 && !dismissed ? 'Over budget' : 'OK'}</span>
+  <em>{-entries.length * 1.5}</em>
+</main>

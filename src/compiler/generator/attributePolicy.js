@@ -83,7 +83,9 @@ function attributeValueSource(name, valueSource) {
  *   `properties: false` counts value/checked/disabled too (head nodes).
  * @returns {boolean}
  */
-function needsAttributeHelper(root, { properties = true, componentNames = new Set() } = {}) {
+const SKIPPED_KEYS = new Set(['loc', 'attributes', 'expressionAST', 'testAST']);
+
+function needsAttributeHelper(root,{ properties = true, componentNames = new Set() } = {}) {
   const seen = new Set();
   const visit = (value) => {
     if (!value || typeof value !== 'object' || seen.has(value)) return false;
@@ -96,7 +98,10 @@ function needsAttributeHelper(root, { properties = true, componentNames = new Se
         && !(properties && PROPERTY_ATTRIBUTES.has(attribute.name.toLowerCase())));
       if (written) return true;
     }
-    return Object.keys(value).some((key) => key !== 'loc' && key !== 'attributes' && visit(value[key]));
+    // Expression ASTs never hold template elements, and a long operator or
+    // member chain is as deep as it is long, so descending into one would
+    // only risk the stack.
+    return Object.keys(value).some((key) => !SKIPPED_KEYS.has(key) && visit(value[key]));
   };
   return visit(root);
 }

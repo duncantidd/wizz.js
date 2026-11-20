@@ -146,22 +146,26 @@
 // additively and the rejected form never did what its author intended.
 // Output is unchanged.
 //
-
-// compiler 1.22.1 / syntax 1.5.1 / output 1.12.0: a quoted attribute value
-// that holds an expression (`class="card {tone}"`) is a compile error,
-// WIZZ-P055 (issue #64). Such values were always static, so the braces
-// rendered literally with no hint. Braces whose content is not an expression
-// (`data-x='{"a":1}'`) stay literal. Syntax patch: the catalog grows
-// additively and the rejected form never did what its author intended.
-// Output is unchanged.
+// compiler 1.23.0 / syntax 1.6.0 / output 1.12.0: the template expression
+// grammar (issue #69) gains the conditional operator, `!==`, `< > <= >=`,
+// `&&`/`||`, unary `!`/`-`, `true`/`false`/`null` literals, decimals, and
+// calls of a name or method. Syntax minor: every expression that compiled
+// before parses to the same AST and means the same thing. The new codes
+// WIZZ-P056–P061 reject forms that never loaded or ran as written (update
+// operators, leading-zero and `1.foo` numbers, malformed escapes, reserved
+// words as names) and code-from-string sinks in calling expressions. A
+// quoted attribute holding a newly valid expression (`title="{a ? b : c}"`)
+// now meets WIZZ-P055, which is the diagnostic's purpose. Output holds: the
+// generators splice expression source verbatim in parenthesized positions,
+// so generated code structure is unchanged and only more source reaches it.
 //
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.22.1',
-  syntax: '1.5.1',
+  compiler: '1.23.0',
+  syntax: '1.6.0',
   output: '1.12.0'
 });
 

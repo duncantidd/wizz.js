@@ -1819,3 +1819,61 @@ test('issue #70: a tampered row falls back without leaving adopted-row listeners
   component.destroy();
   assert.equal(liveListeners(document), 0);
 });
+
+// --- Expression grammar parity (issue #69) ---
+// The new forms are spliced verbatim into server, hydration, and client
+// code; each site must agree on the value, and updates must reach every one.
+
+test('issue #69: conditionals, comparisons, unary operators, and calls agree across server, hydration, and updates', async (t) => {
+  const source = '<wizz:head><title>{entries.length === 0 ? "Empty" : entries.length + " " + plural(entries.length)}</title>'
+    + '<meta name="total" content={String(-total(entries))}></wizz:head>'
+    + '<main class={entries.length > 1 && !busy ? "list many" : "list"}>'
+    + '{#if !busy && entries.length >= 1}<p>Total {total(entries) * 1.5}</p>{:else}<p>{busy ? "Busy" : "None"}</p>{/if}'
+    + '<ul>{#each entries as entry (entry.id)}<li class={entry.cal > 500 ? "big" : "small"}>{entry.name.toUpperCase()}</li>{/each}</ul>'
+    + '<button on:click={add}>Add</button><a on:click={toggle}>Busy</a></main>'
+    + '<script>\nlet entries = [{ id: 1, name: "oat", cal: 300 }];\nlet busy = false;\n'
+    + 'function plural(n) { return n === 1 ? "entry" : "entries"; }\n'
+    + 'function total(list) { return list.reduce((sum, e) => sum + e.cal, 0); }\n'
+    + 'function add() { entries = [...entries, { id: entries.length + 1, name: "egg", cal: 600 }]; }\n'
+    + 'function toggle() { busy = !busy; }\n</' + 'script>';
+  const { document, clientModule, metricsBefore, warnings, render } = await loadHeadModules(t, source);
+  const { html, head, state } = render();
+
+  // Server output evaluates every new form.
+  assert.match(head, />1 entry<\/title>/);
+  assert.match(head, /content="-300"/);
+  assert.match(html, /<main class="list"/);
+  assert.match(html, /<p[^>]*>Total <!-- -->450<\/p>/);
+  assert.match(html, /<li class="small"[^>]*>OAT<\/li>/);
+
+  deliverHeadRun(document, head);
+  const target = deliverMarkup(document, html);
+  const component = clientModule.hydrateComponent(target, {}, state);
+  assert.deepEqual(warnings, [], 'adoption verifies the delivered values');
+  assert.ok(component);
+  assert.equal(document.metrics.elements, metricsBefore.elements, 'adoption creates no elements');
+
+  const main = target.firstElementChild;
+  const [add, toggle] = elementsNamed(main, 'button').concat(elementsNamed(main, 'a'));
+  const title = () => document.head.childNodes.find((node) => node.nodeName === 'TITLE' && node.attributes['data-wizz-head']);
+  const meta = () => document.head.childNodes.find((node) => node.nodeName === 'META');
+
+  add.dispatchEvent('click');
+  await flushUpdates();
+  assert.equal(main.attributes.class, 'list many');
+  assert.equal(textOf(elementsNamed(main, 'p')[0]), 'Total 1350');
+  assert.deepEqual(elementsNamed(main, 'li').map((li) => [li.attributes.class, textOf(li)]), [['small', 'OAT'], ['big', 'EGG']]);
+  // Head expressions are evaluated at render/mount time only (a documented
+  // head contract, unchanged here): the adopted nodes keep the server values.
+  assert.equal(title().textContent, '1 entry');
+  assert.equal(meta().attributes.content, '-300');
+
+  // Flipping the other dependency of the && test swaps the branch.
+  toggle.dispatchEvent('click');
+  await flushUpdates();
+  assert.equal(main.attributes.class, 'list');
+  assert.deepEqual(elementsNamed(main, 'p').map(textOf), ['Busy']);
+
+  component.destroy();
+  assert.deepEqual(target.childNodes, []);
+});

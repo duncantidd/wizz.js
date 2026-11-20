@@ -115,3 +115,41 @@ test('script and wizz:style with boolean attributes still enter raw text', () =>
 test('reports an unclosed raw text element at the end of input', () => {
   assert.throws(() => tokenize('<main><wizz:style>p { color: red; }</main>'), /Unclosed tag at 1:43/);
 });
+
+// Issue #69 review: dynamic attribute values track strings like text
+// interpolations do, so braces inside string literals are text.
+test('braces, escaped quotes, and escapes inside strings in dynamic attributes are text', () => {
+  const values = [
+    'a ? "}" : "ok"',
+    'a ? "{" : "ok"',
+    "a ? '}{' : '{{'",
+    String.raw`a ? "say \"}\"" : 'it\'s {'`,
+    String.raw`a ? '\u{7D}' : "\\"`,
+    'f("}", g("{")) + "x"'
+  ];
+  for (const value of values) {
+    const [token] = tokenize(`<div class={${value}} id="x"></div>`);
+    assert.deepEqual(token.attributes, [
+      { name: 'class', value, dynamic: true },
+      { name: 'id', value: 'x' }
+    ], value);
+  }
+  // Nested braces outside strings still count.
+  const [nested] = tokenize('<p title={(a ? "}" : "{")}></p>');
+  assert.equal(nested.attributes[0].value, '(a ? "}" : "{")');
+});
+
+test('an unterminated string in a dynamic attribute reports an unclosed tag', () => {
+  assert.throws(() => tokenize('<div class={a ? "x}></div>'), (error) => error.code === 'WIZZ-P001' && /Unclosed tag at 1:27/.test(error.message));
+  assert.throws(() => tokenize(String.raw`<div class={"x\"}></div>`), /Unclosed tag/);
+});
+
+test('on: handler values keep brace counting, so quotes in comments and regexes still work', () => {
+  // Handlers are full JavaScript; an unpaired quote in a comment or regex
+  // must not swallow the closing brace (conservative: handlers are not
+  // string-tracked).
+  for (const value of ["() => { /* don't */ go() }", "() => test(/'/)"]) {
+    const [token] = tokenize(`<button on:click={${value}}>x</button>`);
+    assert.deepEqual(token.attributes, [{ name: 'on:click', value }], value);
+  }
+});
