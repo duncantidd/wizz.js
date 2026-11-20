@@ -115,12 +115,16 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // is unchanged.
   // compiler 1.22.1 / syntax 1.5.1: WIZZ-P055 rejects an expression inside a
   // quoted attribute value (issue #64); syntax patch, output unchanged.
-  // compiler 1.22.1 / syntax 1.5.1: WIZZ-P055 rejects an expression inside a
-  // quoted attribute value (issue #64); syntax patch, output unchanged.
+  // compiler 1.23.0 / syntax 1.6.0 / output 1.13.0, one release: the
+  // expression grammar gains conditionals, comparisons, logical and unary
+  // operators, literals, and calls (issue #69); bind:value / bind:checked and
+  // instrumented parenthesized-assignment handlers (issue #73). Syntax minor;
+  // output minor (the numeric-binding helper and the newly instrumented
+  // handlers).
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.22.1',
-    syntax: '1.5.1',
-    output: '1.12.0'
+    compiler: '1.23.0',
+    syntax: '1.6.0',
+    output: '1.13.0'
   });
 });
 
@@ -137,7 +141,7 @@ test('the version table is frozen so callers cannot mutate the contract', () => 
     'use strict';
     VERSIONS.syntax = '9.9.9';
   }, TypeError);
-  assert.equal(VERSIONS.syntax, '1.5.1');
+  assert.equal(VERSIONS.syntax, '1.6.0');
 });
 
 test('the compiler major version leads or matches every contract major version', () => {

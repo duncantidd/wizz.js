@@ -161,7 +161,17 @@ function compileWizzFile(inputPath, outputPath, options = {}) {
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   writeGeneratedModule(outputPath, result.source, result.sourceMap);
 
-  return { rawWizzCode, payload: result.payload, diagnostics: collect ? [] : undefined };
+  return { rawWizzCode, payload: result.payload, diagnostics: collect ? [] : undefined, warnings: result.warnings || [] };
+}
+
+// Non-fatal compiler findings (WIZZ-G026, issue #73) in human output: one
+// line per record, through the logger's warn channel when it has one.
+function logWarnings(logger, warnings) {
+  for (const warning of warnings || []) {
+    const line = `Warning ${warning.code}: ${warning.message}`;
+    if (typeof logger.warn === 'function') logger.warn(line);
+    else logger.log(line);
+  }
 }
 
 /**
@@ -1025,10 +1035,15 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
           }
           compiledByInputPath.set(inputPath, outcome);
           compiledFileCount++;
+          // Warnings travel in the envelope's diagnostics beside errors,
+          // told apart by severity; they never fail the build or flip `ok`.
+          jsonDiagnostics.push(...outcome.warnings);
         } else {
-          compiledByInputPath.set(inputPath, compileWizzFile(inputPath, outputPath, { extractedStyles }));
+          const outcome = compileWizzFile(inputPath, outputPath, { extractedStyles });
+          compiledByInputPath.set(inputPath, outcome);
           compiledFileCount++;
           logger.log(`Compiled ${inputPath} -> ${outputPath}`);
+          logWarnings(logger, outcome.warnings);
         }
       } catch (error) {
         failedCount++;

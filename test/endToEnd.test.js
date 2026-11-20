@@ -139,6 +139,43 @@ test('inline-handlers fixture updates the DOM from assignments in inline arrow h
   assert.deepEqual(button.listeners, {});
 });
 
+test('expressions fixture re-renders conditionals, comparisons, and calls from state (issue #69)', async () => {
+  const { source, target, component } = mountFixture('expressions');
+  const main = target.childNodes[0];
+  const add = findElement(target, 'button');
+  const dismiss = findElement(target, 'a');
+  const text = (name) => findElement(target, name).childNodes[0].nodeValue;
+
+  // The expression source reaches the module verbatim.
+  assert.match(source, /String\(entries\.length === 0 \? 'No entries yet' : entries\.length \+ ' ' \+ plural\(entries\.length\)\)/);
+  assert.equal(main.attributes.class, 'entries is-empty');
+  assert.equal(text('p'), 'No entries yet');
+  assert.equal(text('span'), 'OK');
+  assert.equal(text('em'), '0');
+
+  add.dispatchEvent('click');
+  await flushUpdates();
+  assert.equal(main.attributes.class, 'entries');
+  assert.equal(text('p'), '1 entry');
+  assert.equal(text('em'), '-1.5');
+
+  add.dispatchEvent('click');
+  add.dispatchEvent('click');
+  await flushUpdates();
+  assert.equal(text('p'), '3 entries');
+  assert.equal(text('span'), 'Over budget');
+
+  // The branch's other dependency updates the same text.
+  dismiss.dispatchEvent('click');
+  await flushUpdates();
+  assert.equal(text('span'), 'OK');
+  assert.equal(text('em'), '-4.5');
+
+  component.destroy();
+  assert.deepEqual(add.listeners, {});
+  assert.deepEqual(target.childNodes, []);
+});
+
 test('profile fixture renders constants once and reactive state through events', async () => {
   const { document, component } = mountFixture('profile');
 
@@ -199,4 +236,60 @@ test('invalid fixture fails with its file path and source location', () => {
       && error.filePath === 'test/fixtures/invalid.wizz'
       && /Expected <\/p>, found <\/main> at test\/fixtures\/invalid\.wizz:3:1\./.test(error.message)
   );
+});
+
+test('bindings fixture: bind:value/bind:checked and parenthesized handlers update state both ways (issue #73)', async () => {
+  const { source, target, component } = mountFixture('bindings');
+  const [text, number, checkbox] = target.childNodes[0].childNodes.filter((node) => node.name === 'input');
+  const select = findElement(target, 'select');
+  const textarea = findElement(target, 'textarea');
+  const button = findElement(target, 'button');
+  const paragraph = findElement(target, 'p');
+  const rendered = () => paragraph.childNodes.filter((node) => !node.name).map((node) => node.nodeValue).join('');
+
+  // No bind: survives to the module, and the number guard is emitted.
+  assert.doesNotMatch(source, /bind:/);
+  assert.match(source, /function __wizzSetNumber\(node, value\)/);
+
+  // State flows into the controls at mount.
+  assert.equal(text.value, 'Ada');
+  assert.equal(number.value, 250);
+  assert.equal(checkbox.checked, false);
+  assert.equal(select.value, 'lunch');
+  assert.equal(rendered(), 'Ada|500|todo|lunch|');
+
+  // Control edits flow into state and the rest of the DOM.
+  text.value = 'Grace';
+  text.dispatchEvent('input');
+  number.value = '400';
+  number.dispatchEvent('input');
+  checkbox.checked = true;
+  checkbox.dispatchEvent('change');
+  select.value = 'dinner';
+  select.dispatchEvent('change');
+  textarea.value = 'tasty';
+  textarea.dispatchEvent('input');
+  await flushUpdates();
+  assert.equal(rendered(), 'Grace|800|done|dinner|tasty');
+
+  // A half-typed number reads as '' and is stored as null; the guard leaves
+  // the field's text alone instead of writing '' back.
+  number.value = '';
+  number.dispatchEvent('input');
+  await flushUpdates();
+  assert.equal(rendered(), 'Grace|empty|done|dinner|tasty');
+
+  // Script assignments flow back into the controls.
+  button.dispatchEvent('click');
+  await flushUpdates();
+  assert.equal(text.value, '');
+  assert.equal(number.value, 0);
+  assert.equal(checkbox.checked, true);
+  assert.equal(select.value, 'dinner');
+  assert.equal(rendered(), '|0|done|dinner|tasty');
+
+  component.destroy();
+  assert.deepEqual(text.listeners, {});
+  assert.deepEqual(checkbox.listeners, {});
+  assert.deepEqual(textarea.listeners, {});
 });

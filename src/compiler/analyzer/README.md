@@ -120,11 +120,15 @@ Today, the parser sets `isReactive: true` for recognized `let` declarations and 
 
 #### `extractIdentifiers(exprAST, deps = new Set())`
 
-This nested helper walks an expression AST and adds only recognized reactive names to `deps`.
+This nested helper walks an expression AST and adds only recognized reactive names to `deps`, in source order. The walk is iterative (an explicit stack, children pushed in reverse so they pop left to right): the parser builds long left-associative chains (`a + a + ...`, `o.n.n...`) without recursion, and a recursive walk here would overflow on input the parser accepted.
 
 - For `Identifier`, it records the identifier only when its name is in `reactiveVars`.
-- For `BinaryExpression`, it walks `left` then `right`.
+- For `BinaryExpression` and `LogicalExpression`, it walks `left` then `right`. Both operands of `&&`/`||` count even when one is short-circuited at mount: which one runs depends on state.
+- For `UnaryExpression` (`!`, `-`), it walks `argument`.
+- For `ConditionalExpression`, it walks `test`, `consequent`, and `alternate`. Every branch counts, not only the one taken at mount, so flipping the test re-renders the other branch from current state.
+- For `CallExpression`, it walks `callee` then each argument. A reactive `let` holding a function is a dependency like any other read; a named script function is not reactive, so `plural(entries.length)` depends on `entries` only. What a called function reads internally is invisible: state it needs must be passed as an argument for the expression to update.
 - For `MemberExpression`, it walks only `object`. In `user.name`, `user` is the reactive dependency; `name` is not independently evaluated as a state variable.
+- `Literal` nodes (numbers, strings, `true`, `false`, `null`) contribute nothing.
 - For a missing AST or an AST type not currently recognized, it returns the collected set unchanged.
 
 Using a `Set` removes duplicates while preserving insertion order. This makes `{count + count}` depend on `count` once and gives deterministic output for generators and tests.
@@ -199,7 +203,7 @@ const identified = assignNodeIds(analyzed);
 
 The current scope deliberately has several limits:
 
-- Dependency analysis handles the parser's `Identifier`, `BinaryExpression`, and `MemberExpression` nodes only. Adding expression grammar requires extending this visitor for any new AST node that can contain state references.
+- Dependency analysis handles every node the expression parser produces (`Identifier`, `Literal`, `BinaryExpression`, `LogicalExpression`, `UnaryExpression`, `ConditionalExpression`, `CallExpression`, `MemberExpression`). Adding expression grammar requires extending this visitor for any new AST node that can contain state references. State read inside a called function is not tracked; only names in the expression itself are.
 - The parser's script scanner determines which declarations exist and which are reactive. It is not a full JavaScript semantic analyzer.
 - Dynamic brace-valued attributes are analyzed using their parsed expression AST and receive an ID when they read reactive state.
 - Declared props participate in dependency tracking like `let` state because the parser records them as reactive declarations with `isProp: true`; the analyzer does not distinguish them.

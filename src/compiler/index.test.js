@@ -426,3 +426,53 @@ test('a diagnostics option other than collect is rejected before compiling', () 
   assert.throws(() => compile('<main></main>', { diagnostics: true }), TypeError);
   assert.throws(() => compileServer('<main></main>', { diagnostics: 'collect ' }), TypeError);
 });
+
+test('20k-long operator, call, and member chains compile end to end on every target (issue #69 review)', () => {
+  // The parser, analyzer, and generators must agree on what is too deep: an
+  // expression the parser accepts must not overflow a later stage.
+  const chain = Array.from({ length: 20000 }, (_, i) => `f(a${i % 3})`).join(' + ');
+  const member = `o${'.n'.repeat(20000)}.f(a1)`;
+  const source = '<script>let a0 = 0; let a1 = 1; let o = {}; function f(x) { return x; }</script>'
+    + `<main class={${member}}><p>{${chain}}</p>{#if ${chain}}<b>x</b>{/if}</main>`;
+  for (const run of [() => compile(source), () => compile(source, { hydratable: true }), () => compileServer(source)]) {
+    const { source: output } = run();
+    assert.ok(output.includes(`String(${chain})`));
+  }
+});
+
+test('bind: compiles to the hand-written form, beside author handlers, on every target (issue #73)', () => {
+  const source = "<script>let name = ''; function log() {}</script><main><input on:input={log} bind:value={name} /><p>{name}</p></main>";
+  const client = compile(source).source;
+  // Both listeners attach; the author's first, in source order.
+  assert.match(client, /__wizzListen\(__wizzNode_\d+, "input", log\);\s*__wizzNode_\d+\.value = name;\s*__wizzListen\(__wizzNode_\d+, "input", \(__wizzEvent\) => \{ name = __wizzEvent\.target\.value; __wizzQueueUpdate\(\{ name: true \}\); \}\);/);
+  // No numeric binding, no helper; no bind: text anywhere.
+  assert.doesNotMatch(client, /__wizzSetNumber|bind:/);
+  assert.doesNotMatch(compile(source, { hydratable: true }).source, /bind:/);
+  assert.doesNotMatch(compileServer(source).source, /bind:|__wizzEvent/);
+});
+
+test('templates without bindings compile byte-identically apart from nothing (issue #73)', () => {
+  // A hand-written value + handler pair is not rewritten into a binding.
+  const source = "<script>let name = '';</script><main><input value={name} on:input={(e) => { name = e.target.value; }} /></main>";
+  assert.doesNotMatch(compile(source).source, /__wizzEvent|__wizzSetNumber/);
+});
+
+test('compile() reports untracked assignments as non-fatal warnings (issue #73)', () => {
+  const source = '<script>\nlet count = 0;\nfunction bump() { g(count += 1); }\nfunction g() {}\n</script><main on:click={bump}>{count}</main>';
+  const result = compile(source, { filePath: 'src/Bump.wizz' });
+  assert.ok(result.source.length > 0, 'a warning never fails the compile');
+  assert.equal(result.warnings.length, 1);
+  assert.equal(result.warnings[0].code, 'WIZZ-G026');
+  assert.equal(result.warnings[0].severity, 'warning');
+  assert.deepEqual([result.warnings[0].line, result.warnings[0].column], [3, 21]);
+  // Collect mode keeps diagnostics for errors only.
+  const collected = compile(source, { filePath: 'src/Bump.wizz', diagnostics: 'collect' });
+  assert.deepEqual(collected.diagnostics, []);
+  assert.equal(collected.warnings.length, 1);
+  // Clean components carry an empty list; the server compile does not repeat
+  // the client's findings.
+  assert.deepEqual(compile('<main>x</main>').warnings, []);
+  assert.equal('warnings' in compileServer(source), false);
+  // A failed collect-mode compile has diagnostics only.
+  assert.equal('warnings' in compile('<main></section>', { diagnostics: 'collect' }), false);
+});

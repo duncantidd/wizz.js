@@ -43,13 +43,14 @@ The `.wizz` template language is deliberately small. Read this table before desi
 
 | Area | Supported | Current limit | How it fails | Working pattern |
 | --- | --- | --- | --- | --- |
-| Expressions `{...}` | Identifiers, member access (`a.b`), integer and string literals, `+ - * /`, `===`, and parentheses. | No calls, ternaries, `!`, `!==`, `<`/`>`, `&&`/`\|\|`, indexing (`a[0]`), template literals, decimals, or array/object literals. | Compile error (WIZZ-P033) | Compute the value in a script handler into a reactive `let` and render `{label}`. There are no computed values, so recompute it in every handler that changes its inputs. |
+| Expressions `{...}` | Identifiers, member access (`a.b`), number (`1`, `1.5`), string, `true`/`false`/`null` literals, `+ - * /`, `=== !== < > <= >=`, `&&`/`\|\|`, unary `!`/`-`, the conditional `a ? b : c`, calls of a function or method (`plural(n)`, `name.trim()`), and parentheses. | No indexing (`a[0]`), `==`/`!=`, `??`, `?.`, `++`/`--`, template literals, array/object literals, arrow functions, or calling a call result (`f()()`). A call updates only when a reactive name it is given changes: a function reading state internally is not tracked. `eval`, `Function`, `constructor`, `__proto__`, and the timers cannot appear in an expression that calls. | Excluded forms: compile error (WIZZ-P033); state read inside a called function: silent | Pass the state a function needs as arguments: `{plural(entries.length)}`, not `{plural()}`. For anything outside the grammar, compute the value in a script handler into a reactive `let` and render `{label}`. |
 | `{#if}` | `{#if cond}...{:else}...{/if}`, nesting, events, lists, and components inside branches. The test is re-evaluated whenever a reactive `let` or prop it reads changes, and the branch is replaced: the old one leaves the DOM with its listeners and child components, and the new one is built from current state. | No `{:else if}`. A test that reads only `const` values is evaluated once, at mount. A replaced branch is rebuilt, so DOM state inside it (typed input text, scroll position, a child component's own state) is not kept. | `{:else if}`: compile error (WIZZ-P033); `const` test and lost branch state: silent | Chain conditions by nesting `{#if}` inside `{:else}`. Keep state that must survive a hidden branch in a script `let`, or keep the element mounted and toggle it with `hidden={flag}`. |
 | `{#each}` collection | A bare identifier naming a top-level `let` array, keyed `(item.id)` or keyless. | No member collections (`state.items`) or index alias (`item, i`). A `const` collection renders once. In-place mutation (`items.push(x)`) does not update. | Syntax: WIZZ-P002; `const` and mutation: silent non-update | Reassign the array: `items = [...items, x]`. Store any index or flag you need on the items themselves. |
 | `{#each}` body | Exactly one native root element per item; its text and dynamic attributes update. `on:` handlers anywhere in the item run with the item variable in scope (`on:click={() => remove(item.id)}`); they attach per item and detach when the item is removed. | No imported components (WIZZ-G004) or nested `{#if}`/`{#each}` (WIZZ-G005); one root element only (WIZZ-G003); the block must sit inside a native element. A handler expression is evaluated once per item, so `on:click={makeHandler(item)}` keeps the handler built from the item's first value. | Compile error; a stale `makeHandler(item)`: silent | Write per-row handlers as inline arrows, which read the item when they run: `on:click={() => pick(item.id)}`. Precompute per-row variants (class suffix, label) as item fields. |
 | Dynamic attributes | `name={expr}` updates reactively; `value`, `checked`, and `disabled` are set as DOM properties. HTML boolean attributes (`hidden`, `required`, `readonly`, `open`, `inert`, `multiple`, ...) are present when the value is truthy and removed when it is falsy, so `hidden={false}` shows the element. Any other attribute is removed when the value is `null` or `undefined`. | Outside the boolean list, `false` renders the string `"false"` rather than removing the attribute, because `aria-*`, `draggable`, and `spellcheck` give `"false"` its own meaning. | Silent | Hold `null` in state to drop a non-boolean attribute (`let tip = null;` with `title={tip}`). |
 | Quoted attribute values | Static text: `class="card"`. | Braces inside quotes are not interpolated, so `class="card {kind}"` is rejected instead of rendering literal text. Braces that hold no expression (`data-x='{"a":1}'`) stay literal. | Compile error (WIZZ-P055) | Use one expression for the whole value: `class={'card ' + kind}`. |
-| Event handlers | `on:<event>={handler}` with a named script function or an inline arrow; assignments inside inline arrows update the DOM (`on:input={(e) => name = e.target.value}`). | There is no `bind:`; an unknown directive such as `bind:value` becomes a plain attribute. An assignment nested in an expression (`ok ? a = 1 : 0`, `(a = 1)`) does not schedule an update. | Silent | Two-way inputs pair `value={name}` with `on:input={(e) => name = e.target.value}`. Write each mutation as its own statement, or move the logic into a named function. |
+| Event handlers | `on:<event>={handler}` with a named script function or an inline arrow; assignments inside inline arrows update the DOM, parenthesized or not (`on:input={(e) => (name = e.target.value)}`). | An assignment nested inside an expression (`ok ? a = 1 : 0`, `g(a = 1)`, an unbraced `if (x) a = 1`), in a handler or in the script, does not schedule an update. | Compiles with warning WIZZ-G026 (build output, MCP diagnostics, `compile().warnings`) | Write each mutation as its own statement (`a = 1; g(a);`, `if (x) { a = 1; }`), or move the logic into a named function. |
+| Bindings | `bind:value={name}` on `<input>`, `<textarea>`, and `<select>`, and `bind:checked={done}` on `<input type="checkbox">`, two-way with a top-level `let` (persistent state included). `type="number"`/`"range"` inputs bind numbers, with an empty field as `null`. | No `bind:group`, `bind:this`, or other properties; no member targets (`user.name`), props, or `const`s; not on component tags or inside `{#each}` bodies; a bound `<input>` needs a static `type`; no explicit `value`/`checked` beside the binding. | Compile error (WIZZ-P062, WIZZ-P063, WIZZ-P064) | Pair `value={...}` with an `on:input` handler for anything a binding does not cover, such as a per-row field: `on:input={(e) => rename(item.id, e.target.value)}`. |
 | Component tags | Default `.wizz` imports rendered self-closing inside a native element (`<Card title={t} />`); attributes, including functions, pass as props. | No children (WIZZ-G008), no `on:` directives (WIZZ-G011), not at the template root (WIZZ-G010), not inside `{#each}` (WIZZ-G004). | Compile error | Pass callbacks as props (`onSelect={select}`) instead of `on:`. Render list rows as native elements and keep per-row logic in item fields. |
 
 ## CLI
@@ -158,7 +159,7 @@ Print what you have installed with:
 wizz --version
 ```
 
-which prints the compiler and contract version triple, for example `wizz 1.22.1 (compiler 1.22.1, syntax 1.5.1, output 1.12.0)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
+which prints the compiler and contract version triple, for example `wizz 1.23.0 (compiler 1.23.0, syntax 1.6.0, output 1.13.0)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
 
 `wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
 
@@ -218,13 +219,45 @@ Event directives use native browser event names and accept either a component-lo
 <button on:click={(event) => increment(event.detail)}>Add</button>
 ```
 
-The directive expression is emitted as the listener passed to `addEventListener()`. Assignments inside an inline handler are reactive exactly like those in script functions, so a two-way input needs no separate setter:
+The directive expression is emitted as the listener passed to `addEventListener()`. Assignments inside an inline handler are reactive exactly like those in script functions, with or without parentheses around the body:
 
 ```wizz
-<input value={name} on:input={(event) => name = event.target.value} />
+<input value={name} on:input={(event) => (name = event.target.value)} />
 ```
 
-An inline handler cannot assign a prop (props are read-only; this is the same `WIZZ-G015` error as in the script), and an assignment nested inside an expression — `ok ? count = 1 : 0` — does not schedule an update; write it as its own statement.
+An inline handler cannot assign a prop (props are read-only; this is the same `WIZZ-G015` error as in the script). An assignment nested inside an expression — `ok ? count = 1 : 0`, `log(count = 1)` — does not schedule an update, and the compiler reports it as warning `WIZZ-G026` (see [Compiler Warnings](#compiler-warnings)); write it as its own statement.
+
+### Two-Way Bindings
+
+`bind:value` and `bind:checked` keep a form control and a top-level `let` in sync in both directions:
+
+```wizz
+<script>
+  let food = '';
+  let calories = 0;
+  let logged = false;
+  let meal = 'lunch';
+</script>
+
+<form>
+  <input bind:value={food} />
+  <input type="number" bind:value={calories} />
+  <input type="checkbox" bind:checked={logged} />
+  <select bind:value={meal}>
+    <option value="lunch">Lunch</option>
+    <option value="dinner">Dinner</option>
+  </select>
+  <p>{food}: {calories} kcal{logged ? ' (logged)' : ''}</p>
+</form>
+```
+
+A binding is shorthand for the pair you would write by hand: `bind:value={food}` compiles to `value={food}` plus an `on:input` handler that assigns `food` (`on:change` for `<select>` and checkboxes), so it updates the DOM, works inside `{#if}` branches, server-renders the current value, hydrates, and writes persistent (`persist()`) state through to storage like any other assignment.
+
+- `bind:value` works on `<input>` (any type but `checkbox`, `radio`, and `file`), `<textarea>`, and `<select>`; `bind:checked` works on `<input type="checkbox">`.
+- `type="number"` and `type="range"` inputs bind numbers, and an empty field binds `null`. While someone is half-way through typing a number (`1.`, `-`), the field is left alone rather than overwritten. A bound `<input>` needs a static `type`.
+- The target must be a top-level `let` named directly. Props are read-only, so binding one is an error; copy it into a local `let` instead.
+- Bindings are not supported on imported component tags, inside `{#each}` bodies (an item re-renders only when its collection changes, so the control would not follow the state), or for `bind:group`, `bind:this`, and other properties. Each is a compile error (`WIZZ-P062`–`WIZZ-P064`), never a silent no-op; use `value={...}` with an `on:input` handler there.
+- A server-rendered `<textarea>` or `<select>` shows its bound value once the client has hydrated: the server writes `value` as an attribute, which those two elements do not display.
 
 Reactive updates are batched. When a handler runs, each changed variable is marked, and one DOM update runs on the next microtask with all marks combined — a handler that changes several variables triggers a single update, and the DOM settles before the browser paints. Updates therefore happen asynchronously: read the DOM after an `await`, not synchronously after dispatching an event.
 
@@ -304,7 +337,7 @@ Render content conditionally with an `if` block and optional `else` branch:
 {/if}
 ```
 
-Conditions currently support the Wizz expression grammar, including identifiers, member access, string literals, and strict equality.
+Conditions use the same expression grammar as interpolations: comparisons (`=== !== < > <= >=`), `&&`/`||`, `!`, the conditional operator, and calls such as `{#if items.length > 0 && !busy}`.
 
 An `if` block is reactive: when a reactive `let` or prop its condition reads changes, the condition is re-evaluated and, if the result flips, the rendered branch is replaced in place.
 
@@ -347,7 +380,7 @@ Replacing a branch removes its nodes from the DOM, detaches the event listeners 
 
 `onMount` runs once, after the component is attached to its target, child components are mounted, and the initial update has completed. State assigned in a mount hook flows through the batched scheduler, so the example above renders `ready` on the next microtask. `onDestroy` runs when the component's `destroy()` is called, before child components are destroyed and the root node is removed — the right place to remove global event listeners or clear timers.
 
-For reactive state changes from a hook, both styles notify the scheduler: `onMount(() => { status = "ready"; })` and `onMount(initialize)` (where `initialize` assigns at statement level) are intercepted by the syntax-aware script rewriter, which follows mutations into function and arrow callback bodies. Assignments in expression position — call arguments, conditions, object literals, template interpolations — and unbraced control-flow bodies are deliberately left unrewritten.
+For reactive state changes from a hook, both styles notify the scheduler: `onMount(() => { status = "ready"; })` and `onMount(initialize)` (where `initialize` assigns at statement level) are intercepted by the syntax-aware script rewriter, which follows mutations into function and arrow callback bodies. Assignments in expression position — call arguments, conditions, object literals, template interpolations — and unbraced control-flow bodies are deliberately left unrewritten, and the compiler reports each one as warning `WIZZ-G026`.
 
 Calling `destroy()` tears the component down completely: destroy hooks run first, child components are destroyed, every event listener Wizz attached through an `on:` directive is removed from its node, and the root is removed from the target. Listeners you attach yourself — for example to `window` or `document` inside `onMount` — are not tracked, so remove them in `onDestroy`.
 
@@ -557,7 +590,7 @@ As a consumer of generated modules, within one `output` major version every gene
 A breaking change to either contract bumps its major version and the compiler's major version. Every compiled module is stamped with all three versions on its first line, so build artifacts stay traceable to the compiler that produced them:
 
 ```js
-// Generated by Wizz 1.22.1 (component syntax 1.5.1, generated output 1.12.0). Edits will be overwritten.
+// Generated by Wizz 1.23.0 (component syntax 1.6.0, generated output 1.13.0). Edits will be overwritten.
 ```
 
 `compile()` also returns the frozen version table as its `version` field.
@@ -612,6 +645,18 @@ Hydratable modules export a second entry alongside `hydrateComponent`: **`hydrat
 Wizz targets current evergreen browsers that support native ES modules and dynamic `import()`. Generated components also require `queueMicrotask()`, standard DOM construction and mutation APIs (`createElement`, `createTextNode`, `appendChild`, `insertBefore`, and `removeChild`), DOM event listeners, and `Element.prototype.querySelector()`. Hydrating modules additionally require `firstElementChild`, `nodeType`, `tagName`, and comment-node access for the adoption walk, and the runtime router's first-render hydration requires `Document.querySelector()` and `Element.remove()`. Applications using the included router additionally require the History API (`history.pushState`) and `popstate` events.
 
 The framework does not ship browser polyfills or transpiled legacy output. Internet Explorer and browsers without native ES modules are unsupported. Serve built files over HTTP(S), with JavaScript served as `text/javascript`; opening modules from the filesystem is not a supported deployment mode.
+
+## Compiler Warnings
+
+Some code compiles but will not behave as written. The compiler reports it as a warning, which never fails a build. Today there is one: `WIZZ-G026`, a reactive variable assigned where the update scheduler does not see the change, so the DOM keeps showing the old value:
+
+```text
+Warning WIZZ-G026: 'count' is assigned where the update scheduler does not see it, so the DOM will not update at src/App.wizz:6:21. Make the assignment a statement of its own, in braces under an if/else or loop (`count += 1; g(count);`, `if (ready) { count = 2; }`), so the update is scheduled.
+```
+
+The rewriter that schedules updates only instruments assignments that are statements of their own, because rewriting inside an expression could change what it means. Assignments in call arguments, conditions, object literals, template interpolations, unbraced `if`/`else`/loop bodies, and chained targets (`a = b = 1` updates `a` only) are reported; parameter defaults, declarations, class fields, and names shadowed by a parameter or local declaration are not.
+
+`wizz build` prints warnings after the file's "Compiled" line, `--json` includes them in `diagnostics` with `"severity": "warning"` (they never set `ok` to false), `compile()` returns them as `result.warnings`, and the MCP `component_diagnostics` and `create_or_update_component` tools return them beside any errors.
 
 ## Compiler Errors
 

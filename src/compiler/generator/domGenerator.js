@@ -187,7 +187,7 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
           builder.add(`const ${listVarName} = document.createElement(${JSON.stringify(listNode.name)});`);
           for (const attribute of listNode.attributes || []) {
             if (attribute.dynamic) {
-              builder.add(attributeWriteSource(listVarName, attribute.name, attribute.value));
+              builder.add(attributeWriteSource(listVarName, attribute.name, attribute.value, { bind: attribute.bind }));
             } else if (isEventAttribute(attribute)) {
               // The handler expression is evaluated once per item, with the
               // item variable in scope; update() below keeps that variable
@@ -231,7 +231,7 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
         if (listNode.type === 'Element') {
           for (const attribute of listNode.attributes || []) {
             if (!attribute.dynamic) continue;
-            builder.add(attributeWriteSource(listVarName, attribute.name, attribute.value));
+            builder.add(attributeWriteSource(listVarName, attribute.name, attribute.value, { bind: attribute.bind }));
           }
           (listNode.children || []).forEach((child, childIndex) => {
             if (child.type === 'Expression') builder.add(`${listVarName}.childNodes[${childIndex}].nodeValue = String(${child.value});`);
@@ -366,7 +366,7 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
       if (node.attributes) {
         node.attributes.forEach(attr => {
           if (attr.dynamic) {
-            builder.add(attributeWriteSource(varName, attr.name, attr.value));
+            builder.add(attributeWriteSource(varName, attr.name, attr.value, { bind: attr.bind }));
             return;
           }
           if (isEventAttribute(attr)) {

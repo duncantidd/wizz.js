@@ -146,23 +146,45 @@
 // additively and the rejected form never did what its author intended.
 // Output is unchanged.
 //
-
-// compiler 1.22.1 / syntax 1.5.1 / output 1.12.0: a quoted attribute value
-// that holds an expression (`class="card {tone}"`) is a compile error,
-// WIZZ-P055 (issue #64). Such values were always static, so the braces
-// rendered literally with no hint. Braces whose content is not an expression
-// (`data-x='{"a":1}'`) stay literal. Syntax patch: the catalog grows
-// additively and the rejected form never did what its author intended.
-// Output is unchanged.
+// compiler 1.23.0 / syntax 1.6.0 / output 1.13.0 (one release; issues #69
+// and #73):
+//   - The template expression grammar (issue #69) gains the conditional
+//     operator, `!==`, `< > <= >=`, `&&`/`||`, unary `!`/`-`,
+//     `true`/`false`/`null` literals, decimals, and calls of a name or
+//     method. Every expression that compiled before parses to the same AST
+//     and means the same thing. WIZZ-P056–P061 reject forms that never loaded
+//     or ran as written (update operators, leading-zero and `1.foo` numbers,
+//     malformed escapes, reserved words as names) and code-from-string sinks
+//     in calling expressions. A quoted attribute holding a newly valid
+//     expression (`title="{a ? b : c}"`) now meets WIZZ-P055, which is the
+//     diagnostic's purpose. Expression source is spliced verbatim in
+//     parenthesized positions, so this half changes no generated structure.
+//   - Two-way bindings (issue #73): `bind:value` and `bind:checked` are
+//     accepted directives, desugared in the parser into a dynamic attribute
+//     plus an inline `on:` handler; misuse is WIZZ-P062–P064. An inline
+//     arrow whose whole body is a parenthesized assignment
+//     (`(e) => (name = e.target.value)`) is now instrumented like the
+//     unparenthesized form; it used to change state without an update, so
+//     this enforces the documented "inline handler assignments update the
+//     DOM" contract, and a prop assigned that way now meets WIZZ-G015.
+//   Syntax minor: additive grammar and directives. Output minor: modules
+//   with a numeric binding gain the module-scope `__wizzSetNumber` helper,
+//   and parenthesized-assignment handlers gain their update call; every
+//   other module is byte-identical apart from the version header, and the
+//   module surface is unchanged.
+//
+// The compile() result additionally carries an additive `warnings` array
+// (WIZZ-G026: a reactive name assigned where no update is scheduled).
+// Warnings never fail a compile and change no generated output.
 //
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.22.1',
-  syntax: '1.5.1',
-  output: '1.12.0'
+  compiler: '1.23.0',
+  syntax: '1.6.0',
+  output: '1.13.0'
 });
 
 module.exports = { VERSIONS };

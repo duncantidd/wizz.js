@@ -71,7 +71,16 @@ const CODES = Object.freeze({
     persistCallUnparseable: 'WIZZ-P052',
     expressionDepthExceeded: 'WIZZ-P053',
     templateDepthExceeded: 'WIZZ-P054',
-    quotedAttributeInterpolation: 'WIZZ-P055'
+    quotedAttributeInterpolation: 'WIZZ-P055',
+    expressionUpdateOperator: 'WIZZ-P056',
+    invalidExpressionLiteral: 'WIZZ-P057',
+    expectedConditionalColon: 'WIZZ-P058',
+    unsupportedCallee: 'WIZZ-P059',
+    unsafeExpressionReference: 'WIZZ-P060',
+    reservedWordInExpression: 'WIZZ-P061',
+    unsupportedBinding: 'WIZZ-P062',
+    invalidBindingTarget: 'WIZZ-P063',
+    conflictingBinding: 'WIZZ-P064'
   }),
   // Reserved for the analyze stage; no author-facing analyze diagnostics
   // exist today (dependency analysis and ID assignment cannot fail on
@@ -104,7 +113,8 @@ const CODES = Object.freeze({
     hydrationUnsupportedNode: 'WIZZ-G022',
     hydrationEachUnsupportedNode: 'WIZZ-G023',
     persistSpanDrift: 'WIZZ-G024',
-    reservedAuthorName: 'WIZZ-G025'
+    reservedAuthorName: 'WIZZ-G025',
+    untrackedAssignment: 'WIZZ-G026'
   })
 });
 

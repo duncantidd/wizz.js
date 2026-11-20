@@ -97,16 +97,23 @@ for (const [expectedCode, target, source] of CORPUS) {
 }
 
 // The integrator wraps every expression-lexer and pratt-parser failure in
-// its own templateExpressionError diagnostic (WIZZ-P033), so P025-P030 are
-// only reachable by calling the expression modules directly — as editor
-// integrations and dev tooling do. One representative failure per code.
+// its own templateExpressionError diagnostic (WIZZ-P033), so P025-P030 and
+// P056-P061 are only reachable by calling the expression modules directly —
+// as editor integrations and dev tooling do. One representative failure per
+// code.
 const EXPRESSION_CORPUS = [
   ['WIZZ-P025', () => lexExpression("'unclosed")],
   ['WIZZ-P026', () => lexExpression('@')],
   ['WIZZ-P027', () => parseExpression(lexExpression('*'))],
   ['WIZZ-P028', () => parseExpression(lexExpression('(a'))],
   ['WIZZ-P029', () => parseExpression(lexExpression('a.'))],
-  ['WIZZ-P030', () => parseExpression(lexExpression('a)'))]
+  ['WIZZ-P030', () => parseExpression(lexExpression('a)'))],
+  ['WIZZ-P056', () => lexExpression('--a')],
+  ['WIZZ-P057', () => lexExpression('01')],
+  ['WIZZ-P058', () => parseExpression(lexExpression('a ? b'))],
+  ['WIZZ-P059', () => parseExpression(lexExpression('f()()'))],
+  ['WIZZ-P060', () => parseExpression(lexExpression('eval(a)'))],
+  ['WIZZ-P061', () => parseExpression(lexExpression('new(a)'))]
 ];
 
 for (const [expectedCode, call] of EXPRESSION_CORPUS) {
