@@ -71,7 +71,13 @@ const CODES = Object.freeze({
     persistCallUnparseable: 'WIZZ-P052',
     expressionDepthExceeded: 'WIZZ-P053',
     templateDepthExceeded: 'WIZZ-P054',
-    quotedAttributeInterpolation: 'WIZZ-P055'
+    quotedAttributeInterpolation: 'WIZZ-P055',
+    expressionUpdateOperator: 'WIZZ-P056',
+    invalidExpressionLiteral: 'WIZZ-P057',
+    expectedConditionalColon: 'WIZZ-P058',
+    unsupportedCallee: 'WIZZ-P059',
+    unsafeExpressionReference: 'WIZZ-P060',
+    reservedWordInExpression: 'WIZZ-P061'
   }),
   // Reserved for the analyze stage; no author-facing analyze diagnostics
   // exist today (dependency analysis and ID assignment cannot fail on

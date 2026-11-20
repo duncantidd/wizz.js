@@ -11,6 +11,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added — Conditionals, Comparisons, Logical Operators, and Calls in Template Expressions (issue #69; compiler 1.22.1 → 1.23.0, syntax 1.5.1 → 1.6.0, output unchanged at 1.12.0)
+
+#### Added
+
+- Template expressions (`{...}`, dynamic attributes, `{#if}` tests) accept the conditional operator `a ? b : c` (right-associative, nestable), `!==`, `<`, `>`, `<=`, `>=`, `&&`, `||`, unary `!` and `-`, `true`/`false`/`null` literals, decimal numbers (`1.5`), and calls of a function or method with any number of arguments (`plural(entries.length)`, `name.trim().length`). Precedence and grouping follow JavaScript. The CalorieCraft values from the issue can now be written inline: `{list.length === 0 ? "No entries yet" : list.length + " " + plural(list.length)}`, `class={list.length === 0 ? "entries is-empty" : "entries"}`.
+- New AST nodes from `prattParser.js`: `UnaryExpression`, `LogicalExpression`, `ConditionalExpression`, `CallExpression`; `true`/`false`/`null` are `Literal`. `dependencyAnalyzer.js` walks all of them. Every branch of a conditional and both operands of `&&`/`||` count as dependencies, so a branch not taken at mount still updates when the test flips. A call depends on its arguments and on its callee only when the callee is a reactive `let`.
+- Diagnostics (all reachable directly from the expression modules; through `compile()` they surface inside WIZZ-P031/P032/P033):
+  - **WIZZ-P056** — `++`/`--`. JavaScript reads these as update operators (`{--count}` would mutate state), never as two signs.
+  - **WIZZ-P057** — number and string literals a strict-mode module cannot load: leading zeros (`01`), `1.foo`, octal escapes, malformed `\x`/`\u` escapes.
+  - **WIZZ-P058** — a conditional without its `:`.
+  - **WIZZ-P059** — calling something other than a name or method (`f()()`, `'a'()`).
+  - **WIZZ-P060** — `eval`, `Function`, `constructor`, `__proto__`, `setTimeout`, or `setInterval` anywhere in an expression that contains a call. These are the code-from-string sinks (`x.constructor.constructor(s)` is `Function(s)`). This is defense in depth (templates share the script's trust), and expressions without a call are unaffected, so `{x.constructor.name}` still compiles.
+  - **WIZZ-P061** — strict-mode reserved words read as names (`new(x)`, `delete(a.b)`, `import(url)`, `typeof(a)`). Property names (`list.delete(1)`) are fine.
+- `==`/`!=` now fail with a pointer to `===`/`!==` (WIZZ-P026, reworded).
+
+#### Changed
+
+- `expressionLexer.js` matches operators longest-first, follows JavaScript string escapes (`'it\'s'` lexes as one string, and its value is the cooked string), and rejects raw line breaks inside strings. Before this, a `\'` ended the string early.
+- `integrator.js`: WIZZ-P031/P032 messages append the underlying reason (without its expression-local location, which errorAugmenter would otherwise stamp as the component location). The WIZZ-P055 suggestion parenthesizes operands that bind as loosely as `+` or looser: `class="card {on ? 'a' : 'b'}"` suggests `class={"card " + (on ? 'a' : 'b')}`, and `"n{x - 1}"` suggests `{"n" + (x - 1)}`, which also corrects the arithmetic the old suggestion got wrong.
+- The template limits table (`scripts/mcpTools.js`, README "Template Language at a Glance", MCP `language_contract`/`project_overview`) documents the new grammar and the new silent limit: a call re-renders only when a reactive name passed to it changes.
+- Versions: **syntax minor** (additive grammar; every expression that compiled before parses to the same AST, except `true`/`false`/`null`, which are now `Literal` rather than `Identifier`, and escaped strings, whose `Literal` value is now the cooked string. Neither changes the emitted code). **Output unchanged**: every generator splices expression source into a parenthesized position (`String(...)`, `if (...)`, `() => (...)`, call arguments, assignment right-hand sides), so the generated structure is the same and only more source reaches it. **Compiler minor**, and `package.json` follows it. `version.js` also drops a duplicated 1.22.1 comment block.
+
+#### Migration
+
+- Derived values no longer need their own reactive `let` and `sync()` bookkeeping when they fit in an expression. Pass the state a helper reads as an argument: `{plural(entries.length)}` updates when `entries` changes, `{plural()}` reading `entries` inside the function does not. Derived declarations (the issue's second suggested direction) are not part of this change.
+- A quoted attribute whose braces now hold a valid expression (`title="{a ? b : c}"`, `data-x="{!flag}"`) fails with WIZZ-P055 instead of rendering the braces literally. That is the diagnostic's purpose; bind it unquoted.
+- A component whose expression used a reserved word as a name, `++`/`--`, a leading-zero number, `1.foo`, or a raw line break inside a string already produced a module that failed to load or mutated state. It now fails at compile time with a located code.
+
+#### Tests
+
+- `expressionParser.test.js`: lexing of every new operator with locations; conditional associativity and precedence against `||`/`&&`; unary binding; literal keywords; calls (zero/many arguments, methods, grouped callees, reserved property names); decimals and rejected number forms; string escape cooking and rejection; update operators, loose equality, malformed conditionals/calls, and operators still outside the grammar; reserved words; unsafe names with and without a call; the depth budget across prefix, conditional, and call recursion (including a 100k unary flood); 20k-long chains through the iterative safety pass; and an oracle that evaluates the AST against the raw source run as strict-mode JavaScript, over 21 hand-picked cases and a 3,000-expression seeded fuzz corpus.
+- `dependencyAnalyzer.test.js`: dependencies through every conditional branch, logical/unary operands, literal keywords, call arguments, a reactive callee, a method on state, and a call with no reactive argument; dynamic attributes and `{#if}` tests using the new forms.
+- `integrator.test.js`: new forms at every expression site, the reason-bearing P031/P032 messages without a local location, P055 suggestion grouping, and brace groups that stay literal (`[a-z]{2,4}`, `{a:1}`, `{--a}`).
+- `diagnostics.test.js`: one corpus entry per new code. `mcpTools.test.js`: the excluded-forms list now covers what is still excluded, plus a silent-limit test showing that `{label()}` is never rewritten while `{label(n)}` is.
+- `test/endToEnd.test.js` + `test/fixtures/expressions.wizz`: a mounted component re-renders a conditional class, a conditional label with a call, a `&&`/`!` condition with two dependencies, and a unary/decimal expression as state changes, then tears down cleanly.
+
 ### Fixed — Expressions in Quoted Attribute Values Are Diagnosed (issue #64; compiler 1.22.0 → 1.22.1, syntax 1.5.0 → 1.5.1, output unchanged at 1.12.0)
 
 #### Fixed

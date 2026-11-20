@@ -139,6 +139,43 @@ test('inline-handlers fixture updates the DOM from assignments in inline arrow h
   assert.deepEqual(button.listeners, {});
 });
 
+test('expressions fixture re-renders conditionals, comparisons, and calls from state (issue #69)', async () => {
+  const { source, target, component } = mountFixture('expressions');
+  const main = target.childNodes[0];
+  const add = findElement(target, 'button');
+  const dismiss = findElement(target, 'a');
+  const text = (name) => findElement(target, name).childNodes[0].nodeValue;
+
+  // The expression source reaches the module verbatim.
+  assert.match(source, /String\(entries\.length === 0 \? 'No entries yet' : entries\.length \+ ' ' \+ plural\(entries\.length\)\)/);
+  assert.equal(main.attributes.class, 'entries is-empty');
+  assert.equal(text('p'), 'No entries yet');
+  assert.equal(text('span'), 'OK');
+  assert.equal(text('em'), '0');
+
+  add.dispatchEvent('click');
+  await flushUpdates();
+  assert.equal(main.attributes.class, 'entries');
+  assert.equal(text('p'), '1 entry');
+  assert.equal(text('em'), '-1.5');
+
+  add.dispatchEvent('click');
+  add.dispatchEvent('click');
+  await flushUpdates();
+  assert.equal(text('p'), '3 entries');
+  assert.equal(text('span'), 'Over budget');
+
+  // The branch's other dependency updates the same text.
+  dismiss.dispatchEvent('click');
+  await flushUpdates();
+  assert.equal(text('span'), 'OK');
+  assert.equal(text('em'), '-4.5');
+
+  component.destroy();
+  assert.deepEqual(add.listeners, {});
+  assert.deepEqual(target.childNodes, []);
+});
+
 test('profile fixture renders constants once and reactive state through events', async () => {
   const { document, component } = mountFixture('profile');
 

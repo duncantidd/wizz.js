@@ -31,6 +31,35 @@ function analyzeDependencies(astPayload) {
         extractIdentifiers(exprAST.right, deps);
         break;
 
+      case 'LogicalExpression':
+        // Both operands count even though one may be short-circuited: which
+        // one runs depends on state, and a change to either can change the
+        // result.
+        extractIdentifiers(exprAST.left, deps);
+        extractIdentifiers(exprAST.right, deps);
+        break;
+
+      case 'UnaryExpression':
+        extractIdentifiers(exprAST.argument, deps);
+        break;
+
+      case 'ConditionalExpression':
+        // Every branch counts, not just the one taken at mount: flipping the
+        // test selects the other branch, whose names must already be wired.
+        extractIdentifiers(exprAST.test, deps);
+        extractIdentifiers(exprAST.consequent, deps);
+        extractIdentifiers(exprAST.alternate, deps);
+        break;
+
+      case 'CallExpression':
+        // A reactive `let` holding a function is a dependency like any other
+        // read. What the callee reads internally is invisible here: state a
+        // called function depends on must be passed as an argument
+        // (`{label(count)}`) for the expression to update when it changes.
+        extractIdentifiers(exprAST.callee, deps);
+        for (const argument of exprAST.arguments) extractIdentifiers(argument, deps);
+        break;
+
       case 'MemberExpression':
         // For object access like `user.name`, the root object `user` is the actual state dependency
         extractIdentifiers(exprAST.object, deps);

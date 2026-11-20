@@ -21,6 +21,25 @@ function isExpression(source) {
   }
 }
 
+// The reason an expression was rejected, appended to the attribute and
+// `{#if}` diagnostics. Its location is local to the expression, so it is
+// dropped: errorAugmenter stamps the first `at L:C` in a message as the
+// component location.
+function reason(error) {
+  const detail = typeof error?.message === 'string' ? error.message.replace(/ at \d+:\d+\.?$/, '').replace(/\.$/, '') : '';
+  return detail ? `: ${detail}.` : '.';
+}
+
+// In a `+` chain, an operand that binds looser than `+` (a conditional, a
+// comparison, `&&`/`||`) or as loosely (`a - b`, which would be read
+// left-to-right from the string) must keep its own grouping.
+function concatenationPart(source) {
+  const ast = parseExpression(lexExpression(source));
+  const binds = ast.type === 'ConditionalExpression' || ast.type === 'LogicalExpression'
+    || (ast.type === 'BinaryExpression' && ast.operator !== '*' && ast.operator !== '/');
+  return binds ? `(${source})` : source;
+}
+
 // Builds the `+` form of a quoted value for the suggestion (template literals
 // are not in the expression grammar). A leading string literal keeps `{a}{b}`
 // from becoming numeric addition.
@@ -31,7 +50,9 @@ function concatenation(value) {
     if (!isExpression(match[1])) continue;
     if (match.index > last) parts.push(JSON.stringify(value.slice(last, match.index)));
     else if (!parts.length && match[0] !== value) parts.push('""');
-    parts.push(match[1].trim());
+    // A value that is one expression needs no grouping: it is the whole
+    // dynamic value.
+    parts.push(match[0] === value ? match[1].trim() : concatenationPart(match[1].trim()));
     last = match.index + match[0].length;
   }
   if (last < value.length) parts.push(JSON.stringify(value.slice(last)));
@@ -97,7 +118,7 @@ function integrateExpressions(node) {
       try {
         attribute.expressionAST = parseExpression(lexExpression(attribute.value));
       } catch (error) {
-        throw compilerDiagnostic(CODES.parser.dynamicAttributeMissingExpression, `Dynamic attribute '${attribute.name}' must contain a supported expression.`);
+        throw compilerDiagnostic(CODES.parser.dynamicAttributeMissingExpression, `Dynamic attribute '${attribute.name}' must contain a supported expression${reason(error)}`);
       }
     }
   }
@@ -105,8 +126,8 @@ function integrateExpressions(node) {
   if (node.type === 'IfBlock') {
     try {
       node.testAST = parseExpression(lexExpression(node.test));
-    } catch {
-      throw compilerDiagnostic(CODES.parser.conditionalExpressionMissing, 'Conditional expression must contain a supported expression.');
+    } catch (error) {
+      throw compilerDiagnostic(CODES.parser.conditionalExpressionMissing, `Conditional expression must contain a supported expression${reason(error)}`);
     }
     node.consequent.forEach(integrateExpressions);
     node.alternate?.forEach(integrateExpressions);

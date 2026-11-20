@@ -43,7 +43,7 @@ The `.wizz` template language is deliberately small. Read this table before desi
 
 | Area | Supported | Current limit | How it fails | Working pattern |
 | --- | --- | --- | --- | --- |
-| Expressions `{...}` | Identifiers, member access (`a.b`), integer and string literals, `+ - * /`, `===`, and parentheses. | No calls, ternaries, `!`, `!==`, `<`/`>`, `&&`/`\|\|`, indexing (`a[0]`), template literals, decimals, or array/object literals. | Compile error (WIZZ-P033) | Compute the value in a script handler into a reactive `let` and render `{label}`. There are no computed values, so recompute it in every handler that changes its inputs. |
+| Expressions `{...}` | Identifiers, member access (`a.b`), number (`1`, `1.5`), string, `true`/`false`/`null` literals, `+ - * /`, `=== !== < > <= >=`, `&&`/`\|\|`, unary `!`/`-`, the conditional `a ? b : c`, calls of a function or method (`plural(n)`, `name.trim()`), and parentheses. | No indexing (`a[0]`), `==`/`!=`, `??`, `?.`, `++`/`--`, template literals, array/object literals, arrow functions, or calling a call result (`f()()`). A call updates only when a reactive name it is given changes: a function reading state internally is not tracked. `eval`, `Function`, `constructor`, `__proto__`, and the timers cannot appear in an expression that calls. | Excluded forms: compile error (WIZZ-P033); state read inside a called function: silent | Pass the state a function needs as arguments: `{plural(entries.length)}`, not `{plural()}`. For anything outside the grammar, compute the value in a script handler into a reactive `let` and render `{label}`. |
 | `{#if}` | `{#if cond}...{:else}...{/if}`, nesting, events, lists, and components inside branches. The test is re-evaluated whenever a reactive `let` or prop it reads changes, and the branch is replaced: the old one leaves the DOM with its listeners and child components, and the new one is built from current state. | No `{:else if}`. A test that reads only `const` values is evaluated once, at mount. A replaced branch is rebuilt, so DOM state inside it (typed input text, scroll position, a child component's own state) is not kept. | `{:else if}`: compile error (WIZZ-P033); `const` test and lost branch state: silent | Chain conditions by nesting `{#if}` inside `{:else}`. Keep state that must survive a hidden branch in a script `let`, or keep the element mounted and toggle it with `hidden={flag}`. |
 | `{#each}` collection | A bare identifier naming a top-level `let` array, keyed `(item.id)` or keyless. | No member collections (`state.items`) or index alias (`item, i`). A `const` collection renders once. In-place mutation (`items.push(x)`) does not update. | Syntax: WIZZ-P002; `const` and mutation: silent non-update | Reassign the array: `items = [...items, x]`. Store any index or flag you need on the items themselves. |
 | `{#each}` body | Exactly one native root element per item; its text and dynamic attributes update. `on:` handlers anywhere in the item run with the item variable in scope (`on:click={() => remove(item.id)}`); they attach per item and detach when the item is removed. | No imported components (WIZZ-G004) or nested `{#if}`/`{#each}` (WIZZ-G005); one root element only (WIZZ-G003); the block must sit inside a native element. A handler expression is evaluated once per item, so `on:click={makeHandler(item)}` keeps the handler built from the item's first value. | Compile error; a stale `makeHandler(item)`: silent | Write per-row handlers as inline arrows, which read the item when they run: `on:click={() => pick(item.id)}`. Precompute per-row variants (class suffix, label) as item fields. |
@@ -158,7 +158,7 @@ Print what you have installed with:
 wizz --version
 ```
 
-which prints the compiler and contract version triple, for example `wizz 1.22.1 (compiler 1.22.1, syntax 1.5.1, output 1.12.0)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
+which prints the compiler and contract version triple, for example `wizz 1.23.0 (compiler 1.23.0, syntax 1.6.0, output 1.12.0)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
 
 `wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
 
@@ -304,7 +304,7 @@ Render content conditionally with an `if` block and optional `else` branch:
 {/if}
 ```
 
-Conditions currently support the Wizz expression grammar, including identifiers, member access, string literals, and strict equality.
+Conditions use the same expression grammar as interpolations: comparisons (`=== !== < > <= >=`), `&&`/`||`, `!`, the conditional operator, and calls such as `{#if items.length > 0 && !busy}`.
 
 An `if` block is reactive: when a reactive `let` or prop its condition reads changes, the condition is re-evaluated and, if the result flips, the rendered branch is replaced in place.
 
@@ -557,7 +557,7 @@ As a consumer of generated modules, within one `output` major version every gene
 A breaking change to either contract bumps its major version and the compiler's major version. Every compiled module is stamped with all three versions on its first line, so build artifacts stay traceable to the compiler that produced them:
 
 ```js
-// Generated by Wizz 1.22.1 (component syntax 1.5.1, generated output 1.12.0). Edits will be overwritten.
+// Generated by Wizz 1.23.0 (component syntax 1.6.0, generated output 1.12.0). Edits will be overwritten.
 ```
 
 `compile()` also returns the frozen version table as its `version` field.

@@ -92,3 +92,60 @@ test('suggestion keeps string concatenation when the value starts with an expres
     (error) => error.message.includes('class={"" + a + b}')
   );
 });
+
+// Issue #69: the extended grammar reaches every expression site.
+test('integrates conditional, logical, unary, comparison, and call expressions', () => {
+  const ast = integrateSource(
+    "<ul class={items.length === 0 ? 'entries is-empty' : 'entries'}>"
+    + '{#if !busy && items.length > 0}<li>{plural(items.length)}</li>{/if}</ul>'
+  );
+  const list = ast.children[0];
+  assert.equal(list.attributes[0].expressionAST.type, 'ConditionalExpression');
+  assert.equal(list.children[0].testAST.type, 'LogicalExpression');
+  assert.equal(list.children[0].consequent[0].children[0].expressionAST.type, 'CallExpression');
+});
+
+test('dynamic attribute and if-test diagnostics carry the reason without a local location', () => {
+  // The reason's own `at L:C` is local to the expression; leaving it in would
+  // let errorAugmenter stamp it as the component location.
+  assert.throws(
+    () => integrateSource('<p class={a ? b}>x</p>'),
+    (error) => error.code === 'WIZZ-P032'
+      && error.message === "Dynamic attribute 'class' must contain a supported expression: Expected ':' in conditional expression."
+  );
+  assert.throws(
+    () => integrateSource('<main>{#if --count}<b>x</b>{/if}</main>'),
+    (error) => error.code === 'WIZZ-P031'
+      && /^Conditional expression must contain a supported expression: Update operator '--'/.test(error.message)
+      && !/ at \d+:\d+/.test(error.message)
+  );
+});
+
+test('the quoted-value suggestion groups operands that bind looser than +', () => {
+  assert.throws(
+    () => integrateSource('<div class="card {active ? \'on\' : \'off\'}"></div>'),
+    (error) => error.code === 'WIZZ-P055' && error.message.includes('class={"card " + (active ? \'on\' : \'off\')}')
+  );
+  assert.throws(
+    () => integrateSource('<div data-n="n{x - 1}"></div>'),
+    (error) => error.message.includes('data-n={"n" + (x - 1)}')
+  );
+  // Tighter-binding operands and a whole-value expression stay bare.
+  assert.throws(
+    () => integrateSource('<div data-n="n{x * 2}{f(y)}"></div>'),
+    (error) => error.message.includes('data-n={"n" + x * 2 + f(y)}')
+  );
+  assert.throws(
+    () => integrateSource('<div title="{a || b}"></div>'),
+    (error) => error.message.includes('title={a || b}')
+  );
+});
+
+test('brace groups the extended grammar still rejects stay literal in quoted values', () => {
+  // Regex quantifiers, object literals, and update operators are not
+  // expressions, so they never trip WIZZ-P055.
+  for (const value of ['[a-z]{2,4}', '{a:1}', '{a?}', '{--a}', '{f(a,)}']) {
+    const ast = integrateSource(`<input pattern='${value}'>`.replace('>', ' />'));
+    assert.equal(ast.children[0].attributes[0].value, value);
+  }
+});

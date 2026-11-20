@@ -148,7 +148,7 @@ The current implementation is intentionally small. Documentation should distingu
 | Interpolations | `{...}` in template text, nested braces, quotes, and escapes while locating the end brace | The expression grammar below determines which interpolation contents can be compiled. |
 | Conditionals | `{#if condition}...{:else}...{/if}` | The parser attaches the parsed condition as `testAST`. A condition that reads reactive state is re-evaluated when that state changes and the branch is replaced; one that reads none is evaluated once, during mounting. |
 | Lists | `{#each items as item (item.id)}...{/each}` and `{#each items as item}...{/each}` | Each blocks require an identifier collection and an item alias; the `item.key` parentheses are optional. Keyed and keyless forms both require exactly one native root element in their body. `on:` directives inside the body are ordinary attributes to the parser; the generator binds them per item with the item alias in scope. |
-| Expressions | Identifiers, integer and string literals, `+`, `-`, `*`, `/`, `.`, `===`, and parentheses | No booleans, calls, arrays, objects, assignments, non-strict comparisons, optional chaining, or unary operators. |
+| Expressions | Identifiers; number (`1`, `1.5`), string, `true`/`false`/`null` literals; `+ - * /`; `=== !== < > <= >=`; `&&`/`\|\|`; unary `!` and `-`; the conditional `a ? b : c`; member access; calls of a name or method (`plural(n)`, `s.trim()`); parentheses | No indexing, arrays, objects, assignments, update operators (`++`/`--`, WIZZ-P056), loose comparisons, `??`, optional chaining, template literals, arrow functions, or calling a call result (WIZZ-P059). Reserved words cannot be read as names (WIZZ-P061). An expression that calls cannot mention `eval`, `Function`, `constructor`, `__proto__`, `setTimeout`, or `setInterval` (WIZZ-P060). |
 | Component imports | Default imports ending in `.wizz`, such as `import Counter from './Counter.wizz';` | Imported modules are rewritten to `.js` in generated output. Named, namespace, dynamic, and non-Wizz imports are outside this contract. |
 | Component props | `export let name = 'Guest';` and bare `export let count;` declarations | One prop per statement, terminated with a semicolon. `export` followed by anything other than `let` is an error. Prop names cannot be reserved words, `props`, `__proto__`, or use the reserved `__wizz` prefix. |
 | Script scanning | Semicolon-terminated `let`/`const` assignments and named `function` declarations | It is a targeted regex scanner, not a JavaScript parser. `var`, classes, arrow functions, and syntax without the recognized forms are not reported. |
@@ -229,7 +229,9 @@ The HTML tree builder drops a single newline immediately after a `pre`, `textare
 
 `lexExpression()` tokenizes the raw string inside an interpolation. It is deliberately independent of the markup tokenizer: markup needs to find interpolation boundaries, while this lexer knows the smaller expression language.
 
-It emits `Identifier`, `Number`, operator/delimiter tokens for `+`, `-`, `*`, `/`, `.`, `(`, and `)`, followed by a mandatory `EOF` token. Whitespace is skipped. Identifiers begin with a letter or underscore and may then contain letters, digits, and underscores. Numbers are currently non-negative integer literals and are converted to JavaScript `Number` values.
+It emits `Identifier`, `Number`, `String`, and operator/delimiter tokens (`===`, `!==`, `<=`, `>=`, `&&`, `||`, `+`, `-`, `*`, `/`, `.`, `(`, `)`, `!`, `<`, `>`, `?`, `:`, `,`, matched longest-first), followed by a mandatory `EOF` token. Whitespace is skipped. Identifiers begin with a letter or underscore and may then contain letters, digits, and underscores. Numbers are non-negative integer or decimal literals (`1.5`) converted to JavaScript `Number` values.
+
+The generators emit an expression's raw source verbatim, so every token boundary must be the one JavaScript draws. The lexer therefore rejects source that JavaScript would read differently or refuse to load: `++`/`--` (an update operator, never two signs; WIZZ-P056), `==`/`!=` (with a pointer to the strict form), leading-zero numbers and `1.foo` (WIZZ-P057), raw line breaks inside strings, and malformed `\x`/`\u`/octal escapes (WIZZ-P057). String escapes follow JavaScript (`\'` does not end the string) and the token's value is the cooked string; the emitted source is untouched.
 
 Every token has line and column information relative to the interpolation string. This local location is remapped to the component location by `integrator.js`. Invalid characters raise a `SyntaxError` at the offending local coordinate.
 
@@ -239,7 +241,7 @@ Every token has line and column information relative to the interpolation string
 
 `parseExpression()` implements a Pratt parser over the expression-lexer tokens. A Pratt parser keeps precedence rules near the operators that use them, making this small grammar easy to extend without reorganizing a large recursive-descent parser.
 
-`PRECEDENCE` assigns low binding power to `EOF`, then addition/subtraction, multiplication/division, and finally property access. As a result, `user.name + 1 * 2` parses property access first, multiplication second, and addition last.
+`PRECEDENCE` mirrors JavaScript for the accepted subset, loosest first: `EOF`, the conditional `?`, `||`, `&&`, `===`/`!==`, `< > <= >=`, `+`/`-`, `*`/`/`, prefix `!`/`-` (`unary`), and finally member access and calls. As a result, `user.name + 1 * 2` parses property access first, multiplication second, and addition last; `-a.b` is `-(a.b)`; and `a ? b : c ? d : e` groups to the right. Because the emitted code is the raw source, a grouping that differed from JavaScript's would make dependency analysis reason about a different expression than the one that runs. `expressionParser.test.js` checks that the two agree by evaluating the AST against the source run as strict-mode JavaScript, over hand-picked cases and a seeded fuzz corpus.
 
 The parser's internal parselets produce these AST forms:
 
@@ -248,9 +250,16 @@ The parser's internal parselets produce these AST forms:
 { type: 'Literal', value: 1 }
 { type: 'BinaryExpression', operator: '+', left, right }
 { type: 'MemberExpression', object, property: { type: 'Identifier', name: 'name' } }
+{ type: 'Literal', value: true }                            // also false, null, strings, numbers
+{ type: 'UnaryExpression', operator: '!', argument }        // or '-'
+{ type: 'LogicalExpression', operator: '&&', left, right }  // or '||'
+{ type: 'ConditionalExpression', test, consequent, alternate }
+{ type: 'CallExpression', callee, arguments: [] }           // callee: Identifier or MemberExpression
 ```
 
-Prefix parselets handle identifiers, numbers, and grouped expressions. Infix parselets handle arithmetic and member access. The final `EOF` check is essential: it rejects partial parses such as `1 2` instead of accepting the first valid fragment and ignoring the rest. Parser errors include the location supplied by the lexer, including missing `)` and a non-identifier property after `.`.
+Prefix parselets handle identifiers, numbers, strings, `!`/`-`, and grouped expressions. `true`/`false`/`null` become `Literal`. Strict-mode reserved words such as `new`, `delete`, `typeof`, and `import` are WIZZ-P061: they never loaded as names, and with calls in the grammar `new(x)` or `import(url)` would construct objects or load code. Infix parselets handle arithmetic, comparisons, `&&`/`||`, the conditional (a missing `:` is WIZZ-P058), member access, and calls. A callee must be a name or a method (WIZZ-P059), and arguments are comma-separated with no trailing comma.
+
+An expression containing a call gets one more check after parsing: `eval`, `Function`, `constructor`, `__proto__`, `setTimeout`, and `setInterval` anywhere in it are WIZZ-P060, since those are the ways to turn a string into running code (`x.constructor.constructor(s)` is `Function(s)`). Template expressions share the script's trust, so this is defense in depth rather than a sandbox. Expressions without a call are not checked, so `{x.constructor.name}` keeps compiling as before. The check walks the AST iteratively, and every recursive parselet (groups, prefix operators, conditional branches, call arguments) draws on the WIZZ-P053 depth budget. The final `EOF` check is essential: it rejects partial parses such as `1 2` instead of accepting the first valid fragment and ignoring the rest. Parser errors include the location supplied by the lexer, including missing `)` and a non-identifier property after `.`.
 
 ### `integrator.js` - Template Expression Integration
 
@@ -258,7 +267,7 @@ Prefix parselets handle identifiers, numbers, and grouped expressions. Infix par
 
 `integrateExpressions()` recursively visits a template AST. For each `Expression` node, it calls `lexExpression(node.value)` and `parseExpression(tokens)`, then assigns the result to `node.expressionAST`.
 
-Static (quoted) attribute values are checked too: a `{...}` group inside one whose content parses as an expression (`class="card {tone}"`) throws `WIZZ-P055`, naming the attribute and suggesting the unquoted form (`class={"card " + tone}`). Brace groups that are not expressions (`'{"a":1}'`, `{}`) stay literal text, and `on:` attributes are skipped.
+Static (quoted) attribute values are checked too: a `{...}` group inside one whose content parses as an expression (`class="card {tone}"`) throws `WIZZ-P055`, naming the attribute and suggesting the unquoted form (`class={"card " + tone}`). An operand that binds as loosely as `+` or looser is parenthesized in the suggestion (`class={"card " + (on ? 'a' : 'b')}`). Brace groups that are not expressions (`'{"a":1}'`, `{}`) stay literal text, and `on:` attributes are skipped.
 
 It intentionally mutates and returns the same AST. The mutation preserves template node identity for callers while enriching it with compiler-ready expression structure. Keeping the original `value` alongside `expressionAST` also preserves the source form for diagnostics or future transforms.
 
@@ -269,6 +278,8 @@ Template Expression Error at <line>:<column> - <expression error>
 ```
 
 That translation ensures a developer can find a bad expression from the original component file rather than manually calculating offsets inside a brace-delimited fragment.
+
+Dynamic attribute (WIZZ-P032) and `{#if}` test (WIZZ-P031) failures append the expression error's reason with its expression-local location removed, because errorAugmenter stamps the first `at L:C` in a message as the component location.
 
 ### `extractor.js` - Script Extraction and Pruning
 

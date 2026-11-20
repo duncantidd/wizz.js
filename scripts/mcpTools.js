@@ -581,10 +581,10 @@ async function buildProjectHandler(args, { root }) {
 const TEMPLATE_LIMITS = Object.freeze([
   {
     area: 'Expressions `{...}`',
-    supported: 'Identifiers, member access (`a.b`), integer and string literals, `+ - * /`, `===`, and parentheses.',
-    limit: 'No calls, ternaries, `!`, `!==`, `<`/`>`, `&&`/`||`, indexing (`a[0]`), template literals, decimals, or array/object literals.',
-    failure: 'Compile error (WIZZ-P033)',
-    workaround: 'Compute the value in a script handler into a reactive `let` and render `{label}`. There are no computed values, so recompute it in every handler that changes its inputs.'
+    supported: 'Identifiers, member access (`a.b`), number (`1`, `1.5`), string, `true`/`false`/`null` literals, `+ - * /`, `=== !== < > <= >=`, `&&`/`||`, unary `!`/`-`, the conditional `a ? b : c`, calls of a function or method (`plural(n)`, `name.trim()`), and parentheses.',
+    limit: 'No indexing (`a[0]`), `==`/`!=`, `??`, `?.`, `++`/`--`, template literals, array/object literals, arrow functions, or calling a call result (`f()()`). A call updates only when a reactive name it is given changes: a function reading state internally is not tracked. `eval`, `Function`, `constructor`, `__proto__`, and the timers cannot appear in an expression that calls.',
+    failure: 'Excluded forms: compile error (WIZZ-P033); state read inside a called function: silent',
+    workaround: 'Pass the state a function needs as arguments: `{plural(entries.length)}`, not `{plural()}`. For anything outside the grammar, compute the value in a script handler into a reactive `let` and render `{label}`.'
   },
   {
     area: '`{#if}`',
@@ -699,8 +699,11 @@ Script boundary (inside <script>):
   name is allowed. Generated names are private: a script cannot read them.
 
 Template expressions ({...}) use a safe subset: identifiers, member access,
-integer and string literals, + - * /, strict equality (===), and
-parentheses — no arbitrary JS. Text output escapes &, <, >; attribute values
+number, string, true/false/null literals, + - * /, strict equality (===)
+and !==, < > <= >=, && ||, unary ! and -, the conditional a ? b : c,
+calls of a function or method (plural(n)), and parentheses — no
+arbitrary JS. A call re-renders only when a reactive name passed to it
+changes. Text output escapes &, <, >; attribute values
 additionally escape ".
 
 Directives:
