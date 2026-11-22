@@ -177,12 +177,20 @@
 // (WIZZ-G026: a reactive name assigned where no update is scheduled).
 // Warnings never fail a compile and change no generated output.
 //
+// compiler 1.24.0 / syntax 1.6.0 / output 1.13.0: a release bump for
+// milestone 24 (`wizz init` asks sample-or-bare; `--sample`/`--bare`). The
+// compiler pipeline is unchanged, but the package version is pinned in
+// lockstep with `compiler` and the release workflow requires the tag to match
+// it, so shipping the new CLI capability needs a compiler minor (the same
+// call milestone 19 made for `wizz init` itself). Syntax and output hold;
+// generated modules differ only in the version banner.
+//
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.23.0',
+  compiler: '1.24.0',
   syntax: '1.6.0',
   output: '1.13.0'
 });

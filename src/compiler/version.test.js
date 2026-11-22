@@ -121,8 +121,10 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // instrumented parenthesized-assignment handlers (issue #73). Syntax minor;
   // output minor (the numeric-binding helper and the newly instrumented
   // handlers).
+  // compiler 1.24.0: release bump for milestone 24's interactive `wizz init`
+  // (CLI only; package version lockstep). Syntax and output unchanged.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.23.0',
+    compiler: '1.24.0',
     syntax: '1.6.0',
     output: '1.13.0'
   });
