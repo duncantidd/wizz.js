@@ -235,8 +235,9 @@ test('language_contract documents the version triple, language surface, and diag
   const { text } = await registry.call('language_contract', {});
   // The literal triple is pinned deliberately: a version bump fails this
   // test until the contract text has been reviewed against the compiler.
-  assert.match(text, /compiler 1\.23\.0, syntax 1\.6\.0, output 1\.13\.0/);
+  assert.match(text, /compiler 1\.24\.0, syntax 1\.6\.0, output 1\.13\.0/);
   // Reviewed for 1.23.0 / output 1.13.0 (issues #69 and #73): the expression grammar, bindings, and G026 warnings.
+  // Reviewed for 1.24.0: a CLI-only release (milestone 24, wizz init --sample/--bare); syntax and output are unchanged, so the contract text stands as is.
   assert.match(text, /- bind:value=\{name\} on <input>, <textarea>, <select>/);
   assert.match(text, /warning WIZZ-G026/);
   assert.match(text, /the conditional a \? b : c,\ncalls of a function or method/);
