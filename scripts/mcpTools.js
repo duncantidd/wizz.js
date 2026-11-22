@@ -773,9 +773,12 @@ function devWorkflowHandler() {
   return {
     text: `Wizz development and deployment workflow
 
-wizz init [directory] [--force]
-    Scaffold the starter project (index.html shell, src/App.wizz, pages,
-    components, a server API handler). Existing files are never overwritten.
+wizz init [directory] [--force] [--sample | --bare]
+    Scaffold a starter project: the full sample (index.html shell, App.css,
+    src/App.wizz, pages, components, a server API handler) or the bare
+    canonical shape (--bare: README.md, stylesheet-free index.html,
+    placeholder src/App.wizz). Prompts on a TTY; defaults to --sample
+    without a TTY. Existing files are never overwritten.
 
 wizz dev [--port <n>] [--host <addr>]
     Build src into dist, serve at http://127.0.0.1:3000 (or --port), watch

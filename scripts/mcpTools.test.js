@@ -259,6 +259,7 @@ test('dev_workflow documents the real commands, deploy recipe, and secrets rule'
   const root = createProjectFixture();
   const registry = createRegistry(root);
   const { text } = await registry.call('dev_workflow', {});
+  assert.match(text, /wizz init \[directory\] \[--force\] \[--sample \| --bare\]/);
   assert.match(text, /wizz dev \[--port/);
   assert.match(text, /wizz build \[input-directory\]/);
   assert.match(text, /--adapter node/);
