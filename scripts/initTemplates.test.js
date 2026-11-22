@@ -1,9 +1,32 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const TEMPLATES = require('./initTemplates.js');
+const { TEMPLATE_SETS, DEFAULT_TEMPLATE } = require('./initTemplates.js');
+
+const TEMPLATES = TEMPLATE_SETS.sample;
+const BARE = TEMPLATE_SETS.bare;
 const { compile, compileServer } = require('../src/compiler');
 
-test('the template set covers exactly the canonical starter files', () => {
+test('the template table names exactly the sample and bare sets, defaulting to sample', () => {
+  assert.deepEqual(Object.keys(TEMPLATE_SETS), ['sample', 'bare']);
+  assert.equal(DEFAULT_TEMPLATE, 'sample');
+  // No prototype: a name like __proto__ or constructor can never resolve to
+  // an inherited object, so it cannot smuggle a foreign file set in.
+  assert.equal(Object.getPrototypeOf(TEMPLATE_SETS), null);
+  assert.equal(TEMPLATE_SETS.__proto__, undefined);
+  assert.equal(TEMPLATE_SETS.constructor, undefined);
+});
+
+test('the template table and its sets are frozen against mutation', () => {
+  assert.ok(Object.isFrozen(TEMPLATE_SETS));
+  for (const name of Object.keys(TEMPLATE_SETS)) {
+    assert.ok(Object.isFrozen(TEMPLATE_SETS[name]), name);
+  }
+  assert.throws(() => { 'use strict'; TEMPLATE_SETS.sample['evil.js'] = 'x'; }, TypeError);
+  assert.throws(() => { 'use strict'; TEMPLATE_SETS.extra = {}; }, TypeError);
+  assert.equal(TEMPLATE_SETS.sample['evil.js'], undefined);
+});
+
+test('the sample set covers exactly the canonical starter files', () => {
   assert.deepEqual(Object.keys(TEMPLATES), [
     'README.md',
     'index.html',
@@ -61,20 +84,23 @@ test('the global stylesheet carries the shared design tokens the components cons
 // vouched here the same way.
 const COMPONENT_VOUCHES = { Counter: true, Card: true };
 
-for (const [templatePath, source] of Object.entries(TEMPLATES)) {
-  if (!templatePath.endsWith('.wizz')) continue;
+for (const [setName, files] of Object.entries(TEMPLATE_SETS)) {
+  for (const [templatePath, source] of Object.entries(files)) {
+    if (!templatePath.endsWith('.wizz')) continue;
 
-  test(`the ${templatePath} template compiles for the browser target`, () => {
-    const result = compile(source);
-    assert.equal(typeof result.source, 'string');
-    assert.match(result.source, /export default function mountComponent/);
-  });
+    test(`the ${setName} ${templatePath} template compiles for the browser target without warnings`, () => {
+      const result = compile(source);
+      assert.equal(typeof result.source, 'string');
+      assert.match(result.source, /export default function mountComponent/);
+      assert.deepEqual(result.warnings || [], []);
+    });
 
-  test(`the ${templatePath} template compiles for the server target`, () => {
-    const result = compileServer(source, { componentServerRenderable: COMPONENT_VOUCHES });
-    assert.equal(typeof result.source, 'string');
-    assert.match(result.source, /export function renderComponent/);
-  });
+    test(`the ${setName} ${templatePath} template compiles for the server target`, () => {
+      const result = compileServer(source, { componentServerRenderable: COMPONENT_VOUCHES });
+      assert.equal(typeof result.source, 'string');
+      assert.match(result.source, /export function renderComponent/);
+    });
+  }
 }
 
 test('the starter App lands at / with a reactive head block and both showcase components', () => {
@@ -143,3 +169,77 @@ test('the starter API handler demonstrates the request context and the secrets r
     fs.rmSync(tempDirectory, { recursive: true, force: true });
   }
 });
+
+test('the bare set writes only the canonical shape: README, shell, and a placeholder App', () => {
+  assert.deepEqual(Object.keys(BARE), ['README.md', 'index.html', 'src/App.wizz']);
+  // Nothing from the sample's optional surface.
+  for (const templatePath of Object.keys(BARE)) {
+    assert.doesNotMatch(templatePath, /^App\.css$|^src\/(components|pages|server)\//);
+  }
+  // Bare is a strict subset of the sample's paths, so --bare over a sample
+  // project (or the reverse) refuses on the shared files.
+  for (const templatePath of Object.keys(BARE)) {
+    assert.ok(Object.prototype.hasOwnProperty.call(TEMPLATES, templatePath), templatePath);
+  }
+});
+
+test('the bare document shell keeps the runtime mount contract and links no stylesheet', () => {
+  const shell = BARE['index.html'];
+  assert.match(shell, /<div id="app"><\/div>/);
+  assert.match(shell, /<script type="module" src="\/runtime\/main\.js"><\/script>/);
+  assert.match(shell, /<meta name="viewport"/);
+  assert.match(shell, /<\/head>/);
+  // There is no App.css to link: a dangling link would 404 on every load.
+  assert.doesNotMatch(shell, /App\.css/);
+  assert.doesNotMatch(shell, /<link\b/i);
+});
+
+test('the bare App is a self-contained placeholder with no imports or styles', () => {
+  const app = BARE['src/App.wizz'];
+  assert.doesNotMatch(app, /import\s/);
+  assert.doesNotMatch(app, /<wizz:style>/);
+  assert.doesNotMatch(app, /persist\(/);
+  assert.match(app, /<main>/);
+  assert.match(app, /src\/App\.wizz/);
+});
+
+test('the bare README describes the bare layout, not the sample files', () => {
+  const readme = BARE['README.md'];
+  const layout = readme.slice(readme.indexOf('## Project layout'), readme.indexOf('## Growing the project'));
+  assert.match(layout, /index\.html\s+Document shell/);
+  assert.match(layout, /src\/App\.wizz\s+Start page \(served at \/\)/);
+  for (const sampleOnly of ['Counter.wizz', 'Card.wizz', 'Home.wizz', 'health.js', 'App.css']) {
+    assert.ok(!layout.includes(sampleOnly), sampleOnly);
+  }
+  // The build section must not claim files the bare project does not have.
+  const build = readme.slice(readme.indexOf('## Build'), readme.indexOf('## Project layout'));
+  assert.doesNotMatch(build, /App\.css/);
+  assert.doesNotMatch(build, /extracted styles/);
+  // It still teaches how to grow the project and where secrets live.
+  assert.match(readme, /src\/pages\//);
+  assert.match(readme, /src\/components\//);
+  assert.match(readme, /<link rel="stylesheet" href="\.\/App\.css">/);
+  assert.match(readme, /src\/server\/api\//);
+  assert.match(readme, /\.env\.server/);
+});
+
+test('both READMEs share the same intro and editor setup, in the same section order', () => {
+  const sections = (readme) => readme.split('\n').filter((line) => line.startsWith('## '));
+  assert.deepEqual(sections(TEMPLATES['README.md']), [
+    '## Prerequisites', '## Develop', '## Build', '## Project layout', '## Server API routes', '## Editor setup (VS Code)'
+  ]);
+  assert.deepEqual(sections(BARE['README.md']), [
+    '## Prerequisites', '## Develop', '## Build', '## Project layout', '## Growing the project', '## Editor setup (VS Code)'
+  ]);
+  const intro = (readme) => readme.slice(0, readme.indexOf('## Build'));
+  const editor = (readme) => readme.slice(readme.indexOf('## Editor setup (VS Code)'));
+  assert.equal(intro(BARE['README.md']), intro(TEMPLATES['README.md']));
+  assert.equal(editor(BARE['README.md']), editor(TEMPLATES['README.md']));
+  // Fragment joins must not double or drop blank lines between sections.
+  for (const readme of [TEMPLATES['README.md'], BARE['README.md']]) {
+    assert.doesNotMatch(readme, /\n\n\n/);
+    assert.match(readme, /\n\n## Build\n/);
+    assert.ok(readme.endsWith('it).\n'));
+  }
+});
+

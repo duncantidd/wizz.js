@@ -11,6 +11,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added — Bare-Bones Project Scaffolding (milestone 24; CLI and templates only, no compiler/syntax/output change)
+
+#### Added
+
+- `wizz init` asks `Bootstrap with sample code? [Y/n]` before writing anything. Enter, `y`, or `yes` (any case, surrounding whitespace ignored) chooses the sample project; `n` or `no` chooses the bare template; anything else asks again. The prompt is written to stderr through `node:readline`, so stdout carries only the `Created ...` report. Ctrl+C aborts with exit code 130 and end of input with exit code 1, both printing `Init aborted: no files were written.`
+- `--sample` and `--bare` init flags answer the question up front. They are init-only (every other command rejects them), mutually exclusive, and each accepted at most once; lookalikes such as `--bare=yes` count as a directory argument.
+- The bare template writes `README.md`, an `index.html` shell with no stylesheet link or `theme-color`, and a placeholder `src/App.wizz` served at `/` — no `App.css`, `src/components/`, `src/pages/`, or `src/server/api/` handler. Its README describes the bare layout and how to add pages, components, a global stylesheet, and API handlers. `wizz build`, `wizz build --adapter node`, `wizz dev`, and the MCP `project_overview` tool all handle it with no warnings, notes, or discovery errors (verified by tests; no toolchain change was needed).
+- `scripts/init.js` exports `checkInitTarget()` (the directory checks without writing, run before the prompt so an unusable target is reported before the question), `interpretTemplateAnswer()`, `promptForTemplate(ask)`, `createReadlineAsk()`, and `TEMPLATE_PROMPT`. The default `ask` shares one readline interface across re-asks and queues lines that arrive while no question is open, so typed-ahead or piped answers are not lost.
+
+#### Changed
+
+- `scripts/initTemplates.js` exports `{ TEMPLATE_SETS, DEFAULT_TEMPLATE }` instead of the bare sample map. `TEMPLATE_SETS` is a frozen null-prototype table of frozen file sets (`sample`, `bare`); `initProject(target, { template })` selects a set by name and refuses unknown or inherited names (`__proto__`, `constructor`, ...) before touching the disk. Every existing guard is unchanged: `--force` semantics, all-or-nothing conflict refusal, and target checks. The target directory is now created after the conflict check rather than before it.
+- The scaffold README is assembled from shared fragments (intro, build/layout body, editor setup); the sample project's files are byte-identical to before.
+- `runCli` resolves the init template from the flag, then from `--json` or a non-TTY stdin (sample, synchronously, so scripted calls are unchanged), and only otherwise prompts — returning a promise of the exit code on that path. `stdinIsTTY` and `ask` are injectable dependencies. `parseCommand` now reports `json` and `template` for init.
+
+#### Assumption
+
+- The roadmap listed `package.json` among the bare files. Milestone 19's canonical shape does not include one, the sample has never written one, and nothing reads one from the project root (`wizz build` writes its own `dist/package.json`), so the bare template omits it and stays a strict subset of the sample's paths. Documented in `scripts/initTemplates.js`.
+
 ### Added — Two-Way Bindings and Untracked-Assignment Warnings (issue #73; ships in the same unreleased compiler 1.23.0 and syntax 1.6.0 as issue #69; output 1.12.0 → 1.13.0)
 
 #### Added
