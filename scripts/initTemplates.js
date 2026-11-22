@@ -1,6 +1,8 @@
-// The canonical starter templates `wizz init` scaffolds.
+// The canonical starter templates `wizz init` scaffolds, grouped into named
+// file sets: `sample` (the showcase, the default) and `bare` (the minimal
+// canonical shape). See TEMPLATE_SETS at the bottom of the file.
 //
-// Together they are the showcase landing page: the global design-token
+// Together the sample files are the showcase landing page: the global design-token
 // stylesheet (App.css, linked from the document shell exactly as the dev
 // server and `wizz build` copy it), the reactive document head block, the
 // persistent Counter and the animated terminal Card, and a `/home` page
@@ -582,7 +584,12 @@ const CARD_WIZZ = `<div class="card">
 // VS Code extension that makes editing it pleasant. Release-asset URLs are
 // used instead of repository paths because a scaffolded project has no
 // clone of wizz.js — the reader installed the CLI from a release.
-const README_MD = `# My Wizz App
+//
+// The README is assembled from fragments so the sample and bare READMEs share
+// one copy of the prerequisites, dev command, and editor setup. The sample
+// README's bytes are unchanged by the split (initTemplates.test.js pins the
+// assembled text's section order).
+const README_INTRO = `# My Wizz App
 
 A [Wizz](https://github.com/duncantidd/wizz.js) application: .wizz components compiled to platform-native DOM code, server-rendered and hydrated by default, with nothing to install beyond the Wizz CLI itself.
 
@@ -599,7 +606,9 @@ A [Wizz](https://github.com/duncantidd/wizz.js) application: .wizz components co
 
 Builds the project, serves it at http://localhost:3000, and watches src/**/*.wizz for changes. Pages server-render on the server and hydrate in the browser.
 
-## Build
+`;
+
+const SAMPLE_README_BODY = `## Build
 
     wizz build
 
@@ -627,7 +636,9 @@ Keep secrets in a gitignored .env.server file at the project root; the
 development server loads it into process.env before the first request, and
 handlers read keys at request time. Add .env.server to your .gitignore.
 
-## Editor setup (VS Code)
+`;
+
+const README_EDITOR_SETUP = `## Editor setup (VS Code)
 
 Install the Wizz extension for .wizz syntax highlighting, compiler diagnostics, component navigation, and build commands. With the wizz CLI on your PATH, one command installs the latest release's extension package:
 
@@ -673,14 +684,106 @@ export default async function handler(request) {
 }
 `;
 
-// Insertion order is the scaffold order init reports.
-module.exports = {
-  'README.md': README_MD,
-  'index.html': INDEX_HTML,
-  'App.css': APP_CSS,
-  'src/App.wizz': APP_WIZZ,
-  'src/pages/Home.wizz': HOME_WIZZ,
-  'src/components/Counter.wizz': COUNTER_WIZZ,
-  'src/components/Card.wizz': CARD_WIZZ,
-  'src/server/api/health.js': HEALTH_JS
-};
+const SAMPLE_README_MD = README_INTRO + SAMPLE_README_BODY + README_EDITOR_SETUP;
+
+// ---------------------------------------------------------------------------
+// The bare template: only what the canonical project shape needs to build
+// and serve — the document shell, a placeholder App at /, and a README that
+// describes that layout. No App.css, components, pages, or API handler.
+//
+// Assumption (roadmap milestone 24 lists `package.json` among the bare files):
+// the canonical shape from milestone 19 does not include a package.json, the
+// sample template has never written one, and nothing in the toolchain reads
+// one from the project root (`wizz build` writes its own `dist/package.json`
+// module marker). Writing one only for bare projects would make the bare
+// scaffold contain a file the full scaffold lacks, so the conservative
+// reading is to omit it and keep bare a strict subset of the shape.
+
+// The sample shell minus the App.css link (there is no stylesheet to link)
+// and the theme-color tint (it matched the sample's dark background).
+const BARE_INDEX_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <!-- Mobile devices must render at CSS-pixel width, or everything zooms out. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>wizz.js App</title>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script type="module" src="/runtime/main.js"></script>
+</body>
+</html>
+`;
+
+const BARE_APP_WIZZ = `<script>
+  let name = "wizz.js";
+</script>
+
+<main>
+  <h1>Hello from {name}</h1>
+  <p>Edit src/App.wizz to start building.</p>
+</main>
+`;
+
+const BARE_README_BODY = `## Build
+
+    wizz build
+
+Writes the production build to dist/: compiled component modules and the copied runtime, self-contained for static deployment. dist/ is disposable generated output — everything you edit lives in index.html and src/**/*.wizz.
+
+## Project layout
+
+    index.html                   Document shell
+    src/App.wizz                 Start page (served at /)
+
+## Growing the project
+
+Everything below is optional; add each piece when you need it.
+
+    src/pages/About.wizz         A routed page (served at /about)
+    src/components/Button.wizz   A component, imported from a page or App
+    App.css                      Global stylesheet: create it beside
+                                 index.html and link it from the shell with
+                                 <link rel="stylesheet" href="./App.css">
+    src/server/api/hello.js      Server API handler (served at /api/hello)
+
+Scripts inside .wizz files compile to browser modules — anything they use,
+including an API key, is visible to everyone. Code that must stay
+server-side belongs in a src/server/api/*.js handler, with secrets in a
+gitignored .env.server file at the project root that the development server
+loads into process.env before the first request.
+
+`;
+
+const BARE_README_MD = README_INTRO + BARE_README_BODY + README_EDITOR_SETUP;
+
+// The template table — the single source of truth for what `wizz init`
+// writes. init.js selects a file set by name and never branches on its
+// contents. Within a set, insertion order is the scaffold order init reports.
+// Frozen (sets and table) so a consumer cannot mutate what later scaffolds
+// write, and so the table has no prototype to look names up through.
+const TEMPLATE_SETS = Object.freeze(Object.assign(Object.create(null), {
+  sample: Object.freeze({
+    'README.md': SAMPLE_README_MD,
+    'index.html': INDEX_HTML,
+    'App.css': APP_CSS,
+    'src/App.wizz': APP_WIZZ,
+    'src/pages/Home.wizz': HOME_WIZZ,
+    'src/components/Counter.wizz': COUNTER_WIZZ,
+    'src/components/Card.wizz': CARD_WIZZ,
+    'src/server/api/health.js': HEALTH_JS
+  }),
+  bare: Object.freeze({
+    'README.md': BARE_README_MD,
+    'index.html': BARE_INDEX_HTML,
+    'src/App.wizz': BARE_APP_WIZZ
+  })
+}));
+
+// The template `wizz init` uses when nobody can be asked (no TTY, --json) or
+// the prompt is answered with Enter: today's full sample project.
+const DEFAULT_TEMPLATE = 'sample';
+
+module.exports = { TEMPLATE_SETS, DEFAULT_TEMPLATE };
