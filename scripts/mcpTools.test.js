@@ -93,6 +93,25 @@ test('project_overview surveys the scaffolded project', async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test('project_overview surveys a bare project with no pages, components, API routes, or App.css', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-mcp-tools-bare-'));
+  try {
+    initProject(root, { template: 'bare' });
+    const registry = createRegistry(root);
+    const { structured, text } = await registry.call('project_overview', {});
+    assert.equal(structured.documentShell, true);
+    assert.deepEqual(structured.components, [{ file: 'App.wizz', route: '/' }]);
+    assert.deepEqual(structured.apiRoutes, []);
+    // Absent optional directories are not discovery failures.
+    assert.equal(structured.discoveryError, undefined);
+    assert.match(text, /Components: 1 \(1 routed: \/\)/);
+    assert.match(text, /API routes: none/);
+    assert.doesNotMatch(text, /Discovery error/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('project_overview honors an inputDirectory override and reports a missing one', async () => {
   const root = createProjectFixture();
   const registry = createRegistry(root);
@@ -216,8 +235,9 @@ test('language_contract documents the version triple, language surface, and diag
   const { text } = await registry.call('language_contract', {});
   // The literal triple is pinned deliberately: a version bump fails this
   // test until the contract text has been reviewed against the compiler.
-  assert.match(text, /compiler 1\.23\.0, syntax 1\.6\.0, output 1\.13\.0/);
+  assert.match(text, /compiler 1\.24\.0, syntax 1\.6\.0, output 1\.13\.0/);
   // Reviewed for 1.23.0 / output 1.13.0 (issues #69 and #73): the expression grammar, bindings, and G026 warnings.
+  // Reviewed for 1.24.0: a CLI-only release (milestone 24, wizz init --sample/--bare); syntax and output are unchanged, so the contract text stands as is.
   assert.match(text, /- bind:value=\{name\} on <input>, <textarea>, <select>/);
   assert.match(text, /warning WIZZ-G026/);
   assert.match(text, /the conditional a \? b : c,\ncalls of a function or method/);
@@ -240,6 +260,7 @@ test('dev_workflow documents the real commands, deploy recipe, and secrets rule'
   const root = createProjectFixture();
   const registry = createRegistry(root);
   const { text } = await registry.call('dev_workflow', {});
+  assert.match(text, /wizz init \[directory\] \[--force\] \[--sample \| --bare\]/);
   assert.match(text, /wizz dev \[--port/);
   assert.match(text, /wizz build \[input-directory\]/);
   assert.match(text, /--adapter node/);

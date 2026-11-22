@@ -27,7 +27,9 @@ cd my-app
 wizz dev
 ```
 
-`wizz init` scaffolds the showcase starter: the global design-token stylesheet (`App.css`) linked from the document shell, a landing page at `/` with the reactive document head, a counter whose count persists across reloads and tabs, and the animated terminal card — plus a `/home` page that server-renders and hydrates. The scaffold also carries a `README.md` documenting the project layout, the dev/build commands, and how to install the VS Code extension from a release. It is a project that runs correctly with no manual editing. `wizz init` refuses to write into a non-empty directory unless you pass `--force`, and it never overwrites an existing file.
+Before writing anything, `wizz init` asks `Bootstrap with sample code? [Y/n]` on stderr. Enter, `y`, or `yes` (any case) chooses the full sample project described below; `n` or `no` chooses the bare template; anything else asks again, and Ctrl+C (exit 130) or end of input (exit 1) aborts with no files written. The bare template writes only the canonical shape — `index.html` with no stylesheet link, a placeholder `src/App.wizz` served at `/`, and a `README.md` describing that layout — with no `App.css`, components, pages, or API handler; it builds and serves with no warnings. `--sample` and `--bare` answer the question up front for scripting (mutually exclusive, each at most once). The question is never asked when stdin is not a TTY (CI, pipes) or `--json` is passed: init then uses the sample, so scripted `wizz init` calls behave exactly as before.
+
+The sample project is the showcase starter: the global design-token stylesheet (`App.css`) linked from the document shell, a landing page at `/` with the reactive document head, a counter whose count persists across reloads and tabs, and the animated terminal card — plus a `/home` page that server-renders and hydrates. The scaffold also carries a `README.md` documenting the project layout, the dev/build commands, and how to install the VS Code extension from a release. It is a project that runs correctly with no manual editing. `wizz init` refuses to write into a non-empty directory unless you pass `--force`, and it never overwrites an existing file.
 
 ### Your project and the framework
 
@@ -159,7 +161,7 @@ Print what you have installed with:
 wizz --version
 ```
 
-which prints the compiler and contract version triple, for example `wizz 1.23.0 (compiler 1.23.0, syntax 1.6.0, output 1.13.0)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
+which prints the compiler and contract version triple, for example `wizz 1.24.0 (compiler 1.24.0, syntax 1.6.0, output 1.13.0)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `init` accepts an optional directory plus `--force` and one of `--sample`/`--bare`, `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
 
 `wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
 
@@ -189,7 +191,7 @@ The security posture is deliberate. The project root is fixed at startup — `--
 
 ### CLI Stability
 
-The installed `wizz` command is Wizz's public command-line interface. Its supported commands are `wizz init [directory] [--force]`, `wizz build`, `wizz build <input-directory> <output-directory>`, `wizz build --json`, `wizz build --adapter node`, `wizz dev`, `wizz mcp [--root <dir>] [--allow-write]`, `wizz update`, `wizz install-vscode-extension`, and `wizz --version`; their documented defaults, generated output paths, and non-zero failure behavior are stable within a CLI major version.
+The installed `wizz` command is Wizz's public command-line interface. Its supported commands are `wizz init [directory] [--force] [--sample | --bare]`, `wizz build`, `wizz build <input-directory> <output-directory>`, `wizz build --json`, `wizz build --adapter node`, `wizz dev`, `wizz mcp [--root <dir>] [--allow-write]`, `wizz update`, `wizz install-vscode-extension`, and `wizz --version`; their documented defaults, generated output paths, and non-zero failure behavior are stable within a CLI major version.
 
 `build.js`, `scripts/cli.js`, and `scripts/dev.js` are implementation entry points used by the repository and may change as the CLI evolves. Use `wizz` for application automation and development workflows.
 
@@ -590,7 +592,7 @@ As a consumer of generated modules, within one `output` major version every gene
 A breaking change to either contract bumps its major version and the compiler's major version. Every compiled module is stamped with all three versions on its first line, so build artifacts stay traceable to the compiler that produced them:
 
 ```js
-// Generated by Wizz 1.23.0 (component syntax 1.6.0, generated output 1.13.0). Edits will be overwritten.
+// Generated by Wizz 1.24.0 (component syntax 1.6.0, generated output 1.13.0). Edits will be overwritten.
 ```
 
 `compile()` also returns the frozen version table as its `version` field.

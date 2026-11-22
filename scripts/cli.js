@@ -4,14 +4,16 @@ const path = require('node:path');
 const { main: buildProject, KNOWN_ADAPTERS } = require('../build');
 const { startDevelopmentServer } = require('./dev');
 const { startMcpServer } = require('./mcp');
-const { initProject } = require('./init');
+const { initProject, checkInitTarget, createReadlineAsk, promptForTemplate } = require('./init');
 const { update: updateInstallation } = require('./update');
 const { installVscodeExtension } = require('./installVscodeExtension');
 const { DEFAULT_REPOSITORY } = require('./releaseAssets');
 const { VERSIONS } = require('../src/compiler');
 
 const USAGE = `Usage:
-  wizz init [directory] [--force]   Scaffold a starter project
+  wizz init [directory] [--force] [--sample | --bare]
+                                    Scaffold a starter project (asks whether to include
+                                    the sample code; --sample/--bare answer up front)
   wizz build [input-directory] [output-directory] [--json] [--adapter <name>]
   wizz dev [--port <n>] [--host <addr>]
   wizz mcp [--root <dir>] [--allow-write]
@@ -199,20 +201,37 @@ function parseCommand(argv) {
 
   if (command === 'init') {
     // `--force` relaxes only the non-empty-directory check; existing files
-    // still refuse the scaffold, with or without it.
+    // still refuse the scaffold, with or without it. `--sample`/`--bare`
+    // answer the sample-code prompt up front: each at most once, never both.
     const force = positional.includes('--force');
-    const targets = positional.filter((argument) => argument !== '--force');
+    let template = null;
+    const targets = [];
+    for (const argument of positional) {
+      if (argument === '--force') continue;
+      if (argument === '--sample' || argument === '--bare') {
+        const chosen = argument.slice(2);
+        if (template === chosen) {
+          throw new Error(`Init accepts at most one ${argument} flag.\n\n` + USAGE);
+        }
+        if (template !== null) {
+          throw new Error('Init accepts either --sample or --bare, not both.\n\n' + USAGE);
+        }
+        template = chosen;
+        continue;
+      }
+      targets.push(argument);
+    }
     if (targets.length > 1) {
       throw new Error('Init accepts at most one [directory].\n\n' + USAGE);
     }
-    return { command: 'init', argumentsList: targets, json: false, force, adapter: null };
+    return { command: 'init', argumentsList: targets, json, force, adapter: null, template };
   }
 
   return { command, argumentsList: positional, json };
 }
 
 function runCli(argv, dependencies = {}) {
-  const { command, argumentsList, json, force, port, host, adapter, root, allowWrite } = parseCommand(argv);
+  const { command, argumentsList, json, force, port, host, adapter, root, allowWrite, template } = parseCommand(argv);
   const build = dependencies.build || buildProject;
   const startDev = dependencies.startDev || startDevelopmentServer;
   const startMcp = dependencies.startMcp || startMcpServer;
@@ -238,14 +257,51 @@ function runCli(argv, dependencies = {}) {
 
   if (command === 'init') {
     const target = argumentsList.length === 0 ? '.' : argumentsList[0];
-    const created = init(target, { force });
-    // Print exactly what was created, relative to the invocation point, as
-    // posix-style paths so the list reads the same everywhere.
-    for (const templatePath of created) {
-      logger.log(`Created ${path.join(target, templatePath).split(path.sep).join('/')}`);
+    const scaffold = (chosenTemplate) => {
+      const created = init(target, { force, template: chosenTemplate });
+      // Print exactly what was created, relative to the invocation point, as
+      // posix-style paths so the list reads the same everywhere.
+      for (const templatePath of created) {
+        logger.log(`Created ${path.join(target, templatePath).split(path.sep).join('/')}`);
+      }
+      logger.log('Next: run `wizz dev` to start editing.');
+      return 0;
+    };
+
+    // Never block on a question no one can answer: a flag answers it, and
+    // without a TTY (CI, pipes) or with --json the default (sample) applies,
+    // so scripted `wizz init` behaves exactly as before the prompt existed.
+    // These paths stay synchronous for the same reason.
+    const stdinIsTTY = dependencies.stdinIsTTY !== undefined
+      ? dependencies.stdinIsTTY === true
+      : process.stdin.isTTY === true;
+    if (template !== null) return scaffold(template);
+    if (json || !stdinIsTTY) return scaffold('sample');
+
+    // Report an unusable target before asking, not after the answer.
+    checkInitTarget(target, { force });
+    let ask = dependencies.ask;
+    let closePrompt = () => {};
+    if (ask === undefined) {
+      const prompt = createReadlineAsk();
+      ask = prompt.ask;
+      closePrompt = prompt.close;
     }
-    logger.log('Next: run `wizz dev` to start editing.');
-    return 0;
+    return promptForTemplate(ask).then(
+      (chosenTemplate) => {
+        closePrompt();
+        return scaffold(chosenTemplate);
+      },
+      (error) => {
+        closePrompt();
+        if (error && error.code === 'WIZZ_INIT_ABORTED') {
+          logger.error(error.message);
+          // 130 is the shell convention for an exit caused by Ctrl+C.
+          return error.reason === 'interrupt' ? 130 : 1;
+        }
+        throw error;
+      }
+    );
   }
 
   if (command === 'update') {

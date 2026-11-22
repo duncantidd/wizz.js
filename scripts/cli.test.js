@@ -74,10 +74,59 @@ test('rejects unknown commands and incomplete command arguments', () => {
 });
 
 test('parses the init command with its directory and --force flag', () => {
-  assert.deepEqual(parseCommand(['init']), { command: 'init', argumentsList: [], json: false, force: false, adapter: null });
-  assert.deepEqual(parseCommand(['init', 'my-app']), { command: 'init', argumentsList: ['my-app'], json: false, force: false, adapter: null });
-  assert.deepEqual(parseCommand(['init', 'my-app', '--force']), { command: 'init', argumentsList: ['my-app'], json: false, force: true, adapter: null });
-  assert.deepEqual(parseCommand(['init', '--force', 'my-app']), { command: 'init', argumentsList: ['my-app'], json: false, force: true, adapter: null });
+  assert.deepEqual(parseCommand(['init']), { command: 'init', argumentsList: [], json: false, force: false, adapter: null, template: null });
+  assert.deepEqual(parseCommand(['init', 'my-app']), { command: 'init', argumentsList: ['my-app'], json: false, force: false, adapter: null, template: null });
+  assert.deepEqual(parseCommand(['init', 'my-app', '--force']), { command: 'init', argumentsList: ['my-app'], json: false, force: true, adapter: null, template: null });
+  assert.deepEqual(parseCommand(['init', '--force', 'my-app']), { command: 'init', argumentsList: ['my-app'], json: false, force: true, adapter: null, template: null });
+});
+
+test('parses init --sample/--bare in any position and reports --json for the no-prompt default', () => {
+  assert.deepEqual(parseCommand(['init', '--bare']), { command: 'init', argumentsList: [], json: false, force: false, adapter: null, template: 'bare' });
+  assert.deepEqual(parseCommand(['init', '--sample', 'my-app']), { command: 'init', argumentsList: ['my-app'], json: false, force: false, adapter: null, template: 'sample' });
+  assert.deepEqual(parseCommand(['init', 'my-app', '--force', '--bare']), { command: 'init', argumentsList: ['my-app'], json: false, force: true, adapter: null, template: 'bare' });
+  assert.deepEqual(parseCommand(['init', '--json', 'my-app']), { command: 'init', argumentsList: ['my-app'], json: true, force: false, adapter: null, template: null });
+  assert.deepEqual(parseCommand(['init', '--bare', '--json']), { command: 'init', argumentsList: [], json: true, force: false, adapter: null, template: 'bare' });
+});
+
+test('rejects conflicting or repeated init template flags', () => {
+  assert.throws(() => parseCommand(['init', '--sample', '--bare']), /Init accepts either --sample or --bare, not both/);
+  assert.throws(() => parseCommand(['init', '--bare', 'my-app', '--sample']), /Init accepts either --sample or --bare, not both/);
+  assert.throws(() => parseCommand(['init', '--bare', '--bare']), /Init accepts at most one --bare flag/);
+  assert.throws(() => parseCommand(['init', '--sample', '--sample']), /Init accepts at most one --sample flag/);
+  // Lookalikes are not flags: they count as a directory, so a second
+  // positional is the familiar too-many-directories error.
+  assert.throws(() => parseCommand(['init', 'my-app', '--bare=yes']), /Init accepts at most one \[directory\]/);
+  assert.throws(() => parseCommand(['init', 'my-app', '--BARE']), /Init accepts at most one \[directory\]/);
+  // Every rejection carries the usage text, which documents both flags.
+  assert.throws(() => parseCommand(['init', '--sample', '--bare']), (error) => error.message.includes(USAGE));
+  assert.match(USAGE, /wizz init \[directory\] \[--force\] \[--sample \| --bare\]/);
+});
+
+test('--sample and --bare are init-only flags', () => {
+  for (const flag of ['--sample', '--bare']) {
+    assert.throws(() => parseCommand(['build', flag]), /Build accepts either no directories or both/);
+    assert.throws(() => parseCommand(['build', 'src', 'dist', flag]), /Build accepts either no directories or both/);
+    assert.throws(() => parseCommand(['dev', flag]), /Dev does not accept arguments/);
+    assert.throws(() => parseCommand(['mcp', flag]), /Mcp does not accept arguments/);
+    assert.throws(() => parseCommand(['update', flag]), /The update command does not accept arguments/);
+    assert.throws(() => parseCommand(['install-vscode-extension', flag]), /does not accept arguments/);
+    assert.throws(() => parseCommand(['--version', flag]), /Version does not accept arguments/);
+  }
+});
+
+test('runCli threads the template flag to init and skips the prompt', () => {
+  const calls = [];
+  const logger = { log() {}, error() {} };
+  const init = (target, options) => { calls.push([target, options]); return []; };
+  const ask = () => { throw new Error('must not prompt'); };
+  assert.equal(runCli(['init', 'my-app', '--bare', '--force'], { init, ask, stdinIsTTY: true, logger }), 0);
+  assert.equal(runCli(['init', '--sample'], { init, ask, stdinIsTTY: true, logger }), 0);
+  assert.equal(runCli(['init'], { init, ask, stdinIsTTY: false, logger }), 0);
+  assert.deepEqual(calls, [
+    ['my-app', { force: true, template: 'bare' }],
+    ['.', { force: false, template: 'sample' }],
+    ['.', { force: false, template: 'sample' }]
+  ]);
 });
 
 test('parses the update command and rejects any arguments', () => {
