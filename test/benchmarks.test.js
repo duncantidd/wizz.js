@@ -302,3 +302,35 @@ test('hydration adopts delivered markup with zero DOM creation and exact reactiv
   assert.deepEqual(target.childNodes, []);
   assert.equal(document.metrics.removedListeners, 1);
 });
+
+// Milestone 23: `wizz build --compact` size reduction and compaction cost.
+// Every benchmark fixture is compiled to its client, hydratable, and server
+// modules, which are compacted alongside the shipped runtime. The recorded
+// reduction is the number a production deploy sees for generated code; the
+// floor and budget catch a compactor that stops compacting or turns slow.
+test('compact builds shrink generated modules and the runtime within a time budget', (t) => {
+  const { compileServer } = require('../src/compiler');
+  const { compactJs } = require('../src/compiler/compact');
+  const sources = [];
+  for (const name of ['benchmark-blocks', 'benchmark-large-tree', 'benchmark-teardown', 'benchmark-updates', 'hydration', 'profile']) {
+    const source = loadFixture(name);
+    sources.push(compile(source).source);
+    sources.push(compile(source, { hydratable: true }).source);
+    sources.push(compileServer(source).source);
+  }
+  const runtimeDirectory = path.join(__dirname, '..', 'src', 'runtime');
+  for (const name of fs.readdirSync(runtimeDirectory).filter((file) => file.endsWith('.js'))) {
+    sources.push(fs.readFileSync(path.join(runtimeDirectory, name), 'utf8'));
+  }
+
+  compactJs(sources[0]); // Warm up.
+  const before = sources.reduce((total, source) => total + Buffer.byteLength(source), 0);
+  const start = performance.now();
+  const after = sources.map((source) => compactJs(source)).reduce((total, source) => total + Buffer.byteLength(source), 0);
+  const duration = performance.now() - start;
+  const reduction = 1 - after / before;
+
+  assert.ok(reduction > 0.15, `expected at least a 15% reduction, got ${(reduction * 100).toFixed(1)}%`);
+  assert.ok(duration < 2000, `compaction took ${duration.toFixed(0)} ms`);
+  t.diagnostic(`${sources.length} modules compacted ${before} -> ${after} bytes (${(reduction * 100).toFixed(1)}% smaller) in ${duration.toFixed(2)} ms`);
+});

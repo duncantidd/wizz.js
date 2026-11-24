@@ -4,7 +4,7 @@ Wizz is a zero-dependency component compiler. It turns `.wizz` component source 
 
 ## Requirements
 
-- Node.js 18 or newer
+- Node.js 22 or newer
 - A modern browser for running generated modules
 
 Wizz has no runtime dependencies.
@@ -57,7 +57,7 @@ The `.wizz` template language is deliberately small. Read this table before desi
 
 ## CLI
 
-Wizz installs without npm or a package registry. A first-time install needs only Node.js 18+, curl, and tar — one command fetches the installer from the repository and runs it:
+Wizz installs without npm or a package registry. A first-time install needs only Node.js 22+, curl, and tar — one command fetches the installer from the repository and runs it:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/duncantidd/wizz.js/main/scripts/install-cli.sh | bash
@@ -83,7 +83,7 @@ wizz install-vscode-extension
 
 Without the `wizz` CLI (or without `code` on PATH), download the `.vsix` from the release page and run `code --install-extension wizz-vscode-<version>.vsix`, or use VS Code's **Install from VSIX...**; see [`vscode-extension/README.md`](vscode-extension/README.md) for what it provides.
 
-The installer requires Node.js 18 or newer. It installs the compiler and CLI runtime to `${XDG_DATA_HOME:-~/.local/share}/wizz` and places the `wizz` launcher in `${XDG_BIN_HOME:-~/.local/bin}`. It does not require administrator privileges or modify shell configuration files.
+The installer requires Node.js 22 or newer. It installs the compiler and CLI runtime to `${XDG_DATA_HOME:-~/.local/share}/wizz` and places the `wizz` launcher in `${XDG_BIN_HOME:-~/.local/bin}`. It does not require administrator privileges or modify shell configuration files.
 
 Ensure the launcher directory is on your `PATH`. For Bash or Zsh using the default location, add this to your shell profile, then open a new shell:
 
@@ -132,6 +132,17 @@ Add `--json` (in any argument position) to print a machine-parsable diagnostics 
 
 Every compiler diagnostic carries a stable code (`WIZZ-P###` for parse-stage failures, `WIZZ-G###` for generate-stage failures) that tooling can switch on without parsing prose; the envelope's `format` field is versioned, so fields may be added within format version 1 but existing fields keep their meaning until it changes. When an adapter runs, the envelope additionally carries `adapter: "node"` — the field is absent for static builds, so existing consumers parse an unchanged envelope.
 
+### Compact production builds
+
+`wizz build --compact` (in any argument position, at most once) shrinks everything the build emits for production deployment: the generated client, `.server.js`, and `.hydrate.js` modules, the copied `dist/runtime/**` and both manifests, `wizz.css` and the copied `App.css`, `dist/index.html`, and — with `--adapter node` — `dist/server.mjs`. The compactor is hand-rolled and conservative: it removes comments and insignificant whitespace and nothing else, with no identifier mangling or other rewrites, so the compacted `dist/` behaves exactly like a normal build. Strings, template literals, regex literals, and line breaks that automatic semicolon insertion depends on survive unchanged; in CSS, strings, `url(...)`, escapes, and whitespace that is a descendant combinator are kept; in HTML, tags and the contents of `<pre>`, `<textarea>`, `<script>` (including the `application/wizz-state` payload), and `<style>` are copied byte for byte. Authored API handlers under `dist/server/**` stay verbatim copies.
+
+A compact build writes no source maps and no `//# sourceMappingURL` comments (and removes maps an earlier readable build left in `dist/`): compaction moves every position a map describes, and a public production map hands out the original source. A normal `wizz build` keeps its maps, so debugging stays a rebuild away. A source the compactor cannot read safely — an unterminated string or comment in a `<script>` or `<wizz:style>` block, `App.css`, or `index.html` — fails the build with its file, line, and column instead of emitting corrupted output. With `--json` the envelope additionally carries `compact: true`.
+
+```bash
+wizz build --compact
+wizz build --adapter node --compact --json
+```
+
 ### Deploying with the node adapter
 
 `wizz build --adapter node` (in any argument position, `--adapter node` or `--adapter=node`) generates a standalone SSR + API host at `dist/server.mjs` — build-only, opt-in; a plain `wizz build` emits nothing extra, and `wizz dev` gains nothing (it implements the same protocol itself). The host is self-contained: it imports only Node builtins and the build's own artifacts, so the deployment contract stays "dist/ is self-contained". Deploy the `dist/` directory and run:
@@ -161,7 +172,7 @@ Print what you have installed with:
 wizz --version
 ```
 
-which prints the compiler and contract version triple, for example `wizz 1.24.0 (compiler 1.24.0, syntax 1.6.0, output 1.13.0)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `init` accepts an optional directory plus `--force` and one of `--sample`/`--bare`, `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json` and `--adapter <name>` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
+which prints the compiler and contract version triple, for example `wizz 1.25.0 (compiler 1.25.0, syntax 1.6.0, output 1.13.0)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `init` accepts an optional directory plus `--force` and one of `--sample`/`--bare`, `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json`, `--adapter <name>`, and `--compact` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
 
 `wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
 
@@ -191,7 +202,7 @@ The security posture is deliberate. The project root is fixed at startup — `--
 
 ### CLI Stability
 
-The installed `wizz` command is Wizz's public command-line interface. Its supported commands are `wizz init [directory] [--force] [--sample | --bare]`, `wizz build`, `wizz build <input-directory> <output-directory>`, `wizz build --json`, `wizz build --adapter node`, `wizz dev`, `wizz mcp [--root <dir>] [--allow-write]`, `wizz update`, `wizz install-vscode-extension`, and `wizz --version`; their documented defaults, generated output paths, and non-zero failure behavior are stable within a CLI major version.
+The installed `wizz` command is Wizz's public command-line interface. Its supported commands are `wizz init [directory] [--force] [--sample | --bare]`, `wizz build`, `wizz build <input-directory> <output-directory>`, `wizz build --json`, `wizz build --adapter node`, `wizz build --compact`, `wizz dev`, `wizz mcp [--root <dir>] [--allow-write]`, `wizz update`, `wizz install-vscode-extension`, and `wizz --version`; their documented defaults, generated output paths, and non-zero failure behavior are stable within a CLI major version.
 
 `build.js`, `scripts/cli.js`, and `scripts/dev.js` are implementation entry points used by the repository and may change as the CLI evolves. Use `wizz` for application automation and development workflows.
 
@@ -579,7 +590,7 @@ The browser (or any client) calls the same-origin `/api/submit-form`; the key li
 
 **The return value**: a plain value answers `200` as JSON, a string answers as plain text, `undefined` answers `204`, and `{ status, headers, body }` gives full control. Errors are deliberately one-way: a handler throw (or a module without a default function, or a syntax error) answers a fixed `500 {"error":"Internal server error"}` — the detail goes to the server log only, so an error message quoting a secret never reaches the client. Request bodies are capped at 1 MB (`413` above it).
 
-**Freshness and deployment**: handler edits apply on the next request — no rebuild. Dev runs handlers from their `dist/server/**` copies (the build pins `dist/package.json` to `{"type":"module"}`, so ESM parses on every supported Node — 18/20 have no module-syntax detection), re-copying any source module newer than its copy before the import, which is cache-busted by the source mtime. A relative import must stay within `src/server/` (only that tree is copied); editing a private `_` module refreshes its copy, but the importing handler re-imports it once the handler file itself changes — touch the handler or restart. `wizz build` copies the whole `src/server/` tree verbatim (private modules included) with a generated manifest (`dist/runtime/apiRoutes.js`) so an external Node host can import and run them following the same recipe as the SSR delivery; the dev server never serves `/server/**` as static files, so handler source is unreachable in both workflows. Production application hosting itself stays outside the framework — Wizz ships no application server, and handlers get no sessions, persistence, or middleware.
+**Freshness and deployment**: handler edits apply on the next request — no rebuild. Dev runs handlers from their `dist/server/**` copies (the build pins `dist/package.json` to `{"type":"module"}`, so ESM parses on every supported Node — Node 22 before 22.7 has no unflagged module-syntax detection), re-copying any source module newer than its copy before the import, which is cache-busted by the source mtime. A relative import must stay within `src/server/` (only that tree is copied); editing a private `_` module refreshes its copy, but the importing handler re-imports it once the handler file itself changes — touch the handler or restart. `wizz build` copies the whole `src/server/` tree verbatim (private modules included) with a generated manifest (`dist/runtime/apiRoutes.js`) so an external Node host can import and run them following the same recipe as the SSR delivery; the dev server never serves `/server/**` as static files, so handler source is unreachable in both workflows. Production application hosting itself stays outside the framework — Wizz ships no application server, and handlers get no sessions, persistence, or middleware.
 
 ## Compatibility and Versioning
 
@@ -592,7 +603,7 @@ As a consumer of generated modules, within one `output` major version every gene
 A breaking change to either contract bumps its major version and the compiler's major version. Every compiled module is stamped with all three versions on its first line, so build artifacts stay traceable to the compiler that produced them:
 
 ```js
-// Generated by Wizz 1.24.0 (component syntax 1.6.0, generated output 1.13.0). Edits will be overwritten.
+// Generated by Wizz 1.25.0 (component syntax 1.6.0, generated output 1.13.0). Edits will be overwritten.
 ```
 
 `compile()` also returns the frozen version table as its `version` field.

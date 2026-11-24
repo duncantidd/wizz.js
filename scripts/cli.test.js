@@ -18,13 +18,14 @@ function writeFile(filePath, contents) {
 }
 
 test('parses build and dev commands', () => {
-  assert.deepEqual(parseCommand(['build']), { command: 'build', argumentsList: [], json: false, force: false, adapter: null });
+  assert.deepEqual(parseCommand(['build']), { command: 'build', argumentsList: [], json: false, force: false, adapter: null, compact: false });
   assert.deepEqual(parseCommand(['build', 'components', 'output']), {
     command: 'build',
     argumentsList: ['components', 'output'],
     json: false,
     force: false,
-    adapter: null
+    adapter: null,
+    compact: false
   });
   assert.deepEqual(parseCommand(['dev']), { command: 'dev', argumentsList: [], json: false, force: false, port: 3000, host: null, adapter: null });
   assert.deepEqual(parseCommand(['dev', '--port', '4321']), { command: 'dev', argumentsList: [], json: false, force: false, port: 4321, host: null, adapter: null });
@@ -48,13 +49,14 @@ test('rejects missing, empty, repeated, and flag-like --host values', () => {
 });
 
 test('strips the build --json flag from any argument position', () => {
-  assert.deepEqual(parseCommand(['build', '--json']), { command: 'build', argumentsList: [], json: true, force: false, adapter: null });
+  assert.deepEqual(parseCommand(['build', '--json']), { command: 'build', argumentsList: [], json: true, force: false, adapter: null, compact: false });
   assert.deepEqual(parseCommand(['build', 'src', 'dist', '--json']), {
     command: 'build',
     argumentsList: ['src', 'dist'],
     json: true,
     force: false,
-    adapter: null
+    adapter: null,
+    compact: false
   });
   // A build unknown-flag stays positional and fails the directory count.
   assert.throws(() => parseCommand(['build', '--json', 'src']), /both <input-directory> and <output-directory>/);
@@ -185,21 +187,24 @@ test('parses the build --adapter flag from any argument position', () => {
     argumentsList: [],
     json: false,
     force: false,
-    adapter: 'node'
+    adapter: 'node',
+    compact: false
   });
   assert.deepEqual(parseCommand(['build', '--adapter=node', 'components', 'output']), {
     command: 'build',
     argumentsList: ['components', 'output'],
     json: false,
     force: false,
-    adapter: 'node'
+    adapter: 'node',
+    compact: false
   });
   assert.deepEqual(parseCommand(['build', 'components', '--adapter', 'node', 'output']), {
     command: 'build',
     argumentsList: ['components', 'output'],
     json: false,
     force: false,
-    adapter: 'node'
+    adapter: 'node',
+    compact: false
   });
 });
 
@@ -214,6 +219,38 @@ test('rejects unknown, missing, and repeated build adapter names at the CLI boun
   assert.throws(() => parseCommand(['dev', '--adapter', 'node']), /Dev does not accept arguments/);
   assert.throws(() => parseCommand(['update', '--adapter', 'node']), /The update command does not accept arguments/);
   assert.match(USAGE, /--adapter <name>/);
+});
+
+test('parses the build --compact flag from any position, at most once, build only', () => {
+  assert.equal(parseCommand(['build', '--compact']).compact, true);
+  assert.deepEqual(parseCommand(['build', 'components', '--compact', 'output', '--adapter', 'node', '--json']), {
+    command: 'build',
+    argumentsList: ['components', 'output'],
+    json: true,
+    force: false,
+    adapter: 'node',
+    compact: true
+  });
+  assert.throws(() => parseCommand(['build', '--compact', '--compact']), /at most one --compact flag/);
+  // A lookalike is not the flag: it stays positional and fails the count.
+  assert.throws(() => parseCommand(['build', '--compact=true']), /both <input-directory> and <output-directory>/);
+  // Every other command rejects it rather than reading it as a directory.
+  assert.throws(() => parseCommand(['init', '--compact']), /Init does not accept arguments/);
+  assert.throws(() => parseCommand(['init', 'my-app', '--compact']), /Init does not accept arguments/);
+  assert.throws(() => parseCommand(['dev', '--compact']), /Dev does not accept arguments/);
+  assert.throws(() => parseCommand(['mcp', '--compact']), /Mcp does not accept arguments/);
+  assert.throws(() => parseCommand(['update', '--compact']), /The update command does not accept arguments/);
+  assert.throws(() => parseCommand(['install-vscode-extension', '--compact']), /does not accept arguments/);
+  assert.throws(() => parseCommand(['--version', '--compact']), /Version does not accept arguments/);
+  assert.match(USAGE, /\[--compact\]/);
+});
+
+test('re-appends the compact flag for the build layer to re-parse', () => {
+  const calls = [];
+  assert.equal(runCli(['build', '--compact'], { build(argv) { calls.push(argv); return 0; } }), 0);
+  assert.deepEqual(calls, [['src', 'dist', '--compact']]);
+  assert.equal(runCli(['build', 'a', 'b', '--compact', '--adapter=node', '--json'], { build(argv) { calls.push(argv); return 0; } }), 0);
+  assert.deepEqual(calls[1], ['a', 'b', '--json', '--adapter', 'node', '--compact']);
 });
 
 test('re-appends the adapter flag for the build layer to re-parse', () => {

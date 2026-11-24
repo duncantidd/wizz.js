@@ -371,8 +371,8 @@ async function loadRouterForTest(t) {
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
   const outputDirectory = path.join(projectDirectory, 'dist');
   buildProject(path.join(__dirname, '..', 'src'), outputDirectory, { log() {}, error() {} });
-  // The emitted modules are ESM while the repo package is CommonJS: Node 18
-  // has no module-syntax detection, so the output directory needs its own
+  // The emitted modules are ESM while the repo package is CommonJS: Node 22
+  // before 22.7 has no unflagged module-syntax detection, so the output directory needs its own
   // module type before any dynamic import (the same line pins every other
   // buildProject call in this file).
   writeFile(path.join(outputDirectory, 'package.json'), '{"type":"module"}');

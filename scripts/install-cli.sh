@@ -31,13 +31,13 @@ usage() {
 }
 
 if ! command -v node >/dev/null 2>&1; then
-  printf 'Wizz requires Node.js 18 or newer. Install Node.js and run this installer again.\n' >&2
+  printf 'Wizz requires Node.js 22 or newer. Install Node.js and run this installer again.\n' >&2
   exit 1
 fi
 
 node_major_version=$(node -p 'process.versions.node.split(".")[0]')
-if (( node_major_version < 18 )); then
-  printf 'Wizz requires Node.js 18 or newer; found Node.js %s.\n' "$(node --version)" >&2
+if (( node_major_version < 22 )); then
+  printf 'Wizz requires Node.js 22 or newer; found Node.js %s.\n' "$(node --version)" >&2
   exit 1
 fi
 

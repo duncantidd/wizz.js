@@ -595,7 +595,7 @@ A [Wizz](https://github.com/duncantidd/wizz.js) application: .wizz components co
 
 ## Prerequisites
 
-- Node.js 18 or newer
+- Node.js 22 or newer
 - The Wizz CLI:
 
     curl -fsSL https://raw.githubusercontent.com/duncantidd/wizz.js/main/scripts/install-cli.sh | bash
