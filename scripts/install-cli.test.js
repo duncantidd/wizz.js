@@ -123,6 +123,48 @@ test('--help prints the usage and exits cleanly', (t) => {
   assert.equal(fs.existsSync(installedDataDirectory(home)), false, '--help must not install anything');
 });
 
+// A stub `node` first on PATH reports an older major version, so the
+// installer's floor check runs without installing another Node.
+function stubNodeVersion(t, version) {
+  const binDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'wizz-fake-node-'));
+  t.after(() => fs.rmSync(binDirectory, { recursive: true, force: true }));
+  const major = version.split('.')[0];
+  fs.writeFileSync(
+    path.join(binDirectory, 'node'),
+    `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "v${version}"; else echo "${major}"; fi\n`,
+    { mode: 0o755 }
+  );
+  return binDirectory;
+}
+
+test('Node older than 22 is refused before anything installs', (t) => {
+  if (skipInstallerTests) { t.skip('bash-based installer test'); return; }
+  for (const version of ['20.19.0', '18.20.8']) {
+    const home = createHome();
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    const environment = installEnvironment(home);
+    environment.PATH = `${stubNodeVersion(t, version)}${path.delimiter}${environment.PATH}`;
+
+    const refused = spawnSync('bash', [installer, '--local'], { encoding: 'utf8', env: environment });
+    assert.equal(refused.status, 1, version);
+    assert.match(refused.stderr, new RegExp(`Wizz requires Node\\.js 22 or newer; found Node\\.js v${version.replace(/\./g, '\\.')}\\.`));
+    assert.equal(fs.existsSync(installedDataDirectory(home)), false, `${version} must not install anything`);
+  }
+});
+
+test('Node 22 passes the installer floor check', (t) => {
+  if (skipInstallerTests) { t.skip('bash-based installer test'); return; }
+  const home = createHome();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const environment = installEnvironment(home);
+  environment.PATH = `${stubNodeVersion(t, '22.0.0')}${path.delimiter}${environment.PATH}`;
+
+  // --help exits before installing, so the stub never has to run real code.
+  const helped = spawnSync('bash', [installer, '--help'], { encoding: 'utf8', env: environment });
+  assert.equal(helped.status, 0, helped.stderr);
+  assert.match(helped.stdout, /Usage:/);
+});
+
 test('a piped invocation (the curl | bash bootstrap) runs without a BASH_SOURCE', (t) => {
   if (skipInstallerTests) { t.skip('bash-based installer test'); return; }
   const home = createHome();

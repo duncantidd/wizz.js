@@ -558,9 +558,14 @@ async function buildProjectHandler(args, { root }) {
     }
     adapter = args.adapter;
   }
+  if (args.compact !== undefined && typeof args.compact !== 'boolean') {
+    throw new ToolExecutionError('compact must be a boolean.');
+  }
+  const compact = args.compact === true;
   const result = buildProject(input.absolutePath, output.absolutePath, { log() {}, error() {} }, {
     json: true,
-    ...(adapter ? { adapter } : {})
+    ...(adapter ? { adapter } : {}),
+    ...(compact ? { compact } : {})
   });
   const structured = {
     format: BUILD_DIAGNOSTICS_FORMAT,
@@ -569,7 +574,8 @@ async function buildProjectHandler(args, { root }) {
     failedCount: result.failedCount,
     diagnostics: result.diagnostics,
     files: result.files,
-    ...(adapter ? { adapter } : {})
+    ...(adapter ? { adapter } : {}),
+    ...(compact ? { compact: true } : {})
   };
   const text = [
     `Build ${result.ok ? 'succeeded' : 'failed'}: ${result.compiledCount} compiled, ${result.failedCount} failed.`,
@@ -792,12 +798,15 @@ wizz dev [--port <n>] [--host <addr>]
     127.0.0.1 (loopback) by default; HOST=<addr> or --host <addr> opts the
     bind out of loopback for remote development.
 
-wizz build [input-directory] [output-directory] [--json] [--adapter node]
+wizz build [input-directory] [output-directory] [--json] [--adapter node] [--compact]
     Compile src into dist (defaults), preserving paths. Writes
     dist/package.json ({"type":"module"}), extracts scoped styles into
     dist/wizz.css, and writes the route and API manifests. --json prints the
     machine-parsable wizz-build-diagnostics@1 envelope; --adapter node
-    additionally emits dist/server.mjs.
+    additionally emits dist/server.mjs. --compact strips comments and
+    insignificant whitespace from every emitted module, stylesheet, the
+    shell, and server.mjs, and writes no source maps (rebuild without it to
+    debug); authored API handlers are copied unchanged.
 
 Deploying (node adapter): deploy the dist/ directory and run
     node dist/server.mjs        # serves http://localhost:8080
@@ -959,7 +968,8 @@ const TOOL_DEFINITIONS = Object.freeze([
       properties: {
         inputDirectory: { type: 'string', description: 'Source directory relative to the project root. Default "src".' },
         outputDirectory: { type: 'string', description: 'Output directory relative to the project root. Default "dist".' },
-        adapter: { type: 'string', enum: ['node'], description: 'Also generate the node adapter host (dist/server.mjs).' }
+        adapter: { type: 'string', enum: ['node'], description: 'Also generate the node adapter host (dist/server.mjs).' },
+        compact: { type: 'boolean', description: 'Compact every emitted artifact for production and write no source maps (wizz build --compact).' }
       },
       additionalProperties: false
     }

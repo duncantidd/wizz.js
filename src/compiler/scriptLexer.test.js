@@ -162,3 +162,41 @@ test('an unpaired backtick simply produces no pair', () => {
   const pairs = matchTemplateTokens(tokenizeScript('`unterminated'));
   assert.equal(pairs.size, 0);
 });
+
+// Every ECMAScript line terminator ends a line comment; treating only LF as
+// one made the lexer swallow the code after a CR, U+2028, or U+2029.
+test('a line comment ends at CR, U+2028, and U+2029, not only LF', () => {
+  for (const terminator of ['\n', '\r', '\r\n', String.fromCharCode(0x2028), String.fromCharCode(0x2029)]) {
+    const tokens = tokenizeScript(`// note${terminator}const x = 1;`);
+    assert.deepEqual(tokens.map((token) => token.value), ['// note', 'const', 'x', '=', '1', ';'], JSON.stringify(terminator));
+    assert.equal(tokens[1].newlineBefore, true, JSON.stringify(terminator));
+  }
+});
+
+test('a CRLF line continuation stays inside its string or template', () => {
+  const backslash = String.fromCharCode(0x5c);
+  assert.deepEqual(types(`const s = "a${backslash}\r\nb"; x`), ['identifier', 'identifier', 'punctuator', 'string', 'punctuator', 'identifier']);
+  assert.deepEqual(values(`'a${backslash}\r\nb'`), [`'a${backslash}\r\nb'`]);
+  assert.deepEqual(values(`\`a${backslash}\r\nb\``), ['`', `a${backslash}\r\nb`, '`']);
+});
+
+test('a raw CR ends a string as a raw LF does; U+2028 does not', () => {
+  assert.deepEqual(values('"ab\rcd"'), ['"ab', 'cd', '"']);
+  const separator = String.fromCharCode(0x2028);
+  assert.deepEqual(values(`"a${separator}b"`), [`"a${separator}b"`]);
+});
+
+test('a regex literal cannot span any line terminator', () => {
+  assert.deepEqual(types('x = /a\rb/'), ['identifier', 'punctuator', 'punctuator', 'identifier', 'identifier', 'punctuator']);
+  assert.deepEqual(types('x = /a/g'), ['identifier', 'punctuator', 'regex']);
+});
+
+test('a slash after a closing template backtick is division', () => {
+  assert.deepEqual(types('`${w}` / h / 2'), ['punctuator', 'punctuator', 'identifier', 'punctuator', 'punctuator', 'punctuator', 'identifier', 'punctuator', 'number']);
+  assert.deepEqual(types('`a` / 2'), ['punctuator', 'templateText', 'punctuator', 'punctuator', 'number']);
+});
+
+test('a slash after export default starts a regex', () => {
+  assert.deepEqual(types('export default /a   b/;'), ['identifier', 'identifier', 'regex', 'punctuator']);
+  assert.deepEqual(values('export default /a   b/g'), ['export', 'default', '/a   b/g']);
+});

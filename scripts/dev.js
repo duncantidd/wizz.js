@@ -195,9 +195,9 @@ async function renderServerRoute(routeEntry, indexPath, response) {
 // so traversal has nothing to resolve against) and run inside the dev server
 // process. Handlers execute from their `dist/server/**` copies, never from
 // source: the build pins `dist/package.json` to `{"type":"module"}`, and
-// Node 18/20 have no module-syntax detection, so importing the authored
-// `src/.../*.js` directly would parse as CommonJS and fail on `export` in
-// any project without its own type declaration. Dev therefore runs the same
+// Node 22 before 22.7 has no unflagged module-syntax detection, so importing
+// the authored `src/.../*.js` directly would parse as CommonJS and fail on
+// `export` in any project without its own type declaration. Dev therefore runs the same
 // ESM-typed artifacts production runs.
 //
 // The watcher only rebuilds on `.wizz` changes, so handler edits would leave
@@ -235,7 +235,8 @@ function syncServerModules(serverSourceDirectory, outputDirectory) {
 
   // The module-type marker the build writes beside its output: a dev server
   // serving a dist that predates it (or a direct createRequestHandler caller
-  // that never built) still needs the pin for Node 18/20 ESM parsing.
+  // that never built) still needs the pin for ESM parsing on Node 22 before
+  // 22.7, which has no unflagged module-syntax detection.
   const moduleTypeMarkerPath = path.join(outputDirectory, 'package.json');
   if (!fs.existsSync(moduleTypeMarkerPath)) {
     fs.writeFileSync(moduleTypeMarkerPath, '{"type":"module"}\n', 'utf8');
@@ -438,10 +439,11 @@ function watchSourceFiles(inputDirectory, onChange, options = {}) {
   const clearIntervalFn = options.clearInterval || clearInterval;
   const onWatchUnavailable = options.onWatchUnavailable || (() => {});
   let snapshot = createSourceSnapshot(inputDirectory);
-  // Recursive fs.watch is unavailable on supported platforms (Linux before
-  // Node 20 throws ERR_FEATURE_UNAVAILABLE_ON_PLATFORM at call time), so a
-  // failure degrades to the snapshot poller below instead of refusing to
-  // start: the poller detects the same changes with a 250ms latency bound.
+  // Recursive fs.watch can be unavailable (it throws
+  // ERR_FEATURE_UNAVAILABLE_ON_PLATFORM at call time where the platform lacks
+  // it, as Linux did before Node 20), so a failure degrades to the snapshot
+  // poller below instead of refusing to start: the poller detects the same
+  // changes with a 250ms latency bound.
   let watcher = null;
   try {
     watcher = watch(inputDirectory, { recursive: true }, (eventType, fileName) => {

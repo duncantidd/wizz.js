@@ -209,6 +209,21 @@ test('build_project runs the node adapter on request', async () => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test('build_project compacts on request and validates the flag', async () => {
+  const root = createProjectFixture();
+  const registry = createRegistry(root);
+  const { structured } = await registry.call('build_project', { compact: true, adapter: 'node' });
+  assert.equal(structured.ok, true);
+  assert.equal(structured.compact, true);
+  assert.equal(structured.adapter, 'node');
+  const dist = path.join(root, 'dist');
+  assert.equal(fs.readdirSync(dist, { recursive: true }).some((file) => String(file).endsWith('.map')), false);
+  const readable = await registry.call('build_project', { outputDirectory: 'dist-readable' });
+  assert.equal('compact' in readable.structured, false);
+  await refuse(registry.call('build_project', { compact: 'yes' }), /compact must be a boolean/);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
 test('build_project reports a broken component through the envelope', async () => {
   const root = createProjectFixture();
   fs.writeFileSync(path.join(root, 'src/Broken.wizz'), BROKEN_SOURCE, 'utf8');
@@ -235,9 +250,10 @@ test('language_contract documents the version triple, language surface, and diag
   const { text } = await registry.call('language_contract', {});
   // The literal triple is pinned deliberately: a version bump fails this
   // test until the contract text has been reviewed against the compiler.
-  assert.match(text, /compiler 1\.24\.0, syntax 1\.6\.0, output 1\.13\.0/);
+  assert.match(text, /compiler 1\.25\.0, syntax 1\.6\.0, output 1\.13\.0/);
   // Reviewed for 1.23.0 / output 1.13.0 (issues #69 and #73): the expression grammar, bindings, and G026 warnings.
   // Reviewed for 1.24.0: a CLI-only release (milestone 24, wizz init --sample/--bare); syntax and output are unchanged, so the contract text stands as is.
+  // Reviewed for 1.25.0: --compact (milestone 23) and a script-lexer line-terminator fix; no component syntax or generated output change, so the contract text stands as is.
   assert.match(text, /- bind:value=\{name\} on <input>, <textarea>, <select>/);
   assert.match(text, /warning WIZZ-G026/);
   assert.match(text, /the conditional a \? b : c,\ncalls of a function or method/);

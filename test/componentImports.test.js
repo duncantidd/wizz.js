@@ -209,8 +209,8 @@ test('a built component-importing page delivers and hydrates through real genera
   const result = buildProject(path.join(projectDirectory, 'src'), path.join(projectDirectory, 'dist'), logger);
   assert.deepEqual(result, { compiledCount: 2, failedCount: 0 });
   assert.equal(logger.messages.filter((message) => message.startsWith('Note:')).length, 0);
-  // The emitted modules are ESM while the repo package is CommonJS: Node 18
-  // has no module-syntax detection, so the output directory needs its own
+  // The emitted modules are ESM while the repo package is CommonJS: Node 22
+  // before 22.7 has no unflagged module-syntax detection, so the output directory needs its own
   // module type before any dynamic import (the same line pins every other
   // suite's build output).
   fs.writeFileSync(path.join(projectDirectory, 'dist', 'package.json'), '{"type":"module"}');
@@ -299,7 +299,7 @@ test('a nested mismatch remounts inside the child root and keeps the parent tree
   ].join('\n'));
 
   buildProject(path.join(projectDirectory, 'src'), path.join(projectDirectory, 'dist'), { log() {}, error() {} });
-  // Node 18 has no module-syntax detection: pin the ESM type beside the
+  // Node 22 before 22.7 has no unflagged module-syntax detection: pin the ESM type beside the
   // emitted modules before importing them (see the first suite in this file).
   fs.writeFileSync(path.join(projectDirectory, 'dist', 'package.json'), '{"type":"module"}');
 

@@ -23,9 +23,9 @@ test('the package stays zero-dependency', () => {
 });
 
 test('the package targets the supported Node floor', () => {
-  // The suite and the installer both verify Node >= 18; the engines field is
-  // the same statement in npm's vocabulary.
-  assert.equal(pkg.engines.node, '>=18');
+  // The suite and the installer both verify Node >= 22 (Node 18 and 20 are
+  // end-of-life); the engines field is the same statement in npm's vocabulary.
+  assert.equal(pkg.engines.node, '>=22');
 });
 
 test('the bin entry points at an existing script with a node shebang', () => {
@@ -40,7 +40,7 @@ test('CI runs the suite on every supported Node across push and pull requests', 
   // load-bearing lines of the workflow instead of its full parse tree.
   const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
   assert.match(workflow, /pull_request:/);
-  assert.match(workflow, /node-version: \[18, 20, 22\]/);
+  assert.match(workflow, /node-version: \[22, 24, 26\]/);
   assert.match(workflow, /^ {6}- run: node --test$/m);
 });
 
