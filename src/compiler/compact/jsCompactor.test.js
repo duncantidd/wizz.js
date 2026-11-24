@@ -269,3 +269,44 @@ test('compaction time stays linear on a large input', () => {
   // 10x the input may take 10x the time; a quadratic scan would take ~100x.
   assert.ok(largeMs < smallMs * 40, `small ${smallMs.toFixed(1)} ms, large ${largeMs.toFixed(1)} ms`);
 });
+
+// Review findings on milestone 23 (Gemini Carbon, commit 0b3ebbf).
+
+test('code after a line comment ended by CR, U+2028, or U+2029 is kept', () => {
+  for (const terminator of ['\r', String.fromCharCode(0x2028), String.fromCharCode(0x2029)]) {
+    const source = `// note${terminator}var x = 1; x`;
+    assert.equal(compactJs(source), 'var x=1;x', JSON.stringify(terminator));
+    assert.equal(run(compactJs(source)), run(source));
+  }
+});
+
+test('a regex at an ambiguous position may hold quotes, backticks, and comment openers', () => {
+  for (const source of [
+    "var s = \"don't\", hit = 0; if (true) /don't/.test(s) && hit++; hit",
+    'var s = "`", hit = 0; if (true) /`/.test(s) && hit++; hit',
+    'var s = "*", hit = 0; if (true) /[/*]/.test(s) && hit++; hit'
+  ]) {
+    assert.equal(run(compactJs(source)), '1', source);
+    validateJs(source); // Valid code: no throw.
+  }
+});
+
+test('a verbatim span ending in a line comment keeps the following line break', () => {
+  assertEquivalent('var x = 8; var a = (x) / 2 + // trailing\n 3; a', 7);
+  assertEquivalent('function f(x) {\n return (x) / 2 // half\n}\nf(8)', 4);
+  assertEquivalent('var ok = 1; if (true) /[//]/.test("/")\nok', 1);
+});
+
+test('CRLF string line continuations compact and run', () => {
+  const backslash = String.fromCharCode(0x5c);
+  const source = `var s = "hello${backslash}\r\nworld"; s`;
+  assert.equal(run(compactJs(source)), '"helloworld"');
+});
+
+test('a raw CR inside a string is rejected like a raw LF', () => {
+  assert.throws(() => compactJs('const s = "abc\rdef";'), /Unterminated string literal \(line 1, column 11\)/);
+});
+
+test('real malformations are still reported when no ambiguous slash exists', () => {
+  assert.throws(() => compactJs('const a = (x) * 2;\nconst s = "open'), /Unterminated string literal/);
+});

@@ -2035,3 +2035,63 @@ test('the runtime copy and both manifests are compacted', (t) => {
   }
   assert.match(fs.readFileSync(path.join(dist, 'runtime', 'routes.js'), 'utf8'), /^export const pageModules=\[\{"filePath":"App\.wizz"/);
 });
+
+test('authored blocks are located from the parse, not by re-scanning the raw text', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  const src = path.join(projectDirectory, 'src');
+  // An attribute value that merely contains "<script>" text is not a block.
+  writeFile(path.join(src, 'App.wizz'), '<div data-x="<script>\'unclosed</script>"><p>hi</p></div>\n');
+  // ...and must not hide the real block that follows it.
+  writeFile(path.join(src, 'B.wizz'), '<div data-x="<script></script>"><p>hi</p></div>\n<script>\nconst s = "unclosed\n</script>\n');
+
+  const result = buildProject(src, path.join(projectDirectory, 'dist'), createLogger(), { json: true, compact: true });
+  assert.equal(result.failedCount, 1);
+  assert.deepEqual(result.diagnostics, [{
+    code: null,
+    severity: 'error',
+    message: 'Unterminated string literal in the <script> block (line 3, column 11)',
+    file: 'B.wizz',
+    line: 3,
+    column: 11
+  }]);
+  assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'App.js')), true);
+});
+
+test('a compaction failure in generated code carries no .wizz line or column', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<button on:click={() => "unclosed}>x</button>\n');
+
+  const result = buildProject(path.join(projectDirectory, 'src'), path.join(projectDirectory, 'dist'), createLogger(), { json: true, compact: true });
+  assert.equal(result.ok, false);
+  const [record] = result.diagnostics;
+  assert.equal(record.file, 'App.wizz');
+  assert.equal(record.line, null);
+  assert.equal(record.column, null);
+  assert.match(record.message, /^Compaction failed for generated module App\.js: Unterminated string literal \(generated line \d+, column \d+\)$/);
+  assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'App.js')), false);
+});
+
+test('a malformed shell is located on its own lines even when the stylesheet link is injected', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  const src = path.join(projectDirectory, 'src');
+  writeFile(path.join(src, 'App.wizz'), '<p>x</p><wizz:style>p { color: red }</wizz:style>');
+  // The legacy /app.css link is rewritten and a link is injected before
+  // </head>; neither may shift the reported position.
+  writeFile(path.join(projectDirectory, 'index.html'), '<html><head><link rel="stylesheet" href="/app.css">\n</head>\n<body><div id="app"></div>\n  <!-- never closed\n</body></html>');
+
+  const result = buildProject(src, path.join(projectDirectory, 'dist'), createLogger(), { json: true, compact: true });
+  assert.equal(result.ok, false);
+  assert.equal(result.diagnostics[0].line, 4);
+  assert.equal(result.diagnostics[0].column, 3);
+
+  // A well-formed shell still gets the rewrite and the link after compaction.
+  writeFile(path.join(projectDirectory, 'index.html'), '<html>\n  <head>\n    <title>t</title>\n  </head>\n  <body><div id="app"></div></body>\n</html>');
+  const ok = buildProject(src, path.join(projectDirectory, 'dist-ok'), createLogger(), { compact: true });
+  assert.equal(ok.failedCount, 0);
+  const shell = fs.readFileSync(path.join(projectDirectory, 'dist-ok', 'index.html'), 'utf8');
+  assert.match(shell, /<link rel="stylesheet" href="\/wizz\.css">\n<\/head>/);
+  assert.ok(shell.includes('<div id="app"></div>'));
+});

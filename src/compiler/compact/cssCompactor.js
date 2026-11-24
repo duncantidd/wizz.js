@@ -46,7 +46,9 @@ function scanString(source, start) {
   let index = start + 1;
   while (index < source.length) {
     const character = source[index];
-    if (character === '\\') index += 2;
+    // An escaped newline is a line continuation; CRLF counts as one newline
+    // (CSS Syntax preprocessing), so it is three characters, not two.
+    if (character === '\\') index += source[index + 1] === '\r' && source[index + 2] === '\n' ? 3 : 2;
     else if (character === quote) return index + 1;
     else if (character === '\n' || character === '\r' || character === '\f') break;
     else index += 1;

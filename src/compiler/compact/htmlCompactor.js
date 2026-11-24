@@ -17,7 +17,8 @@
 //   - the doctype, processing instructions, and CDATA sections;
 //   - the full content of raw-text and whitespace-significant elements:
 //     `<script>` (every type, including `application/wizz-state` payloads),
-//     `<style>`, `<pre>`, `<textarea>`, `<listing>`, `<xmp>`, `<iframe>`,
+//     `<style>`, `<pre>`, `<textarea>` and `<title>` (both RCDATA: `<!--` and
+//     `<x` are literal text there), `<listing>`, `<xmp>`, `<iframe>`,
 //     `<noembed>`, `<noframes>`, and `<plaintext>` (to the end of input).
 //
 // Conservative assumption: text whitespace is treated as collapsible. A shell
@@ -30,7 +31,7 @@
 const { locate } = require('./jsCompactor');
 
 const VERBATIM_ELEMENTS = new Set([
-  'script', 'style', 'pre', 'textarea', 'listing', 'xmp', 'iframe', 'noembed', 'noframes'
+  'script', 'style', 'pre', 'textarea', 'title', 'listing', 'xmp', 'iframe', 'noembed', 'noframes'
 ]);
 
 function compactionError(message, source, offset) {

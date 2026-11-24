@@ -185,12 +185,24 @@
 // call milestone 19 made for `wizz init` itself). Syntax and output hold;
 // generated modules differ only in the version banner.
 //
+// compiler 1.25.0 / syntax 1.6.0 / output 1.13.0: milestone 23
+// (`wizz build --compact`) plus a script-lexer fix. scriptLexer.js now ends a
+// line comment at every ECMAScript line terminator (CR, U+2028, U+2029, not
+// only LF), keeps a CRLF line continuation inside its string or template,
+// stops a string at a raw CR, and never lets a regex literal span a line
+// terminator; CR and the separators also set `newlineBefore`. Script
+// statement extents could previously swallow the code after such a comment.
+// Parsing logic changed, so the compiler moves; accepted component syntax and
+// generated output do not, so syntax and output hold. The release also drops
+// Node 18 and 20 (Node 22+ now) — a platform-support change shipped as a
+// minor by decision, since no contract surface changes.
+//
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.24.0',
+  compiler: '1.25.0',
   syntax: '1.6.0',
   output: '1.13.0'
 });

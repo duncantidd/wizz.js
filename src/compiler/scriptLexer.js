@@ -45,15 +45,28 @@ function regexAllowedAfter(previous) {
   return false;
 }
 
+// ECMAScript line terminators: LF, CR, LINE SEPARATOR, PARAGRAPH SEPARATOR.
+// The separators are built with fromCharCode because, written literally, they
+// would end this source line.
+const LINE_SEPARATOR = String.fromCharCode(0x2028);
+const PARAGRAPH_SEPARATOR = String.fromCharCode(0x2029);
+const isLineTerminator = (char) => char === '\n' || char === '\r' || char === LINE_SEPARATOR || char === PARAGRAPH_SEPARATOR;
+
+// The length of a backslash escape at `index`: a CRLF line continuation is
+// three characters, every other escape two.
+const escapeLength = (source, index) => (source[index + 1] === '\r' && source[index + 2] === '\n' ? 3 : 2);
+
 function scanString(source, start) {
   const quote = source[start];
   let current = start + 1;
 
   while (current < source.length) {
     const char = source[current];
-    if (char === '\\') current += 2;
+    if (char === '\\') current += escapeLength(source, current);
     else if (char === quote) return current + 1;
-    else if (char === '\n') return current; // Invalid JS; stop before the newline.
+    // A raw LF or CR is invalid inside a string: stop before it. (U+2028 and
+    // U+2029 are legal string content since ES2019.)
+    else if (char === '\n' || char === '\r') return current;
     else current += 1;
   }
 
@@ -65,7 +78,7 @@ function scanTemplateText(source, start) {
 
   while (current < source.length) {
     const char = source[current];
-    if (char === '\\') current += 2;
+    if (char === '\\') current += escapeLength(source, current);
     else if (char === '`' || (char === '$' && source[current + 1] === '{')) return current;
     else current += 1;
   }
@@ -79,8 +92,9 @@ function scanRegex(source, start) {
 
   while (current < source.length) {
     const char = source[current];
+    if (isLineTerminator(source[current + 1]) && char === '\\') return -1;
     if (char === '\\') current += 2;
-    else if (char === '\n') return -1; // Regex literals cannot span lines.
+    else if (isLineTerminator(char)) return -1; // Regex literals cannot span lines.
     else if (char === '[') { inCharacterClass = true; current += 1; }
     else if (char === ']') { inCharacterClass = false; current += 1; }
     else if (char === '/' && !inCharacterClass) {
@@ -145,7 +159,7 @@ function tokenizeScript(source) {
   while (current < source.length) {
     const char = source[current];
 
-    if (char === '\n') { pendingNewline = true; current += 1; continue; }
+    if (isLineTerminator(char)) { pendingNewline = true; current += 1; continue; }
     if (/\s/.test(char)) { current += 1; continue; }
 
     if (modes[modes.length - 1] === 'template') {
@@ -168,8 +182,10 @@ function tokenizeScript(source) {
     }
 
     if (char === '/' && source[current + 1] === '/') {
-      const newline = source.indexOf('\n', current + 2);
-      const end = newline === -1 ? source.length : newline;
+      // Any ECMAScript line terminator ends a line comment, not only LF:
+      // missing CR, U+2028, or U+2029 here swallowed the code after them.
+      let end = current + 2;
+      while (end < source.length && !isLineTerminator(source[end])) end += 1;
       push('comment', current, end);
       current = end;
       continue;

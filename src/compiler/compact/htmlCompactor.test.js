@@ -7,7 +7,7 @@ const { compactHtml } = require('./htmlCompactor');
 test('collapses text whitespace and removes comments', () => {
   assert.equal(
     compactHtml('<!DOCTYPE html>\n<html>\n  <head>\n    <!-- a note -->\n    <title>  My   App </title>\n  </head>\n</html>\n'),
-    '<!DOCTYPE html>\n<html>\n<head>\n<title> My App </title>\n</head>\n</html>\n'
+    '<!DOCTYPE html>\n<html>\n<head>\n<title>  My   App </title>\n</head>\n</html>\n'
   );
 });
 
@@ -105,4 +105,10 @@ test('malformed input fails with a located SyntaxError', () => {
     });
   }
   assert.throws(() => compactHtml(undefined), TypeError);
+});
+
+test('title is RCDATA: markup-like text inside it is copied verbatim', () => {
+  assert.equal(compactHtml('<title>x <y z="unclosed</title>'), '<title>x <y z="unclosed</title>');
+  assert.equal(compactHtml('<title>a <!-- b -->  c</title>'), '<title>a <!-- b -->  c</title>');
+  assert.throws(() => compactHtml('<title>never closed'), /Unterminated <title> element/);
 });

@@ -558,9 +558,14 @@ async function buildProjectHandler(args, { root }) {
     }
     adapter = args.adapter;
   }
+  if (args.compact !== undefined && typeof args.compact !== 'boolean') {
+    throw new ToolExecutionError('compact must be a boolean.');
+  }
+  const compact = args.compact === true;
   const result = buildProject(input.absolutePath, output.absolutePath, { log() {}, error() {} }, {
     json: true,
-    ...(adapter ? { adapter } : {})
+    ...(adapter ? { adapter } : {}),
+    ...(compact ? { compact } : {})
   });
   const structured = {
     format: BUILD_DIAGNOSTICS_FORMAT,
@@ -569,7 +574,8 @@ async function buildProjectHandler(args, { root }) {
     failedCount: result.failedCount,
     diagnostics: result.diagnostics,
     files: result.files,
-    ...(adapter ? { adapter } : {})
+    ...(adapter ? { adapter } : {}),
+    ...(compact ? { compact: true } : {})
   };
   const text = [
     `Build ${result.ok ? 'succeeded' : 'failed'}: ${result.compiledCount} compiled, ${result.failedCount} failed.`,
@@ -962,7 +968,8 @@ const TOOL_DEFINITIONS = Object.freeze([
       properties: {
         inputDirectory: { type: 'string', description: 'Source directory relative to the project root. Default "src".' },
         outputDirectory: { type: 'string', description: 'Output directory relative to the project root. Default "dist".' },
-        adapter: { type: 'string', enum: ['node'], description: 'Also generate the node adapter host (dist/server.mjs).' }
+        adapter: { type: 'string', enum: ['node'], description: 'Also generate the node adapter host (dist/server.mjs).' },
+        compact: { type: 'boolean', description: 'Compact every emitted artifact for production and write no source maps (wizz build --compact).' }
       },
       additionalProperties: false
     }

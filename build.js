@@ -126,7 +126,16 @@ function getOutputPath(inputDirectory, outputDirectory, inputPath) {
 // removed so it cannot ship beside (and mis-describe) the compacted module.
 function writeGeneratedModule(outputPath, generatedModule, sourceMap, compact = false) {
   if (compact) {
-    fs.writeFileSync(outputPath, compactJs(generatedModule), 'utf-8');
+    let compacted;
+    try {
+      compacted = compactJs(generatedModule);
+    } catch (error) {
+      // The position is in the generated module, not the .wizz source (an
+      // inline handler's malformed body lands here), so it travels in the
+      // message only: no line/column fields to misattribute to the source.
+      throw new Error(`Compaction failed for generated module ${path.basename(outputPath)}: ${String(error.message).replace(/ \(line (\d+), column (\d+)\)$/, ' (generated line $1, column $2)')}`);
+    }
+    fs.writeFileSync(outputPath, compacted, 'utf-8');
     fs.rmSync(`${outputPath}.map`, { force: true });
     return;
   }
@@ -174,28 +183,30 @@ function relocateCompactionError(error, fileText, blockOffset, label) {
 // Under --compact, the authored <script> and <wizz:style> blocks are checked
 // against the compactors before anything is written, so malformed source the
 // compiler copies through (an unterminated string or comment) fails with
-// its position in the .wizz file rather than in generated output. The blocks
-// are located with the same first-match rule the parser applies.
-// Conservative assumption: a component with several <script> elements is
-// checked on its first, the one the compiler extracts.
-function validateAuthoredBlocksForCompaction(rawWizzCode) {
-  const script = /<script\b[^>]*>([\s\S]*?)<\/script\s*>/i.exec(rawWizzCode);
-  if (script) {
-    const contentOffset = script.index + script[0].indexOf('>') + 1;
+// its position in the .wizz file rather than in generated output. Both blocks
+// come from the compiler's own parse (`payload`), never from re-scanning the
+// raw text, so markup that merely contains `<script>` (an attribute value)
+// is not mistaken for the block.
+function validateAuthoredBlocksForCompaction(rawWizzCode, payload) {
+  if (payload.scriptStart && payload.scriptSource) {
     try {
-      validateJs(script[1]);
+      validateJs(payload.scriptSource);
     } catch (error) {
-      relocateCompactionError(error, rawWizzCode, contentOffset, 'the <script> block');
+      relocateCompactionError(error, rawWizzCode, payload.scriptStart.offset, 'the <script> block');
     }
   }
 
-  const style = /<wizz:style\b[^>]*>([\s\S]*?)<\/wizz:style\s*>/.exec(rawWizzCode);
-  if (style) {
-    const contentOffset = style.index + style[0].indexOf('>') + 1;
+  const style = payload.style;
+  if (style && style.css) {
+    // The parser keeps the trimmed CSS and the block's start position; the
+    // CSS text is located from there.
+    const searchFrom = style.loc && style.loc.start ? style.loc.start.offset : 0;
+    const found = rawWizzCode.indexOf(style.css, searchFrom);
     try {
-      compactCss(style[1]);
+      compactCss(style.css);
     } catch (error) {
-      relocateCompactionError(error, rawWizzCode, contentOffset, 'the <wizz:style> block');
+      if (found === -1) throw error;
+      relocateCompactionError(error, rawWizzCode, found, 'the <wizz:style> block');
     }
   }
 }
@@ -228,7 +239,7 @@ function compileWizzFile(inputPath, outputPath, options = {}) {
   }
 
   const compact = options.compact === true;
-  if (compact) validateAuthoredBlocksForCompaction(rawWizzCode);
+  if (compact) validateAuthoredBlocksForCompaction(rawWizzCode, result.payload);
 
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   writeGeneratedModule(outputPath, result.source, result.sourceMap, compact);
@@ -508,8 +519,13 @@ function copyDocumentShell(inputDirectory, outputDirectory, hasStyles, logger = 
   }
 
   const authoredShell = fs.readFileSync(shellPath, 'utf8');
-  let shell = rewriteLegacyStylesheetLinks(authoredShell);
-  if (hasStyles && shell !== authoredShell) {
+  // Under --compact the authored text is compacted first, before the link
+  // rewrite and injection below shift its lines, so a malformed shell is
+  // reported at its position on disk. compactHtml copies tags verbatim, so
+  // the `</head>` anchor and the href patterns match the compacted text too.
+  const baseShell = compact ? compactAuthoredFile(compactHtml, authoredShell, shellPath) : authoredShell;
+  let shell = rewriteLegacyStylesheetLinks(baseShell);
+  if (hasStyles && shell !== baseShell) {
     logger.log(`Note: the document shell links /app.css; the extracted stylesheet is now ${STYLESHEET_FILENAME}, so the built shell links /${STYLESHEET_FILENAME} instead. Update index.html to match.`);
   }
   if (hasStyles && !linksExtractedStylesheet(shell)) {
@@ -533,11 +549,8 @@ function copyDocumentShell(inputDirectory, outputDirectory, hasStyles, logger = 
   const shellStylesheetPath = path.join(path.dirname(shellPath), 'App.css');
   const hasShellStylesheet = fs.existsSync(shellStylesheetPath);
   let shellStylesheet = null;
-  if (compact) {
-    shell = compactAuthoredFile(compactHtml, shell, shellPath);
-    if (hasShellStylesheet) {
-      shellStylesheet = compactAuthoredFile(compactCss, fs.readFileSync(shellStylesheetPath, 'utf8'), shellStylesheetPath);
-    }
+  if (compact && hasShellStylesheet) {
+    shellStylesheet = compactAuthoredFile(compactCss, fs.readFileSync(shellStylesheetPath, 'utf8'), shellStylesheetPath);
   }
 
   fs.writeFileSync(path.join(outputDirectory, 'index.html'), shell, 'utf8');

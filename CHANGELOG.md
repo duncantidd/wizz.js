@@ -11,11 +11,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Added — Compact Production Builds (milestone 23; compiler 1.24.0, syntax 1.6.0, and output 1.13.0 unchanged)
+### Added — Compact Production Builds (milestone 23; compiler 1.24.0 → 1.25.0, syntax 1.6.0 and output 1.13.0 unchanged)
 
 #### Versions
 
-- No contract moves. The compactors are build-time tools applied to finished artifacts, not `compile()` stages: parsing, AST generation, source-map generation, and generated module structure are untouched, and a normal `wizz build` is byte-identical. Shipping the flag in a tagged release takes a compiler minor for the package lockstep, done separately as for milestone 24.
+- Released as 1.25.0. The compactors are build-time tools applied to finished artifacts, not `compile()` stages, so generated module structure is untouched and a normal `wizz build` differs only in the version banner. The compiler moves because `scriptLexer.js` parsing changed (the line-terminator fix under Fixed) and because the package version is pinned in lockstep with it. Syntax 1.6.0 and output 1.13.0 hold.
+- Dropping Node 18 and 20 ships in this minor by decision: it changes supported platforms, not any contract surface (component syntax, generated output, CLI, or the diagnostics envelope).
 
 #### Added
 
@@ -31,7 +32,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `writeGeneratedModule` is exported from `build.js`; `copyRuntimeModules`, `writeExtractedStyles`, `copyDocumentShell`, `copyApiHandlers`, `emitRouteManifest`, `emitNodeAdapterHost`, and `writeEligibleServerBuilds` take an optional trailing `compact` argument (default `false`, so existing callers are unchanged).
 - `scriptLexer.js` additionally exports `PUNCTUATORS` and `scanRegex` for the compactor.
 - Tests: `src/compiler/compact/{js,css,html}Compactor.test.js` (execution equivalence under `node:vm` for ASI hazards, regex/division ambiguity, nested templates, `</script>` in strings, unicode escapes, and non-ASCII identifiers; CSS `content:` strings, `url()`, escapes, and combinators; HTML raw-text elements and state payloads; located failures; idempotence; linear scaling). `test/compactBuild.test.js` builds the scaffold both ways and compares SSR markup, head, and state per route, the client DOM through every interaction, hydration, and the node adapter's page and API responses. `test/benchmarks.test.js` records the size reduction and compaction time (19.2% across 20 generated and runtime modules, about 50 ms). `build.test.js` and `scripts/cli.test.js` pin the flag discipline, envelope, map suppression, and located failures.
-- `wizz mcp`'s `dev_workflow` text, the README, STRUCTURE.md, and `src/compiler/README.md` document the flag.
+- `wizz mcp`'s `dev_workflow` text, the README, STRUCTURE.md, and `src/compiler/README.md` document the flag. The MCP `build_project` tool accepts `compact: boolean` beside `adapter` and echoes `compact: true` in its structured result.
+- `scripts/install-cli.test.js` pins the installer's Node 22 floor with a stub `node` on PATH (18 and 20 refused before anything installs; 22 passes).
+
+#### Fixed (review of the first milestone 23 commit)
+
+- `scriptLexer.js` ended line comments only at LF. A comment ended by CR, U+2028, or U+2029 swallowed the code after it, so `compactJs` deleted that code silently (and the self-check, using the same lexer, agreed). Every ECMAScript line terminator now ends a line comment and sets `newlineBefore`; a regex literal cannot span any of them; a CRLF line continuation (a backslash then CRLF) stays inside its string or template instead of reading as an unterminated literal; and a raw CR ends a string as a raw LF does (U+2028/U+2029 remain legal string content).
+- `compactCss` read a CRLF line continuation inside a string as an unterminated string.
+- Valid JavaScript with a regex at a lexically ambiguous position (after `)`, `}`, or `of`) holding a quote, backtick, or `/*` (`if (c) /don't/.test(s)`) failed with "Unterminated ..." because validation ran on the lexer's division reading. When such a `/` can really be read as a regex, a validation or self-check failure now returns the input unchanged, and `validateJs` accepts it.
+- A verbatim span ending in a line comment (`(x) / 2 // half`) could drop the following line break and glue the next line into the comment ("Internal compaction error"). The break after a verbatim span is now always kept.
+- Authored-block validation re-scanned the raw `.wizz` text with regexes, so an attribute value containing `<script>` text was mistaken for the script block (failing valid components, or hiding the real block). It now uses the compiler's parse (`payload.scriptSource`/`scriptStart`, `payload.style`).
+- A compaction failure inside generated code (a malformed inline handler body) stamped generated-module line/column onto the `.wizz` file. Such errors now say `Compaction failed for generated module App.js: ... (generated line N, column M)` and carry no `line`/`column` fields.
+- A malformed `index.html` was reported one line late (or shifted a column) when the build injected or rewrote the stylesheet link first. The authored shell is now compacted before the link rewrite and injection.
+- `compactHtml` treated `<title>` as ordinary markup, though it is RCDATA: `<!--` and `<x` inside it are literal text. Its content is now copied verbatim.
 
 ### Changed — Supported Node.js versions: 22, 24, and 26
 

@@ -127,3 +127,9 @@ test('compaction time stays linear on a large sheet', () => {
   const largeMs = time(unit.repeat(5000));
   assert.ok(largeMs < smallMs * 40, `small ${smallMs.toFixed(1)} ms, large ${largeMs.toFixed(1)} ms`);
 });
+
+test('a CRLF line continuation inside a string is kept', () => {
+  const backslash = String.fromCharCode(0x5c);
+  assert.equal(compactCss(`a { content: "hello${backslash}\r\nworld"; }`), `a{content:"hello${backslash}\r\nworld"}`);
+  assert.throws(() => compactCss('a { content: "open\r\n}'), /Unterminated string/);
+});

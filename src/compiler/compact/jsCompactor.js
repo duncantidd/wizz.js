@@ -28,7 +28,12 @@
 //   — the rest of that source line is copied verbatim, so whichever reading
 //   the engine takes, its bytes are unchanged. If such a line also opens or
 //   closes a template literal (whose extent could then be misjudged), the
-//   whole input is returned unchanged rather than risk a wrong cut.
+//   whole input is returned unchanged rather than risk a wrong cut. A line
+//   break after a verbatim span is always kept: the span may end in a line
+//   comment. And when such a `/` can really be read as a regex, the lexer's
+//   tokens past it may be wrong (a quote or backtick inside the regex reads
+//   as an unterminated literal), so a validation or self-check failure in
+//   that input returns it unchanged instead of failing valid code.
 // - After compaction, the output is re-tokenized and must produce exactly
 //   the same significant token stream as the input. A mismatch is an
 //   internal error that fails the build; corrupted output is never written.
@@ -161,7 +166,35 @@ function validateTokens(tokens, source) {
  */
 function validateJs(source) {
   if (typeof source !== 'string') throw new TypeError('validateJs expects a string.');
-  validateTokens(tokenizeScript(source), source);
+  const tokens = tokenizeScript(source);
+  try {
+    validateTokens(tokens, source);
+  } catch (error) {
+    // At an ambiguous `/` the lexer's division reading may have split a
+    // valid regex (`if (c) /don't/.test(s)`) into a bogus unterminated
+    // string. The lexer cannot tell, so neither can this check: such input
+    // is left to the engine, and compactJs() returns it unchanged.
+    if (hasRegexReadableSlash(tokens, source)) return;
+    throw error;
+  }
+}
+
+// Is there an ambiguous `/` (see isAmbiguousSlash) where the other reading
+// is actually possible? For a lexed division that means a regex literal
+// would scan from it; a lexed regex can always be re-read as division.
+function hasRegexReadableSlash(tokens, source) {
+  let previous = null;
+  let beforePrevious = null;
+  for (const token of tokens) {
+    if (token.type === 'comment') continue;
+    if (isAmbiguousSlash(token, previous, beforePrevious) &&
+        (token.type === 'regex' || scanRegex(source, token.start) !== -1)) {
+      return true;
+    }
+    beforePrevious = previous;
+    previous = token;
+  }
+  return false;
 }
 
 // Does the token at `index` sit where the lexer's regex/division call is
@@ -228,7 +261,17 @@ function significantSignature(tokens) {
 
 function compactBody(body) {
   const tokens = tokenizeScript(body);
-  validateTokens(tokens, body);
+  // With an ambiguous `/` whose regex reading is possible, the token stream
+  // itself may be wrong past that point. A validation or self-check failure
+  // is then not proof of malformed input, so the input is returned unchanged
+  // (null) instead of failing the build on valid JavaScript.
+  const ambiguous = hasRegexReadableSlash(tokens, body);
+  try {
+    validateTokens(tokens, body);
+  } catch (error) {
+    if (ambiguous) return null;
+    throw error;
+  }
 
   const modes = [];
   // Output is collected in parts: indexing a long concatenated string makes
@@ -246,6 +289,10 @@ function compactBody(body) {
   let pendingGap = false;     // A comment was dropped since the last token.
   let pendingBreak = false;   // ...and it contained a line terminator.
   let verbatimUntil = -1;
+  // Set after a verbatim span: the span may end in a line comment (or a
+  // regex holding `//`) that `previous` does not reflect, so the line break
+  // that follows it is always kept.
+  let afterVerbatim = false;
 
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
@@ -275,11 +322,12 @@ function compactBody(body) {
       emit(gap);
     } else if (previous && (pendingGap || gap.length > 0)) {
       const hasBreak = pendingBreak || LINE_TERMINATOR.test(gap);
-      if (hasBreak && !lineBreakDroppable(previous, token)) emit('\n');
+      if (hasBreak && (afterVerbatim || !lineBreakDroppable(previous, token))) emit('\n');
       else if (needsSpace(lastCharacter, previous, token)) emit(' ');
     }
     pendingGap = false;
     pendingBreak = false;
+    afterVerbatim = false;
 
     if (!inTemplate && isAmbiguousSlash(token, previous, beforePrevious)) {
       const end = verbatimSpanEnd(tokens, index, body);
@@ -287,6 +335,7 @@ function compactBody(body) {
       emit(body.slice(token.start, end));
       verbatimUntil = end;
       lastEnd = end; // Trailing whitespace inside the span was copied too.
+      afterVerbatim = true;
       index -= 1; // Re-visit this token through the verbatim branch.
       continue;
     }
@@ -308,6 +357,7 @@ function compactBody(body) {
     const a = before[index];
     const b = after[index];
     if (!a || !b || a.type !== b.type || a.value !== b.value) {
+      if (ambiguous) return null; // See `ambiguous` above.
       const offset = a ? a.start : body.length;
       throw compactionError('Internal compaction error: the compacted output would not tokenize like the source', body, offset);
     }
