@@ -310,3 +310,33 @@ test('a raw CR inside a string is rejected like a raw LF', () => {
 test('real malformations are still reported when no ambiguous slash exists', () => {
   assert.throws(() => compactJs('const a = (x) * 2;\nconst s = "open'), /Unterminated string literal/);
 });
+
+// Second-pass review findings (Gemini Argon, commit e542988).
+
+test('chained division after ) does not mask a real syntax error elsewhere', () => {
+  const source = 'const r = (8) / 4 / 2;\nconst broken = "unterminated';
+  assert.throws(() => compactJs(source), /Unterminated string literal \(line 2, column 16\)/);
+  assert.throws(() => validateJs(source), /Unterminated string literal/);
+  // ...and plain chained division still compacts.
+  assertEquivalent('var a = 8; (a) / 4 / 2', 1);
+});
+
+test('an error before a risky ambiguous slash is still reported', () => {
+  const source = 'const broken = "unterminated\nif (true) /don\'t/.test("x");';
+  assert.throws(() => compactJs(source), /Unterminated string literal \(line 1, column 16\)/);
+  assert.throws(() => validateJs(source), /Unterminated string literal/);
+});
+
+test('division after a template literal compacts to valid, equivalent code', () => {
+  const source = 'var width = 10, height = 2;\nvar a = (`${width}` / height // divide\n);\na';
+  const compacted = assertEquivalent(source, 5);
+  new vm.Script(compacted); // Parses.
+  assertEquivalent('var x = 8; `${x}` / 2 + "a / b"', '4a / b');
+});
+
+test('export default followed by a regex keeps the regex byte for byte', () => {
+  assert.equal(compactJs('export default /a   b/;'), 'export default/a   b/;');
+  assert.equal(compactJs("export default /don't/;"), "export default/don't/;");
+  // As a property name, default is an operand: obj.default / 2 is division.
+  assertEquivalent('var o = { default: 8 }; o.default / 2 / 2', 2);
+});

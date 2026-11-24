@@ -10,7 +10,8 @@
 // The one ambiguity that requires heuristic resolution is `/`: it starts a
 // regular expression literal unless the previous significant token ends an
 // operand (identifier outside a regex-allowing keyword, number, string,
-// template text, another regex, or a `)`/`]`/`}`/`++`/`--` punctuator), in
+// template text, another regex, a closing template backtick, or a
+// `)`/`]`/`}`/`++`/`--` punctuator), in
 // which case it is division. This matches the heuristic real engines use at
 // the lexical level; grammar-dependent corner cases pass through safely
 // because consumers never rewrite what they cannot confidently bound.
@@ -27,7 +28,7 @@ const PUNCTUATORS = [
 // Keywords after which a `/` starts a regular expression rather than division.
 const REGEX_ALLOWED_KEYWORDS = new Set([
   'return', 'typeof', 'instanceof', 'in', 'new', 'delete', 'void', 'throw',
-  'case', 'do', 'else', 'yield', 'await'
+  'case', 'do', 'else', 'yield', 'await', 'default' // `export default /re/`
 ]);
 
 const isIdentifierStart = (char) => /[A-Za-z_$]/.test(char);
@@ -41,7 +42,10 @@ const isIdentifierPart = (char) => /[A-Za-z0-9_$]/.test(char);
 function regexAllowedAfter(previous) {
   if (!previous) return true;
   if (previous.type === 'identifier') return REGEX_ALLOWED_KEYWORDS.has(previous.value);
-  if (previous.type === 'punctuator') return !')]}'.includes(previous.value) && previous.value !== '++' && previous.value !== '--';
+  // A backtick seen from code mode is always a template literal's CLOSE (an
+  // opening one switches to template mode), and a template is an operand, so
+  // a `/` after it is division: `${w}` / h.
+  if (previous.type === 'punctuator') return !')]}`'.includes(previous.value) && previous.value !== '++' && previous.value !== '--';
   return false;
 }
 

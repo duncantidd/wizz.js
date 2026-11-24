@@ -190,3 +190,13 @@ test('a regex literal cannot span any line terminator', () => {
   assert.deepEqual(types('x = /a\rb/'), ['identifier', 'punctuator', 'punctuator', 'identifier', 'identifier', 'punctuator']);
   assert.deepEqual(types('x = /a/g'), ['identifier', 'punctuator', 'regex']);
 });
+
+test('a slash after a closing template backtick is division', () => {
+  assert.deepEqual(types('`${w}` / h / 2'), ['punctuator', 'punctuator', 'identifier', 'punctuator', 'punctuator', 'punctuator', 'identifier', 'punctuator', 'number']);
+  assert.deepEqual(types('`a` / 2'), ['punctuator', 'templateText', 'punctuator', 'punctuator', 'number']);
+});
+
+test('a slash after export default starts a regex', () => {
+  assert.deepEqual(types('export default /a   b/;'), ['identifier', 'identifier', 'regex', 'punctuator']);
+  assert.deepEqual(values('export default /a   b/g'), ['export', 'default', '/a   b/g']);
+});

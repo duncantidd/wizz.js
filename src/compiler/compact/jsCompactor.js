@@ -68,7 +68,7 @@ for (const punctuator of PUNCTUATORS) {
 // the `obj.return / 2` misreading (a keyword after `.` is a property name).
 const REGEX_KEYWORDS = new Set([
   'return', 'typeof', 'instanceof', 'in', 'new', 'delete', 'void', 'throw',
-  'case', 'do', 'else', 'yield', 'await'
+  'case', 'do', 'else', 'yield', 'await', 'default'
 ]);
 
 function isWordCharacter(character) {
@@ -174,27 +174,46 @@ function validateJs(source) {
     // valid regex (`if (c) /don't/.test(s)`) into a bogus unterminated
     // string. The lexer cannot tell, so neither can this check: such input
     // is left to the engine, and compactJs() returns it unchanged.
-    if (hasRegexReadableSlash(tokens, source)) return;
+    if (isExcusedByAmbiguity(error, riskySlashOffsets(tokens, source))) return;
     throw error;
   }
 }
 
-// Is there an ambiguous `/` (see isAmbiguousSlash) where the other reading
-// is actually possible? For a lexed division that means a regex literal
-// would scan from it; a lexed regex can always be re-read as division.
-function hasRegexReadableSlash(tokens, source) {
+// A regex body holding one of these reads differently as code: a quote or
+// backtick opens a literal, and an inner slash may start a comment or another
+// regex. A body without them (`(8) / 4 / 2` read as `/ 4 /`) lexes as the
+// same plain tokens either way, so it cannot desynchronize the lexer.
+const MODE_CHANGING_CHARACTERS = /['"`/]/;
+
+// Start offsets of the ambiguous slashes (see isAmbiguousSlash) whose other
+// reading is possible AND could change how the rest of the line lexes.
+function riskySlashOffsets(tokens, source) {
+  const offsets = [];
   let previous = null;
   let beforePrevious = null;
   for (const token of tokens) {
     if (token.type === 'comment') continue;
-    if (isAmbiguousSlash(token, previous, beforePrevious) &&
-        (token.type === 'regex' || scanRegex(source, token.start) !== -1)) {
-      return true;
+    if (isAmbiguousSlash(token, previous, beforePrevious)) {
+      // The regex reading's text: the lexed regex itself, or what a regex
+      // scanned from this division slash would cover.
+      const end = token.type === 'regex' ? token.end : scanRegex(source, token.start);
+      if (end !== -1) {
+        const body = source.slice(token.start + 1, end).replace(/\/[A-Za-z]*$/, '');
+        if (MODE_CHANGING_CHARACTERS.test(body)) offsets.push(token.start);
+      }
     }
     beforePrevious = previous;
     previous = token;
   }
-  return false;
+  return offsets;
+}
+
+// A validation or self-check failure is excused only when a risky slash
+// precedes it: anything earlier was lexed before any possible divergence,
+// so an error there is real.
+function isExcusedByAmbiguity(error, offsets) {
+  if (typeof error.offset !== 'number') return false;
+  return offsets.some((offset) => offset <= error.offset);
 }
 
 // Does the token at `index` sit where the lexer's regex/division call is
@@ -261,15 +280,16 @@ function significantSignature(tokens) {
 
 function compactBody(body) {
   const tokens = tokenizeScript(body);
-  // With an ambiguous `/` whose regex reading is possible, the token stream
-  // itself may be wrong past that point. A validation or self-check failure
-  // is then not proof of malformed input, so the input is returned unchanged
-  // (null) instead of failing the build on valid JavaScript.
-  const ambiguous = hasRegexReadableSlash(tokens, body);
+  // Past an ambiguous `/` whose regex reading holds a quote, backtick, or
+  // slash, the token stream itself may be wrong. A validation or self-check
+  // failure AFTER such a slash is then not proof of malformed input, so the
+  // input is returned unchanged (null) instead of failing valid JavaScript;
+  // a failure before any of them, or in a file without them, still throws.
+  const riskyOffsets = riskySlashOffsets(tokens, body);
   try {
     validateTokens(tokens, body);
   } catch (error) {
-    if (ambiguous) return null;
+    if (isExcusedByAmbiguity(error, riskyOffsets)) return null;
     throw error;
   }
 
@@ -357,8 +377,8 @@ function compactBody(body) {
     const a = before[index];
     const b = after[index];
     if (!a || !b || a.type !== b.type || a.value !== b.value) {
-      if (ambiguous) return null; // See `ambiguous` above.
       const offset = a ? a.start : body.length;
+      if (isExcusedByAmbiguity({ offset }, riskyOffsets)) return null; // See riskyOffsets above.
       throw compactionError('Internal compaction error: the compacted output would not tokenize like the source', body, offset);
     }
   }

@@ -190,7 +190,9 @@
 // line comment at every ECMAScript line terminator (CR, U+2028, U+2029, not
 // only LF), keeps a CRLF line continuation inside its string or template,
 // stops a string at a raw CR, and never lets a regex literal span a line
-// terminator; CR and the separators also set `newlineBefore`. Script
+// terminator; CR and the separators also set `newlineBefore`. A `/` after a
+// closing template backtick is division and a `/` after `default` starts a
+// regex (`export default /re/`), matching the engine. Script
 // statement extents could previously swallow the code after such a comment.
 // Parsing logic changed, so the compiler moves; accepted component syntax and
 // generated output do not, so syntax and output hold. The release also drops
