@@ -3,7 +3,7 @@
 // Shared GitHub release layer for the CLI's network commands (`wizz update`
 // and `wizz install-vscode-extension`). Resolves the latest release of the
 // wizz.js repository and downloads release assets. Zero dependencies: the
-// global fetch (Node 18+) does the HTTP work the installer does with curl.
+// global fetch (every supported Node) does the HTTP work the installer does with curl.
 //
 // One API call serves both commands: the release carries the framework
 // tarball (wizz-<version>.tgz) and, independently versioned, the VS Code

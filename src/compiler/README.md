@@ -99,6 +99,8 @@ When a file-backed component contains author `<script>` content, `compile()` ret
 
 `build.js` writes this map alongside the generated module, for example `dist/pages/Home.js.map`, sets its `file` field to `Home.js`, and adds `//# sourceMappingURL=Home.js.map` as the generated module's final line. Components without author script receive `sourceMap: null` and no `.map` file.
 
+Under `wizz build --compact` no map is written and no `sourceMappingURL` comment is added (a map an earlier readable build left beside the module is removed): compaction moves every position the map describes, and a public production map would hand out the original source.
+
 ## Error Contract
 
 Without `filePath`, compiler errors retain their original source-only message:
@@ -252,6 +254,16 @@ Every occurrence matching `at <line>:<column>` is qualified. The function is int
 
 `createSourceMap()` creates a v3 map only when a non-empty author script and file path are available. It encodes mappings without an external dependency, maps each copied script line from the generated `Developer Logic` section, and embeds the full Wizz source for debugger inspection. The build owns output-specific metadata such as the map's `file` field and `sourceMappingURL` directive.
 
+### `compact/` - Production Compactors
+
+**Exports:** `compactJs(source)`, `validateJs(source)`, `compactCss(source)`, `compactHtml(source)`
+
+The hand-rolled compactors behind `wizz build --compact` (milestone 23). They are build-time tools, not part of `compile()`: generated output and its version contracts are unchanged, and `build.js` applies them to the finished artifacts. Each one removes comments and insignificant whitespace and nothing else — no identifier mangling or semantic rewrites — and throws a `SyntaxError` with 1-based `line`/`column` fields on malformed input instead of producing output.
+
+- `jsCompactor.js` reuses `scriptLexer.js` for token boundaries, so strings, template text, and regex literals are copied byte for byte and only the gaps between tokens change. Each gap becomes nothing, one space (where the tokens would merge: `return x`, `a - -b`, `1 .toFixed`), or one newline where the gap held a line break that automatic semicolon insertion or a restricted production may depend on. Lexically ambiguous `/` positions (after `)`, `}`, `of`, a keyword used as a property name, or a non-ASCII identifier character) keep the rest of their line verbatim, and the output is re-tokenized and must match the source token for token. `validateJs()` runs only the malformation checks; the build uses it to report an authored `<script>` at its `.wizz` position.
+- `cssCompactor.js` keeps strings, unquoted `url()` bodies, escapes (including a hex escape's terminating space), and whitespace that is a combinator or separates value tokens; whitespace is dropped only next to `{ } ; ,`, after `:`/`(`, and before `)`, and a comment that separated two tokens becomes `/**/`.
+- `htmlCompactor.js` collapses text whitespace runs to one character and removes comments other than conditional comments and `<!--wizz` markers. Tags, attributes, and the contents of `script`, `style`, `pre`, `textarea`, and the other raw-text elements are copied verbatim, so the SSR hosts' literal `<div id="app"></div>` and `</head>` replacements keep working.
+
 ## Current Boundaries
 
 - `compile()` and `compileServer()` emit module source but do not execute it, write it to disk, or resolve imports.
@@ -267,6 +279,7 @@ Every occurrence matching `at <line>:<column>` is qualified. The function is int
 - `version.test.js` verifies the version table's shape, semver format, immutability, pinned values, and the policy invariant that the compiler major version leads both contract majors.
 - `errorAugmenter.test.js` verifies location qualification, source excerpts, code frames, location-free errors, repeated locations, invalid file paths, and non-`Error` thrown values.
 - `sourceMapGenerator.test.js` verifies VLQ encoding, multiline mappings, unavailable map inputs, and script-location anchoring.
+- `compact/*.test.js` verify each compactor: execution equivalence of compacted JavaScript under `node:vm` (ASI hazards, regex/division ambiguity, nested templates, `</script>` in strings, unicode escapes, non-ASCII identifiers), CSS strings/`url()`/escapes/combinators, HTML raw-text elements and state payloads, located failures, idempotence, and linear scaling. `../../test/compactBuild.test.js` proves whole-build equivalence.
 - `../../test/endToEnd.test.js` compiles fixture `.wizz` files through this public API and executes their generated modules against a minimal DOM.
 
 Run the full repository test suite from the project root with:

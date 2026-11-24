@@ -11,6 +11,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added — Compact Production Builds (milestone 23; compiler 1.24.0, syntax 1.6.0, and output 1.13.0 unchanged)
+
+#### Versions
+
+- No contract moves. The compactors are build-time tools applied to finished artifacts, not `compile()` stages: parsing, AST generation, source-map generation, and generated module structure are untouched, and a normal `wizz build` is byte-identical. Shipping the flag in a tagged release takes a compiler minor for the package lockstep, done separately as for milestone 24.
+
+#### Added
+
+- `wizz build --compact` (and `node build.js ... --compact`): accepted in any position, at most once, `build` only — `init` now rejects it explicitly instead of reading it as a directory, and `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version` reject it through their existing strict checks. It combines with `--json` and `--adapter node`. `parseBuildArguments()` and `parseCommand()` results gain a `compact` boolean; `buildProject(..., { compact: true })` is the programmatic form.
+- `src/compiler/compact/`: zero-dependency `compactJs`, `validateJs`, `compactCss`, and `compactHtml`. Each removes comments and insignificant whitespace only (no mangling or semantic transforms) and throws a `SyntaxError` with 1-based `line`/`column` on malformed input.
+  - `compactJs` reuses `scriptLexer.js` and rewrites only inter-token gaps: nothing, one space where the touching characters would merge (`return x`, `a - -b`, `a / /re/`, `1 .toFixed()`, `c ? .5 : 1`), or one newline where the gap held a line break that ASI or a restricted production may depend on. Breaks are dropped only after a punctuator that cannot end a statement or before `) ] } , ; .`; a removed block comment containing a newline still counts as one. Lexically ambiguous `/` positions (after `)`, `}`, `of`, a keyword used as a property name, or a non-ASCII identifier character) copy the rest of their line verbatim, and the output is re-tokenized and must match the source token for token. Hashbang lines are preserved. Output is accumulated in parts so the scan stays linear (indexing a growing concatenated string makes V8 flatten it on every read).
+  - `compactCss` keeps strings, unquoted `url()` bodies, escapes with their terminating whitespace, whitespace before `:` and `(` and after `)`, operator spacing in `calc()`, and an empty custom property's space; it drops whitespace next to `{ } ; ,`, after `:`/`(`, before `)`, and a block's final `;`. A comment that separated two tokens becomes `/**/`.
+  - `compactHtml` collapses text whitespace runs to one character (a newline if the run had one) and removes comments except conditional comments and `<!--wizz` markers. Tags and attributes are copied byte for byte, as are `script` (every type, including `application/wizz-state`), `style`, `pre`, `textarea`, `listing`, `xmp`, `iframe`, `noembed`, `noframes`, and `plaintext` content.
+- Under `--compact` the build compacts the client, `.server.js`, and `.hydrate.js` modules, the copied `dist/runtime/**`, both manifests, `wizz.css` (without the per-file header comments; `@import` rules stay hoisted first), the copied `App.css`, `dist/index.html`, and `dist/server.mjs` when the node adapter runs. Authored API handlers under `dist/server/**` stay verbatim copies.
+- Under `--compact` no `.map` file and no `//# sourceMappingURL` comment is written, and a map an earlier readable build left beside a module is removed. Normal builds keep their maps.
+- Located failures under `--compact`: an authored `<script>` or `<wizz:style>` block with an unterminated string, comment, template literal, or `url()` fails that component with an uncoded diagnostic carrying its `.wizz` line and column (`Unterminated string literal in the <script> block (line 3, column 9)`), and nothing is written for it. A malformed `index.html` or `App.css` fails the build with `path:line:column`, and neither file of the pair is written. JSON-mode error records now carry `line`/`column` whenever the underlying error is located.
+- The `wizz-build-diagnostics@1` envelope gains an additive `compact: true` field, present only for compact builds.
+- `writeGeneratedModule` is exported from `build.js`; `copyRuntimeModules`, `writeExtractedStyles`, `copyDocumentShell`, `copyApiHandlers`, `emitRouteManifest`, `emitNodeAdapterHost`, and `writeEligibleServerBuilds` take an optional trailing `compact` argument (default `false`, so existing callers are unchanged).
+- `scriptLexer.js` additionally exports `PUNCTUATORS` and `scanRegex` for the compactor.
+- Tests: `src/compiler/compact/{js,css,html}Compactor.test.js` (execution equivalence under `node:vm` for ASI hazards, regex/division ambiguity, nested templates, `</script>` in strings, unicode escapes, and non-ASCII identifiers; CSS `content:` strings, `url()`, escapes, and combinators; HTML raw-text elements and state payloads; located failures; idempotence; linear scaling). `test/compactBuild.test.js` builds the scaffold both ways and compares SSR markup, head, and state per route, the client DOM through every interaction, hydration, and the node adapter's page and API responses. `test/benchmarks.test.js` records the size reduction and compaction time (19.2% across 20 generated and runtime modules, about 50 ms). `build.test.js` and `scripts/cli.test.js` pin the flag discipline, envelope, map suppression, and located failures.
+- `wizz mcp`'s `dev_workflow` text, the README, STRUCTURE.md, and `src/compiler/README.md` document the flag.
+
+### Changed — Supported Node.js versions: 22, 24, and 26
+
+- Node 18 and 20 are end-of-life and no longer supported. `package.json` `engines.node` is `>=22`, the CI matrix runs 22, 24, and 26, the release workflow runs on 24 (Active LTS), and `scripts/install-cli.sh` refuses Node older than 22. The README, the scaffold README template, STRUCTURE.md, and `packaging.test.js` say the same.
+- The `dist/package.json` `{"type":"module"}` marker and the dev server's recursive-watch fallback stay: Node 22 before 22.7 has no unflagged module-syntax detection, and the fallback still covers any platform without recursive `fs.watch`. Comments that justified them by Node 18/20 now state the current reason.
+
 ### Added — Bare-Bones Project Scaffolding (milestone 24; compiler 1.23.0 → 1.24.0 as a release bump, syntax 1.6.0 and output 1.13.0 unchanged)
 
 #### Versions

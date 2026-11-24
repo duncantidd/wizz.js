@@ -284,4 +284,6 @@ function matchTemplateTokens(tokens) {
   return pairs;
 }
 
-module.exports = { tokenizeScript, matchTemplateTokens };
+// PUNCTUATORS and scanRegex are exported for the production compactor
+// (src/compiler/compact/), which reuses this scanner instead of a second lexer.
+module.exports = { tokenizeScript, matchTemplateTokens, PUNCTUATORS, scanRegex };

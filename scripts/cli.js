@@ -14,7 +14,7 @@ const USAGE = `Usage:
   wizz init [directory] [--force] [--sample | --bare]
                                     Scaffold a starter project (asks whether to include
                                     the sample code; --sample/--bare answer up front)
-  wizz build [input-directory] [output-directory] [--json] [--adapter <name>]
+  wizz build [input-directory] [output-directory] [--json] [--adapter <name>] [--compact]
   wizz dev [--port <n>] [--host <addr>]
   wizz mcp [--root <dir>] [--allow-write]
                                     Serve Wizz tooling to AI agents over MCP (stdio)
@@ -68,10 +68,20 @@ function parseCommand(argv) {
     // any position, stripped before the positional count check, and
     // re-appended for the build layer to re-parse. The name is validated here
     // so a typo fails at the CLI boundary with the known-adapter list.
+    // `--compact` (milestone 23) follows the same discipline: any position,
+    // at most once, build-only, re-appended for the build layer.
     let adapter = null;
+    let compact = false;
     const withoutAdapter = [];
     for (let index = 0; index < positional.length; index++) {
       const argument = positional[index];
+      if (argument === '--compact') {
+        if (compact) {
+          throw new Error('Build accepts at most one --compact flag.\n\n' + USAGE);
+        }
+        compact = true;
+        continue;
+      }
       if (argument === '--adapter' || argument.startsWith('--adapter=')) {
         const value = argument === '--adapter' ? positional[index + 1] : argument.slice('--adapter='.length);
         if (value === undefined || value === '' || !KNOWN_ADAPTERS.includes(value)) {
@@ -89,14 +99,14 @@ function parseCommand(argv) {
     if (withoutAdapter.length !== 0 && withoutAdapter.length !== 2) {
       throw new Error('Build accepts either no directories or both <input-directory> and <output-directory>.\n\n' + USAGE);
     }
-    return { command, argumentsList: withoutAdapter, json, force: false, adapter };
+    return { command, argumentsList: withoutAdapter, json, force: false, adapter, compact };
   }
 
   if (command === 'init') {
-    // A stray --adapter here is a mistake, not a directory: rejected rather
-    // than silently reinterpreted (the same discipline as the strict checks
-    // below), since init's own target check would misreport it.
-    if (positional.some((argument) => argument === '--adapter' || argument.startsWith('--adapter='))) {
+    // A stray --adapter or --compact here is a mistake, not a directory:
+    // rejected rather than silently reinterpreted (the same discipline as the
+    // strict checks below), since init's own target check would misreport it.
+    if (positional.some((argument) => argument === '--adapter' || argument.startsWith('--adapter=') || argument === '--compact')) {
       throw new Error('Init does not accept arguments.\n\n' + USAGE);
     }
   }
@@ -231,7 +241,7 @@ function parseCommand(argv) {
 }
 
 function runCli(argv, dependencies = {}) {
-  const { command, argumentsList, json, force, port, host, adapter, root, allowWrite, template } = parseCommand(argv);
+  const { command, argumentsList, json, force, port, host, adapter, root, allowWrite, template, compact } = parseCommand(argv);
   const build = dependencies.build || buildProject;
   const startDev = dependencies.startDev || startDevelopmentServer;
   const startMcp = dependencies.startMcp || startMcpServer;
@@ -252,6 +262,7 @@ function runCli(argv, dependencies = {}) {
     const buildArguments = [...directories];
     if (json) buildArguments.push('--json');
     if (adapter) buildArguments.push('--adapter', adapter);
+    if (compact) buildArguments.push('--compact');
     return build(buildArguments, logger);
   }
 

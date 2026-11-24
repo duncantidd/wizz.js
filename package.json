@@ -18,7 +18,7 @@
   ],
   "type": "commonjs",
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "bin": {
     "wizz": "scripts/cli.js"

@@ -6,6 +6,7 @@ const path = require('node:path');
 const { compile, compileServer } = require('./src/compiler');
 const { scopeCss, splitImportRules } = require('./src/compiler/analyzer/cssScanner');
 const { discoverApiRoutes, listJavaScriptFiles } = require('./scripts/apiRoutes');
+const { compactJs, validateJs, compactCss, compactHtml } = require('./src/compiler/compact');
 
 // The extracted stylesheet's name must not collide with an author file, even
 // by case alone: `app.css` shared one file with the starter's `App.css` on
@@ -28,7 +29,7 @@ const BUILD_DIAGNOSTICS_FORMAT = 'wizz-build-diagnostics@1';
 const KNOWN_ADAPTERS = ['node'];
 const NODE_ADAPTER_HOST_FILENAME = 'server.mjs';
 
-const BUILD_USAGE_LINE = 'Usage: node build.js <input-directory> <output-directory> [--json] [--adapter <name>]';
+const BUILD_USAGE_LINE = 'Usage: node build.js <input-directory> <output-directory> [--json] [--adapter <name>] [--compact]';
 
 function parseBuildArguments(argv) {
   if (!Array.isArray(argv)) {
@@ -38,10 +39,18 @@ function parseBuildArguments(argv) {
   const json = argv.includes('--json');
   const adapterValues = [];
   const directories = [];
+  let compact = false;
 
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index];
     if (argument === '--json') continue;
+    if (argument === '--compact') {
+      if (compact) {
+        throw new Error('Build accepts at most one --compact flag.\n\n' + BUILD_USAGE_LINE);
+      }
+      compact = true;
+      continue;
+    }
     if (argument === '--adapter' || argument.startsWith('--adapter=')) {
       const value = argument === '--adapter' ? argv[index + 1] : argument.slice('--adapter='.length);
       if (value === undefined || value === '') {
@@ -68,7 +77,7 @@ function parseBuildArguments(argv) {
   }
 
   const [inputDirectory, outputDirectory] = directories;
-  return { inputDirectory, outputDirectory, json, adapter };
+  return { inputDirectory, outputDirectory, json, adapter, compact };
 }
 
 function toPosixPath(relativePath) {
@@ -111,7 +120,17 @@ function getOutputPath(inputDirectory, outputDirectory, inputPath) {
   return path.join(outputDirectory, relativePath.replace(/\.wizz$/, '.js'));
 }
 
-function writeGeneratedModule(outputPath, generatedModule, sourceMap) {
+// Milestone 23: `--compact` output carries no source maps. Compaction moves
+// every position the maps describe, and a public production map would hand
+// out the original source. A map left by an earlier readable build is
+// removed so it cannot ship beside (and mis-describe) the compacted module.
+function writeGeneratedModule(outputPath, generatedModule, sourceMap, compact = false) {
+  if (compact) {
+    fs.writeFileSync(outputPath, compactJs(generatedModule), 'utf-8');
+    fs.rmSync(`${outputPath}.map`, { force: true });
+    return;
+  }
+
   if (sourceMap) {
     const sourceMapPath = `${outputPath}.map`;
     sourceMap.file = path.basename(outputPath);
@@ -129,6 +148,56 @@ function writeGeneratedModule(outputPath, generatedModule, sourceMap) {
 
 function firstErrorLine(error) {
   return String(error.message).split('\n', 1)[0];
+}
+
+// Converts a 0-based offset in `text` into 1-based line/column numbers.
+function lineAndColumn(text, offset) {
+  const before = text.slice(0, offset);
+  const line = before.split('\n').length;
+  return { line, column: offset - (before.lastIndexOf('\n') + 1) + 1 };
+}
+
+// Re-throws a compactor error located inside an embedded block at its
+// position in the containing file: `blockOffset` is where the block's content
+// starts in `fileText`. The message's own "(line, column)" suffix, relative
+// to the block, is replaced with the file-relative one.
+function relocateCompactionError(error, fileText, blockOffset, label) {
+  if (typeof error.offset !== 'number') throw error;
+  const { line, column } = lineAndColumn(fileText, blockOffset + error.offset);
+  const message = String(error.message).replace(/ \(line \d+, column \d+\)$/, '');
+  const relocated = new SyntaxError(`${message} in ${label} (line ${line}, column ${column})`);
+  relocated.line = line;
+  relocated.column = column;
+  throw relocated;
+}
+
+// Under --compact, the authored <script> and <wizz:style> blocks are checked
+// against the compactors before anything is written, so malformed source the
+// compiler copies through (an unterminated string or comment) fails with
+// its position in the .wizz file rather than in generated output. The blocks
+// are located with the same first-match rule the parser applies.
+// Conservative assumption: a component with several <script> elements is
+// checked on its first, the one the compiler extracts.
+function validateAuthoredBlocksForCompaction(rawWizzCode) {
+  const script = /<script\b[^>]*>([\s\S]*?)<\/script\s*>/i.exec(rawWizzCode);
+  if (script) {
+    const contentOffset = script.index + script[0].indexOf('>') + 1;
+    try {
+      validateJs(script[1]);
+    } catch (error) {
+      relocateCompactionError(error, rawWizzCode, contentOffset, 'the <script> block');
+    }
+  }
+
+  const style = /<wizz:style\b[^>]*>([\s\S]*?)<\/wizz:style\s*>/.exec(rawWizzCode);
+  if (style) {
+    const contentOffset = style.index + style[0].indexOf('>') + 1;
+    try {
+      compactCss(style[1]);
+    } catch (error) {
+      relocateCompactionError(error, rawWizzCode, contentOffset, 'the <wizz:style> block');
+    }
+  }
 }
 
 /**
@@ -158,8 +227,11 @@ function compileWizzFile(inputPath, outputPath, options = {}) {
     return { diagnostics: result.diagnostics };
   }
 
+  const compact = options.compact === true;
+  if (compact) validateAuthoredBlocksForCompaction(rawWizzCode);
+
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
-  writeGeneratedModule(outputPath, result.source, result.sourceMap);
+  writeGeneratedModule(outputPath, result.source, result.sourceMap, compact);
 
   return { rawWizzCode, payload: result.payload, diagnostics: collect ? [] : undefined, warnings: result.warnings || [] };
 }
@@ -267,20 +339,34 @@ function computeServerEligibility(inputFiles, compiledByInputPath, failureReason
  * Writes the server and hydratable builds for one eligible file from the
  * artifacts cached during the eligibility walk, so nothing is compiled twice.
  */
-function writeEligibleServerBuilds(inputPath, outputPath, serverBuilds) {
+function writeEligibleServerBuilds(inputPath, outputPath, serverBuilds, compact = false) {
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   // Server output carries no source map (HTML string rendering, not
   // positional DOM artifacts); the hydratable build mirrors the client
   // build's source-map presence.
-  writeGeneratedModule(outputPath.replace(/\.js$/, '.server.js'), serverBuilds.serverResult.source, null);
-  writeGeneratedModule(outputPath.replace(/\.js$/, '.hydrate.js'), serverBuilds.hydratableResult.source, serverBuilds.hydratableResult.sourceMap);
+  writeGeneratedModule(outputPath.replace(/\.js$/, '.server.js'), serverBuilds.serverResult.source, null, compact);
+  writeGeneratedModule(outputPath.replace(/\.js$/, '.hydrate.js'), serverBuilds.hydratableResult.source, serverBuilds.hydratableResult.sourceMap, compact);
 }
 
-function copyRuntimeModules(outputDirectory) {
+function copyRuntimeModules(outputDirectory, compact = false) {
   const runtimeSourceDirectory = path.join(__dirname, 'src', 'runtime');
   const runtimeOutputDirectory = path.join(outputDirectory, 'runtime');
 
   fs.cpSync(runtimeSourceDirectory, runtimeOutputDirectory, { recursive: true });
+  if (!compact) return;
+
+  // Compact the copies in place: the runtime tree is the framework's own
+  // code, so a compaction failure here is an internal error and throws.
+  const visit = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(entryPath);
+      else if (entry.isFile() && /\.m?js$/.test(entry.name)) {
+        fs.writeFileSync(entryPath, compactJs(fs.readFileSync(entryPath, 'utf8')), 'utf8');
+      }
+    }
+  };
+  visit(runtimeOutputDirectory);
 }
 
 /**
@@ -304,8 +390,22 @@ function extractComponentStyles(inputDirectory, compiledByInputPath) {
   return styles;
 }
 
-function writeExtractedStyles(outputDirectory, styles) {
+function writeExtractedStyles(outputDirectory, styles, compact = false) {
   if (styles.length === 0) return false;
+
+  if (compact) {
+    // The per-file headers would only be stripped again; @import rules keep
+    // their hoisted position at the top of the sheet.
+    const imports = new Set();
+    const bodies = styles.map(({ css }) => {
+      const split = splitImportRules(css);
+      split.imports.forEach((rule) => imports.add(rule));
+      return split.css;
+    });
+    const sheet = compactCss([...imports, ...bodies].join('\n'));
+    fs.writeFileSync(path.join(outputDirectory, STYLESHEET_FILENAME), sheet, 'utf8');
+    return true;
+  }
 
   // A per-file header comment keeps the extracted stylesheet debuggable;
   // CSS comments are inert, so delivery semantics are unaffected. @import is
@@ -382,7 +482,23 @@ function shellLinksExtractedStyles(inputDirectory) {
  * up beside the located shell (input directory or its parent), matching both
  * build layouts.
  */
-function copyDocumentShell(inputDirectory, outputDirectory, hasStyles, logger = console) {
+// Compacts an author-owned file (the shell, App.css) for --compact. A
+// malformed file fails the build with its path and position; the error's
+// `filePath` lets the JSON envelope attribute the record.
+function compactAuthoredFile(compactor, text, filePath) {
+  try {
+    return compactor(text);
+  } catch (error) {
+    if (typeof error.line !== 'number') throw error;
+    const located = new SyntaxError(`${filePath}:${error.line}:${error.column}: ${String(error.message).replace(/ \(line \d+, column \d+\)$/, '')}`);
+    located.filePath = filePath;
+    located.line = error.line;
+    located.column = error.column;
+    throw located;
+  }
+}
+
+function copyDocumentShell(inputDirectory, outputDirectory, hasStyles, logger = console, compact = false) {
   const shellPath = findDocumentShell(inputDirectory);
   if (shellPath === null) {
     if (hasStyles) {
@@ -412,11 +528,23 @@ function copyDocumentShell(inputDirectory, outputDirectory, hasStyles, logger = 
     }
   }
 
+  // Both files are compacted before either is written, so a malformed one
+  // leaves no half-compacted pair behind.
+  const shellStylesheetPath = path.join(path.dirname(shellPath), 'App.css');
+  const hasShellStylesheet = fs.existsSync(shellStylesheetPath);
+  let shellStylesheet = null;
+  if (compact) {
+    shell = compactAuthoredFile(compactHtml, shell, shellPath);
+    if (hasShellStylesheet) {
+      shellStylesheet = compactAuthoredFile(compactCss, fs.readFileSync(shellStylesheetPath, 'utf8'), shellStylesheetPath);
+    }
+  }
+
   fs.writeFileSync(path.join(outputDirectory, 'index.html'), shell, 'utf8');
 
-  const shellStylesheetPath = path.join(path.dirname(shellPath), 'App.css');
-  if (fs.existsSync(shellStylesheetPath)) {
-    fs.copyFileSync(shellStylesheetPath, path.join(outputDirectory, 'App.css'));
+  if (hasShellStylesheet) {
+    if (shellStylesheet !== null) fs.writeFileSync(path.join(outputDirectory, 'App.css'), shellStylesheet, 'utf8');
+    else fs.copyFileSync(shellStylesheetPath, path.join(outputDirectory, 'App.css'));
   }
   return true;
 }
@@ -474,7 +602,13 @@ function validateRouteEntries(routeEntries) {
   }
 }
 
-function emitRouteManifest(inputDirectory, outputDirectory, inputFiles, serverRenderableByInputPath = new Map()) {
+// Manifests are generated JavaScript like the component modules, so
+// --compact runs them through the same compactor.
+function manifestSource(source, compact) {
+  return compact ? compactJs(source) : source;
+}
+
+function emitRouteManifest(inputDirectory, outputDirectory, inputFiles, serverRenderableByInputPath = new Map(), compact = false) {
   const routeFiles = inputFiles.filter((inputPath) => getRoutePath(inputDirectory, inputPath));
   const routeEntries = routeFiles.map((inputPath) => {
     const outputPath = getOutputPath(inputDirectory, outputDirectory, inputPath);
@@ -504,7 +638,7 @@ function emitRouteManifest(inputDirectory, outputDirectory, inputFiles, serverRe
   fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
   fs.writeFileSync(
     manifestPath,
-    `// Generated by Wizz. Edits will be overwritten.\nexport const pageModules = ${JSON.stringify(pageModules, null, 2)};\n`,
+    manifestSource(`// Generated by Wizz. Edits will be overwritten.\nexport const pageModules = ${JSON.stringify(pageModules, null, 2)};\n`, compact),
     'utf8'
   );
 }
@@ -525,7 +659,7 @@ function emitRouteManifest(inputDirectory, outputDirectory, inputFiles, serverRe
 // manifest is still written (empty), so neither the dev server nor an
 // external host can route an ambiguous handler — and no stale manifest from
 // an earlier build can survive. The build counts the failure; nothing routes.
-function copyApiHandlers(inputDirectory, outputDirectory) {
+function copyApiHandlers(inputDirectory, outputDirectory, compact = false) {
   const serverSourceDirectory = path.join(inputDirectory, 'server');
   const apiSourceDirectory = path.join(serverSourceDirectory, 'api');
   const manifestPath = path.join(outputDirectory, 'runtime', 'apiRoutes.js');
@@ -533,7 +667,7 @@ function copyApiHandlers(inputDirectory, outputDirectory) {
     fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
     fs.writeFileSync(
       manifestPath,
-      `// Generated by Wizz. Edits will be overwritten.\nexport const apiModules = ${JSON.stringify(entries, null, 2)};\n`,
+      manifestSource(`// Generated by Wizz. Edits will be overwritten.\nexport const apiModules = ${JSON.stringify(entries, null, 2)};\n`, compact),
       'utf8'
     );
   };
@@ -963,9 +1097,9 @@ server.listen(port, () => {
 });
 `;
 
-function emitNodeAdapterHost(outputDirectory, logger = console) {
+function emitNodeAdapterHost(outputDirectory, logger = console, compact = false) {
   const outputPath = path.join(outputDirectory, NODE_ADAPTER_HOST_FILENAME);
-  fs.writeFileSync(outputPath, NODE_ADAPTER_HOST_SOURCE, 'utf8');
+  fs.writeFileSync(outputPath, compact ? compactJs(NODE_ADAPTER_HOST_SOURCE) : NODE_ADAPTER_HOST_SOURCE, 'utf8');
   logger.log(`Generated the node adapter host: ${outputPath}`);
   return outputPath;
 }
@@ -986,6 +1120,11 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
   // The dev server replaces the built shell with the authored one, so nothing
   // links the extracted stylesheet there and it opts out with inlineStyles.
   const inlineStyles = options.inlineStyles === true;
+  // Milestone 23: shrink every emitted artifact and write no source maps.
+  // Authored API handlers under dist/server/** stay verbatim copies (see
+  // copyApiHandlers): the dev server re-syncs them by mtime and they are the
+  // author's code, not build output.
+  const compact = options.compact === true;
   const jsonDiagnostics = [];
   const jsonFiles = [];
   let resolvedInputDirectory = null;
@@ -1025,6 +1164,7 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
           const outcome = compileWizzFile(inputPath, outputPath, {
             diagnostics: 'collect',
             extractedStyles,
+            compact,
             filePath: toPosixPath(path.relative(resolvedInputDirectory, inputPath))
           });
           if (outcome.diagnostics.length > 0) {
@@ -1039,7 +1179,7 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
           // told apart by severity; they never fail the build or flip `ok`.
           jsonDiagnostics.push(...outcome.warnings);
         } else {
-          const outcome = compileWizzFile(inputPath, outputPath, { extractedStyles });
+          const outcome = compileWizzFile(inputPath, outputPath, { extractedStyles, compact });
           compiledByInputPath.set(inputPath, outcome);
           compiledFileCount++;
           logger.log(`Compiled ${inputPath} -> ${outputPath}`);
@@ -1057,8 +1197,8 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
             severity: 'error',
             message: firstErrorLine(error),
             file: toPosixPath(path.relative(resolvedInputDirectory, inputPath)),
-            line: null,
-            column: null
+            line: typeof error.line === 'number' ? error.line : null,
+            column: typeof error.column === 'number' ? error.column : null
           });
         } else {
           logger.error(`Compilation failed for ${inputPath}: ${error.message}`);
@@ -1090,7 +1230,7 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
       const eligibility = eligibilityByInputPath.get(inputPath);
 
       if (eligibility.eligible) {
-        writeEligibleServerBuilds(inputPath, outputPath, serverBuildsByInputPath.get(inputPath));
+        writeEligibleServerBuilds(inputPath, outputPath, serverBuildsByInputPath.get(inputPath), compact);
         serverRenderableByInputPath.set(inputPath, true);
       } else {
         serverRenderableByInputPath.set(inputPath, false);
@@ -1098,11 +1238,11 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
       }
     }
 
-    copyRuntimeModules(resolvedOutputDirectory);
+    copyRuntimeModules(resolvedOutputDirectory, compact);
     // A collision is a build failure (non-zero exit) but never a crash: the
     // empty manifest is already on disk, so neither the dev server nor an
     // external host routes the ambiguous handler.
-    const apiResult = copyApiHandlers(resolvedInputDirectory, resolvedOutputDirectory);
+    const apiResult = copyApiHandlers(resolvedInputDirectory, resolvedOutputDirectory, compact);
     if (apiResult.error) {
       failedCount++;
       if (jsonMode) {
@@ -1118,7 +1258,7 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
         logger.error(`Server API route discovery failed: ${apiResult.error}`);
       }
     }
-    emitRouteManifest(resolvedInputDirectory, resolvedOutputDirectory, inputFiles, serverRenderableByInputPath);
+    emitRouteManifest(resolvedInputDirectory, resolvedOutputDirectory, inputFiles, serverRenderableByInputPath, compact);
 
     // Pass 4 — style extraction and shell copy: production builds get one
     // wizz.css carrying every component's scoped rules, linked from the copied
@@ -1126,15 +1266,16 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
     // compiled without their copy above). The dev server keeps its per-document
     // <style> injection through inlineStyles.
     const componentStyles = extractComponentStyles(resolvedInputDirectory, compiledByInputPath);
-    writeExtractedStyles(resolvedOutputDirectory, componentStyles);
-    copyDocumentShell(resolvedInputDirectory, resolvedOutputDirectory, componentStyles.length > 0, logger);
+    writeExtractedStyles(resolvedOutputDirectory, componentStyles, compact);
+    copyDocumentShell(resolvedInputDirectory, resolvedOutputDirectory, componentStyles.length > 0, logger, compact);
 
     // The output directory holds ES modules and their assets, so pin the module
     // type beside the emitted artifacts: Node-side imports — the dev server's
     // SSR imports, and application servers following the SSR recipe — must work
-    // on every supported runtime, and Node 18 has no module-syntax detection to
-    // fall back on. A package.json the output already carries is respected: it
-    // may be the embedding project's deliberate choice.
+    // on every supported runtime, and Node 22 before 22.7 has no unflagged
+    // module-syntax detection to fall back on (where it exists, detection costs
+    // a reparse and a warning). A package.json the output already carries is
+    // respected: it may be the embedding project's deliberate choice.
     const moduleTypeMarkerPath = path.join(resolvedOutputDirectory, 'package.json');
     if (!fs.existsSync(moduleTypeMarkerPath)) {
       fs.writeFileSync(moduleTypeMarkerPath, '{"type":"module"}\n', 'utf8');
@@ -1145,7 +1286,7 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
     // Emitted unconditionally once requested — even with a route collision —
     // consistent with the manifests, which always write.
     if (adapterName === 'node') {
-      emitNodeAdapterHost(resolvedOutputDirectory, logger);
+      emitNodeAdapterHost(resolvedOutputDirectory, logger, compact);
     }
 
     if (jsonMode) {
@@ -1186,8 +1327,8 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
         severity: 'error',
         message: firstErrorLine(error),
         file,
-        line: null,
-        column: null
+        line: typeof error.line === 'number' ? error.line : null,
+        column: typeof error.column === 'number' ? error.column : null
       }],
       files: jsonFiles
     };
@@ -1195,25 +1336,29 @@ function buildProject(inputDirectory, outputDirectory, logger = console, options
 }
 
 function main(argv, logger = console) {
-  const { inputDirectory, outputDirectory, json, adapter } = parseBuildArguments(argv);
+  const { inputDirectory, outputDirectory, json, adapter, compact } = parseBuildArguments(argv);
   // In JSON mode stdout carries only the envelope, so the per-file prose the
   // build logs is suppressed at this CLI boundary.
   const result = buildProject(
     inputDirectory,
     outputDirectory,
     json ? { log() {}, error() {} } : logger,
-    json ? { json: true, adapter } : { adapter }
+    json ? { json: true, adapter, compact } : { adapter, compact }
   );
 
   if (json) {
-    // The adapter field is additive within format version 1: absent unless
-    // an adapter ran, so static-build consumers see an unchanged envelope.
+    // The adapter and compact fields are additive within format version 1:
+    // absent unless that option ran, so other consumers see an unchanged
+    // envelope.
     console.log(JSON.stringify({
       format: BUILD_DIAGNOSTICS_FORMAT,
       ok: result.ok,
       diagnostics: result.diagnostics,
       files: result.files,
-      ...(adapter ? { adapter } : {})
+      ...(adapter ? { adapter } : {}),
+      // Milestone 23, additive like `adapter`: present (true) only for
+      // compacted builds, so readable-build consumers see an unchanged shape.
+      ...(compact ? { compact: true } : {})
     }, null, 2));
   }
 
@@ -1245,6 +1390,7 @@ module.exports = {
   shellLinksExtractedStyles,
   writeExtractedStyles,
   copyRuntimeModules,
+  writeGeneratedModule,
   discoverWizzFiles,
   emitRouteManifest,
   getRoutePath,

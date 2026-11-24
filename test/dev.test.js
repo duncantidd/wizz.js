@@ -413,7 +413,8 @@ test('a platform without recursive fs.watch degrades to the poller and keeps reb
   t.after(() => fs.rmSync(inputDirectory, { recursive: true, force: true }));
   const sourceFile = path.join(inputDirectory, 'pages', 'Home.wizz');
   writeFile(sourceFile, '<main>Before</main>');
-  // The exact failure Node 18 on Linux raises for a recursive watch.
+  // The exact failure Node raises for a recursive watch on a platform without
+  // one (Linux before Node 20).
   const unavailable = Object.assign(
     new TypeError('The feature watch recursively is unavailable on the current platform, which is being used to run Node.js'),
     { code: 'ERR_FEATURE_UNAVAILABLE_ON_PLATFORM' }
@@ -1239,8 +1240,8 @@ test('an api handler with a syntax error answers 500 instead of crashing the ser
 test('handlers run as ESM from their dist copies, with relative imports resolving', async (t) => {
   const projectDirectory = createTemporaryDirectory();
   t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
-  // Deliberately NO package.json anywhere in the project: on Node 18/20 (no
-  // module-syntax detection) a direct src import would parse the handler as
+  // Deliberately NO package.json anywhere in the project: on Node 22 before
+  // 22.7 (no unflagged module-syntax detection) a direct src import would parse the handler as
   // CommonJS and fail on `export`. The dist copies — pinned type: module by
   // the build — are what actually executes.
   createApiProject(projectDirectory, {

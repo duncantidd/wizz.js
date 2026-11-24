@@ -51,7 +51,8 @@ test('accepts input and output directory arguments in order', () => {
     inputDirectory: 'src',
     outputDirectory: 'dist',
     json: false,
-    adapter: null
+    adapter: null,
+    compact: false
   });
 });
 
@@ -65,7 +66,8 @@ test('preserves absolute and nested directory arguments', () => {
     inputDirectory: '/projects/example/src',
     outputDirectory: 'build/generated/components',
     json: false,
-    adapter: null
+    adapter: null,
+    compact: false
   });
 });
 
@@ -936,7 +938,8 @@ test('pins the output directory as ES modules for Node-side imports', (t) => {
 
   buildProject(inputDirectory, outputDirectory, createLogger());
 
-  // Node 18 has no module-syntax detection: without this marker, importing
+  // Node 22 before 22.7 has no unflagged module-syntax detection: without this
+  // marker, importing
   // the emitted server modules from a CommonJS application (the SSR recipe)
   // fails on it. The dev server makes the same import on every request.
   const markerPath = path.join(outputDirectory, 'package.json');
@@ -1827,4 +1830,208 @@ test('the JSON build envelope carries warnings beside errors without failing ok'
     code: 'WIZZ-G026', severity: 'warning', message: undefined, file: 'App.wizz', line: 3, column: 21
   });
   assert.match(warning.message, / at App\.wizz:3:21\. /);
+});
+
+// ---------------------------------------------------------------------------
+// Milestone 23: `--compact` production builds. Equivalence of the compacted
+// output is proven in test/compactBuild.test.js; these pin the flag, the
+// envelope, source-map suppression, and located failures.
+// ---------------------------------------------------------------------------
+
+function runMainCapturingStdout(argv) {
+  const printed = [];
+  const originalLog = console.log;
+  console.log = (message) => printed.push(message);
+  let exitCode;
+  try {
+    exitCode = main(argv);
+  } finally {
+    console.log = originalLog;
+  }
+  return { exitCode, printed };
+}
+
+test('parseBuildArguments accepts --compact once, in any position, beside the other flags', () => {
+  assert.equal(parseBuildArguments(['src', 'dist']).compact, false);
+  assert.equal(parseBuildArguments(['--compact', 'src', 'dist']).compact, true);
+  assert.equal(parseBuildArguments(['src', '--compact', 'dist']).compact, true);
+  assert.deepEqual(parseBuildArguments(['src', 'dist', '--json', '--adapter', 'node', '--compact']), {
+    inputDirectory: 'src',
+    outputDirectory: 'dist',
+    json: true,
+    adapter: 'node',
+    compact: true
+  });
+  assert.throws(() => parseBuildArguments(['src', 'dist', '--compact', '--compact']), /at most one --compact flag/);
+  // A lookalike is a directory argument, so the count fails.
+  assert.throws(() => parseBuildArguments(['src', 'dist', '--compact=1']), /Usage/);
+  assert.throws(() => parseBuildArguments(['--compact']), /Usage/);
+  assert.throws(() => parseBuildArguments([]), /\[--compact\]/);
+});
+
+test('a compact build writes no source maps and no sourceMappingURL comments', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<script>\n  // counts clicks\n  let count = 0;\n</script>\n<main>\n  <p>{count}</p>\n</main>');
+
+  const result = buildProject(path.join(projectDirectory, 'src'), path.join(projectDirectory, 'dist'), createLogger(), { compact: true });
+  assert.deepEqual(result, { compiledCount: 1, failedCount: 0 });
+
+  const dist = path.join(projectDirectory, 'dist');
+  for (const name of ['App.js', 'App.server.js', 'App.hydrate.js']) {
+    const source = fs.readFileSync(path.join(dist, name), 'utf8');
+    assert.doesNotMatch(source, /sourceMappingURL/, name);
+    assert.doesNotMatch(source, /counts clicks/, `${name} kept a comment`);
+    assert.equal(fs.existsSync(path.join(dist, `${name}.map`)), false, `${name}.map`);
+  }
+});
+
+test('a normal build after a compact one restores readable output and its maps', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<script>let count = 0;</script><main><p>{count}</p></main>');
+  const src = path.join(projectDirectory, 'src');
+  const dist = path.join(projectDirectory, 'dist');
+
+  buildProject(src, dist, createLogger(), { compact: true });
+  buildProject(src, dist, createLogger());
+  assert.match(fs.readFileSync(path.join(dist, 'App.js'), 'utf8'), /\/\/# sourceMappingURL=App\.js\.map$/);
+  assert.equal(fs.existsSync(path.join(dist, 'App.js.map')), true);
+});
+
+test('the JSON envelope carries compact: true only for compact builds', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main><p>Ready</p></main>');
+  const src = path.join(projectDirectory, 'src');
+
+  const compact = runMainCapturingStdout([src, path.join(projectDirectory, 'dist'), '--json', '--compact']);
+  assert.equal(compact.exitCode, 0);
+  assert.equal(compact.printed.length, 1);
+  const envelope = JSON.parse(compact.printed[0]);
+  assert.deepEqual(Object.keys(envelope), ['format', 'ok', 'diagnostics', 'files', 'compact']);
+  assert.equal(envelope.compact, true);
+
+  const both = runMainCapturingStdout([src, path.join(projectDirectory, 'dist2'), '--compact', '--adapter', 'node', '--json']);
+  const bothEnvelope = JSON.parse(both.printed[0]);
+  assert.deepEqual(Object.keys(bothEnvelope), ['format', 'ok', 'diagnostics', 'files', 'adapter', 'compact']);
+  // The adapter host is compacted too.
+  const host = fs.readFileSync(path.join(projectDirectory, 'dist2', NODE_ADAPTER_HOST_FILENAME), 'utf8');
+  assert.ok(host.length < NODE_ADAPTER_HOST_SOURCE.length);
+  assert.doesNotMatch(host, /^\s*\/\//m);
+
+  const readable = runMainCapturingStdout([src, path.join(projectDirectory, 'dist3'), '--json']);
+  assert.equal('compact' in JSON.parse(readable.printed[0]), false);
+});
+
+test('a malformed <script> fails the compact build with its position in the .wizz file', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main><p>Fine</p></main>');
+  writeFile(path.join(projectDirectory, 'src', 'Broken.wizz'), '<script>\nlet a = 1;\nlet s = "open;\n</script>\n<p>{a}</p>\n');
+  const src = path.join(projectDirectory, 'src');
+  const dist = path.join(projectDirectory, 'dist');
+
+  const result = buildProject(src, dist, createLogger(), { json: true, compact: true });
+  assert.equal(result.ok, false);
+  assert.equal(result.failedCount, 1);
+  assert.deepEqual(result.diagnostics, [{
+    code: null,
+    severity: 'error',
+    message: 'Unterminated string literal in the <script> block (line 3, column 9)',
+    file: 'Broken.wizz',
+    line: 3,
+    column: 9
+  }]);
+  // Nothing corrupted is emitted for the broken file; the good one builds.
+  assert.equal(fs.existsSync(path.join(dist, 'Broken.js')), false);
+  assert.equal(fs.existsSync(path.join(dist, 'App.js')), true);
+
+  // Human mode reports the same location.
+  const logger = createLogger();
+  const humanResult = buildProject(src, path.join(projectDirectory, 'dist-human'), logger, { compact: true });
+  assert.equal(humanResult.failedCount, 1);
+  assert.match(logger.errors.join('\n'), /Broken\.wizz: Unterminated string literal in the <script> block \(line 3, column 9\)/);
+});
+
+test('a malformed <wizz:style> fails the compact build with its position in the .wizz file', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<p>x</p>\n<wizz:style>\np { color: red }\n  /* open\n</wizz:style>\n');
+
+  const result = buildProject(path.join(projectDirectory, 'src'), path.join(projectDirectory, 'dist'), createLogger(), { json: true, compact: true });
+  assert.equal(result.ok, false);
+  assert.equal(result.diagnostics[0].file, 'App.wizz');
+  assert.equal(result.diagnostics[0].line, 4);
+  assert.equal(result.diagnostics[0].column, 3);
+  assert.match(result.diagnostics[0].message, /^Unterminated comment in the <wizz:style> block/);
+  assert.equal(fs.existsSync(path.join(projectDirectory, 'dist', 'wizz.css')), false);
+});
+
+test('a malformed shell or App.css fails the compact build with its path and position', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main><p>Ready</p></main>');
+  const src = path.join(projectDirectory, 'src');
+  const shellPath = path.join(projectDirectory, 'index.html');
+  const sheetPath = path.join(projectDirectory, 'App.css');
+
+  writeFile(shellPath, '<!DOCTYPE html>\n<html><head></head>\n<body><div id="app"></div>\n<!-- never closed\n</body></html>');
+  const shellResult = buildProject(src, path.join(projectDirectory, 'dist'), createLogger(), { json: true, compact: true });
+  assert.equal(shellResult.ok, false);
+  assert.equal(shellResult.diagnostics[0].file, '../index.html');
+  assert.equal(shellResult.diagnostics[0].line, 4);
+  assert.equal(shellResult.diagnostics[0].column, 1);
+  assert.match(shellResult.diagnostics[0].message, /Unterminated comment/);
+  // The non-compact build tolerates the same shell, as it always has.
+  assert.equal(buildProject(src, path.join(projectDirectory, 'dist-readable'), createLogger()).failedCount, 0);
+
+  writeFile(shellPath, '<!DOCTYPE html>\n<html><head></head><body><div id="app"></div></body></html>');
+  writeFile(sheetPath, 'body {\n  content: "open\n}');
+  assert.throws(
+    () => buildProject(src, path.join(projectDirectory, 'dist-css'), createLogger(), { compact: true }),
+    (error) => {
+      assert.match(error.message, /App\.css:2:12: Unterminated string/);
+      assert.equal(error.line, 2);
+      assert.equal(error.column, 12);
+      return true;
+    }
+  );
+  // Neither file of the pair is written when one fails.
+  assert.equal(fs.existsSync(path.join(projectDirectory, 'dist-css', 'index.html')), false);
+  assert.equal(fs.existsSync(path.join(projectDirectory, 'dist-css', 'App.css')), false);
+});
+
+test('compact extracted styles keep @import rules first and drop the per-file headers', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'index.html'), '<!DOCTYPE html>\n<html><head>\n</head><body><div id="app"></div></body></html>');
+  writeFile(path.join(projectDirectory, 'src', 'A.wizz'), '<p>a</p><wizz:style>p { color: red; }</wizz:style>');
+  writeFile(path.join(projectDirectory, 'src', 'B.wizz'), '<p>b</p><wizz:style>@import url("https://fonts.test/b.css");\np  span { margin: 0 auto; }</wizz:style>');
+
+  buildProject(path.join(projectDirectory, 'src'), path.join(projectDirectory, 'dist'), createLogger(), { compact: true });
+  const sheet = fs.readFileSync(path.join(projectDirectory, 'dist', 'wizz.css'), 'utf8');
+  assert.ok(sheet.startsWith('@import url("https://fonts.test/b.css");'), sheet);
+  assert.doesNotMatch(sheet, /\/\*/);
+  assert.doesNotMatch(sheet, /\n/);
+  // The descendant combinator survives (scoping marks the terminal compound).
+  assert.match(sheet, /p span\[data-wizz-s="[^"]+"\]\{margin:0 auto\}/);
+  // The compact shell still links the extracted sheet.
+  assert.match(fs.readFileSync(path.join(projectDirectory, 'dist', 'index.html'), 'utf8'), /<link rel="stylesheet" href="\/wizz\.css">/);
+});
+
+test('the runtime copy and both manifests are compacted', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  writeFile(path.join(projectDirectory, 'src', 'App.wizz'), '<main><p>Ready</p></main>');
+  const dist = path.join(projectDirectory, 'dist');
+
+  buildProject(path.join(projectDirectory, 'src'), dist, createLogger(), { compact: true });
+  const router = fs.readFileSync(path.join(dist, 'runtime', 'router.js'), 'utf8');
+  assert.ok(router.length < fs.readFileSync(path.join(__dirname, 'src', 'runtime', 'router.js'), 'utf8').length);
+  for (const manifest of ['routes.js', 'apiRoutes.js']) {
+    const source = fs.readFileSync(path.join(dist, 'runtime', manifest), 'utf8');
+    assert.doesNotMatch(source, /Generated by Wizz|\n {2}/, manifest);
+  }
+  assert.match(fs.readFileSync(path.join(dist, 'runtime', 'routes.js'), 'utf8'), /^export const pageModules=\[\{"filePath":"App\.wizz"/);
 });

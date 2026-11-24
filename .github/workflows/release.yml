@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
       - name: Refuse a tag that does not match package.json
         run: |
           expected="v$(node -p "require('./package.json').version")"
