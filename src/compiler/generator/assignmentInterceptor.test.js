@@ -8,7 +8,9 @@ const {
   findHandlerMutations,
   normalizeHandlerExpression,
   findUntrackedMutations,
-  findUntrackedHandlerMutations
+  findUntrackedHandlerMutations,
+  findInPlaceMutations,
+  findInPlaceHandlerMutations
 } = require('./assignmentInterceptor');
 
 // Executes an intercepted script the way a component factory would: with a
@@ -1245,4 +1247,224 @@ test('defaults in generator, computed, and reserved-word method parameters are n
   assert.deepEqual(untracked('if (count = 1) {}'), ['count@1:5']);
   assert.deepEqual(untracked('while (count = 1) {}'), ['count@1:8']);
   assert.deepEqual(untracked('function f() { if (count = 1) {} }'), ['count@1:20']);
+});
+
+// --- Milestone 26: in-place array method calls with no update after them ---
+
+const inPlace = (source, names = STATE) => findInPlaceMutations(source, names)
+  .map(({ name, method, line, column }) => `${name}.${method}@${line}:${column}`);
+const METHODS = ['push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin'];
+
+test('reports every in-place array method called as a statement in a function', () => {
+  for (const method of METHODS) {
+    assert.deepEqual(inPlace(`function f() { items.${method}(1); }`), [`items.${method}@1:16`], method);
+  }
+});
+
+test('ignores non-mutating and unknown methods, and Map/Set mutators', () => {
+  assert.deepEqual(inPlace('function f() { items.map(g); items.toSorted(); items.concat(1); items.slice(1); }'), []);
+  assert.deepEqual(inPlace('function f() { items.set(1, 2); items.add(1); items.delete(1); items.clear(); }'), []);
+  assert.deepEqual(inPlace('function f() { items.pushAll(1); items.Push(1); }'), []);
+});
+
+test('any later mutation of the same name before the function closes silences the call', () => {
+  assert.deepEqual(inPlace('function f() { items.push(1); items = items; }'), []);
+  assert.deepEqual(inPlace('function f() { items.push(1); items = [...items]; }'), []);
+  assert.deepEqual(inPlace('function f() { items.push(1); items.length = 0; }'), []);
+  assert.deepEqual(inPlace('function f() { items.sort(); items[0] = 1; }'), []);
+  assert.deepEqual(inPlace('function f() { items.push(1); if (ok) { items = items; } }'), []);
+  // An untracked reassignment (WIZZ-G026 reports it) still shows intent.
+  assert.deepEqual(inPlace('function f() { items.push(1); if (ok) items = items; }'), []);
+  // A later reassignment in a callback nested in the same function counts.
+  assert.deepEqual(inPlace('function f() { items.push(1); setTimeout(() => { items = items; }); }'), []);
+  // So does one after a synchronous callback that made the call.
+  assert.deepEqual(inPlace('function f() { list.forEach((n) => { items.push(n); }); items = items; }'), []);
+});
+
+test('a mutation before the call, of another name, or in another function does not silence it', () => {
+  assert.deepEqual(inPlace('function f() { items = items; items.push(1); }'), ['items.push@1:31']);
+  assert.deepEqual(inPlace('function f() { items.push(1); count = count; }'), ['items.push@1:16']);
+  assert.deepEqual(inPlace('function f() { items.push(1); }\nfunction g() { items = items; }'), ['items.push@1:16']);
+  assert.deepEqual(inPlace('function f() { items.push(1); }\nitems = items;'), ['items.push@1:16']);
+});
+
+test('reports each call that no mutation follows, in source order', () => {
+  assert.deepEqual(inPlace('function f() {\n  items.sort();\n  user.reverse();\n}'), ['items.sort@2:3', 'user.reverse@3:3']);
+  // Only the call after the last reassignment is reported.
+  assert.deepEqual(inPlace('function f() { items.push(1); items = items; items.pop(); }'), ['items.pop@1:46']);
+});
+
+test('calls made while the script initializes are not reported', () => {
+  assert.deepEqual(inPlace('items.push(1);'), []);
+  assert.deepEqual(inPlace('if (seed) { items.push(1); }'), []);
+  assert.deepEqual(inPlace('for (const n of seed) { items.push(n); }'), []);
+});
+
+test('every kind of function body is a scope', () => {
+  assert.deepEqual(inPlace('const f = () => { items.push(1); };'), ['items.push@1:19']);
+  assert.deepEqual(inPlace('const f = async (e) => { await g(); items.push(e); };'), ['items.push@1:37']);
+  assert.deepEqual(inPlace('const f = function () { items.push(1); };'), ['items.push@1:25']);
+  assert.deepEqual(inPlace('function* f() { items.push(1); }'), ['items.push@1:17']);
+  assert.deepEqual(inPlace('const o = { m() { items.push(1); }, get v() { items.pop(); return 1; } };'), ['items.push@1:19', 'items.pop@1:47']);
+  assert.deepEqual(inPlace('class K { m() { items.fill(0); } static s() { items.sort(); } }'), ['items.fill@1:17', 'items.sort@1:47']);
+  assert.deepEqual(inPlace('onMount(() => { items.push(1); });'), ['items.push@1:17']);
+});
+
+test('control-flow blocks are not function scopes', () => {
+  assert.deepEqual(inPlace('function f() { if (x) { items.push(1); } items = items; }'), []);
+  assert.deepEqual(inPlace('function f() { try { items.push(1); } catch (e) { g(e); } items = items; }'), []);
+  assert.deepEqual(inPlace('function f() { while (x) { items.push(1); } }'), ['items.push@1:28']);
+  assert.deepEqual(inPlace('function f() { switch (k) { case 1: items.push(1); break; } }'), ['items.push@1:37']);
+});
+
+test('names shadowed by a parameter or local declaration are not reported', () => {
+  assert.deepEqual(inPlace('function f(items) { items.push(1); }'), []);
+  assert.deepEqual(inPlace('const f = (items) => { items.push(1); };'), []);
+  assert.deepEqual(inPlace('const f = items => { items.push(1); };'), []);
+  assert.deepEqual(inPlace('function f() { let items = []; items.push(1); }'), []);
+  assert.deepEqual(inPlace('function f() { const items = []; items.push(1); }'), []);
+  assert.deepEqual(inPlace('function f() { for (const items of groups) { items.push(1); } }'), []);
+  assert.deepEqual(inPlace('function f() { const { items } = o; items.push(1); }'), []);
+  // The shadow ends with its scope.
+  assert.deepEqual(inPlace('function f() { { let items = []; items.push(1); } items.push(2); }'), ['items.push@1:51']);
+});
+
+test('names that are not reactive are not reported', () => {
+  assert.deepEqual(inPlace('function f() { list.push(1); }'), []);
+  assert.deepEqual(inPlace('function f() { items.push(1); }', []), []);
+  assert.deepEqual(findInPlaceMutations('', ['items']), []);
+  assert.deepEqual(findInPlaceMutations(null, ['items']), []);
+});
+
+test('calls in expression position are not reported', () => {
+  assert.deepEqual(inPlace('function f() { const n = items.push(1); }'), []);
+  assert.deepEqual(inPlace('function f() { return items.pop(); }'), []);
+  assert.deepEqual(inPlace('function f() { g(items.push(1)); }'), []);
+  assert.deepEqual(inPlace('function f() { ok && items.push(1); }'), []);
+  assert.deepEqual(inPlace('const f = () => items.push(1);'), []);
+  assert.deepEqual(inPlace('function f() { if (x) items.push(1); }'), []);
+  assert.deepEqual(inPlace('function f() { other.items.push(1); }'), []);
+});
+
+test('aliases and computed member names are documented blind spots', () => {
+  assert.deepEqual(inPlace('function f() { const a = items; a.push(1); }'), []);
+  assert.deepEqual(inPlace('function f() { items["push"](1); }'), []);
+  assert.deepEqual(inPlace('function f() { items.push.call(items, 1); }'), []);
+});
+
+test('optional chaining, spacing, comments, and semicolon-less statements are recognized', () => {
+  assert.deepEqual(inPlace('function f() { items?.sort(); }'), ['items.sort@1:16']);
+  assert.deepEqual(inPlace('function f() { items . push /* c */ ( 1 ); }'), ['items.push@1:16']);
+  assert.deepEqual(inPlace('function f() {\n  items.push(1)\n  items.pop()\n}'), ['items.push@2:3', 'items.pop@3:3']);
+  assert.deepEqual(inPlace('function f() {\n  load()\n  items.push(1)\n}'), ['items.push@3:3']);
+  assert.deepEqual(inPlace('function f() {\n  items\n    .push(1)\n}'), ['items.push@2:3']);
+});
+
+test('strings, comments, regexes, and templates never produce a report', () => {
+  assert.deepEqual(inPlace('function f() { const s = "items.push(1)"; // items.push(1)\n /* items.pop() */ const r = /items.push(1)/; const t = `items.sort()`; }'), []);
+});
+
+test('the rewrite is unchanged by the in-place analysis', () => {
+  const script = 'function f() { items.push(1); items = items; }';
+  assert.equal(interceptAssignments(script, ['items']), 'function f() { items.push(1); items = items; __wizzQueueUpdate({ items: true }); }');
+});
+
+test('inline handlers are scanned in their block-bodied form', () => {
+  const names = (expression) => findInPlaceHandlerMutations(expression, STATE).map(({ name, method }) => `${name}.${method}`);
+  assert.deepEqual(names('() => items.push(1)'), ['items.push']);
+  assert.deepEqual(names('(e) => (items.push(e))'), ['items.push']);
+  assert.deepEqual(names('() => { items.sort(); }'), ['items.sort']);
+  assert.deepEqual(names('function () { items.reverse(); }'), ['items.reverse']);
+  assert.deepEqual(names('() => { items.push(1); items = items; }'), []);
+  assert.deepEqual(names('(items) => items.push(1)'), []);
+  assert.deepEqual(names('add'), []);
+  assert.deepEqual(names('items.push(1)'), [], 'not a function literal');
+  assert.deepEqual(names('() => g(items.push(1))'), []);
+});
+
+test('in-place scanning stays linear on large scripts', () => {
+  const body = Array.from({ length: 2000 }, (_, i) => `function f${i}() { items.push(${i}); items = items; }`).join('\n');
+  const started = process.hrtime.bigint();
+  assert.deepEqual(findInPlaceMutations(body, ['items']), []);
+  assert.ok(Number(process.hrtime.bigint() - started) / 1e6 < 2000);
+});
+
+// --- Milestone 26 review: one parameter-list rule for every analysis ---
+
+test('parameters of generators, computed methods, and reserved-word methods shadow for G027', () => {
+  assert.deepEqual(inPlace('const g = function* (items) { items.push(1); };'), []);
+  assert.deepEqual(inPlace('function* gen(items) { items.push(1); }'), []);
+  assert.deepEqual(inPlace('const o = { [k](items) { items.push(1); } };'), []);
+  assert.deepEqual(inPlace('const s = { set(items) { items.push(1); }, delete(items) { items.pop(); } };'), []);
+  assert.deepEqual(inPlace('class K { delete(items) { items.pop(); } static get(items) { items.sort(); } }'), []);
+  assert.deepEqual(inPlace('const o = { async get(items) { items.push(1); } };'), []);
+  // A catch binding shadows but is not a function scope.
+  assert.deepEqual(inPlace('function f() { try { g(); } catch (items) { items.push(1); } }'), []);
+});
+
+test('the same parameters shadow for the rewrite and for G026', () => {
+  // The rewrite used to queue an update (and, for persistent state, write the
+  // parameter's value to storage) when such a parameter was assigned.
+  for (const script of [
+    'const s = { set(items) { items = 1; } };',
+    'const g = function* (items) { items = 1; };',
+    'const o = { [k](items) { items = 1; } };',
+    'class K { delete(items) { items = 1; } }',
+    'function set(items) { items = 1; }'
+  ]) {
+    assert.equal(interceptAssignments(script, ['items']), script, script);
+    assert.deepEqual(untracked(script.replace('items = 1;', 'g(items = 1);')), [], script);
+  }
+  // Defaults in those parameter lists declare, they do not mutate.
+  assert.deepEqual(untracked('function set(count = 1) {}'), []);
+  assert.deepEqual(untracked('const g = function* (count = 1) {};'), []);
+  // Component state is still instrumented inside them.
+  assert.equal(
+    interceptAssignments('const s = { set(v) { items = v; } };', ['items']),
+    'const s = { set(v) { items = v; __wizzQueueUpdate({ items: true }); } };'
+  );
+});
+
+test('persistent state is not written from a reserved-word method parameter', () => {
+  const script = 'const store = { set(items) { items = []; } };';
+  assert.doesNotMatch(interceptAssignments(script, ['items'], [{ name: 'items', storageKey: 'k' }]), /__wizzPersistWrite/);
+});
+
+test('functions named by contextual keywords are function scopes', () => {
+  for (const name of ['get', 'set', 'of', 'async', 'static', 'from', 'as', 'yield']) {
+    assert.deepEqual(inPlace(`function ${name}() { items.push(1); }`), [`items.push@1:${15 + name.length}`], name);
+  }
+  assert.deepEqual(inPlace('async function get() { items.push(1); }'), ['items.push@1:24']);
+  assert.deepEqual(inPlace('function set(items) { items.push(1); }'), [], 'and their parameters shadow');
+});
+
+test('control-flow headers stay non-function blocks', () => {
+  for (const header of ['if (x)', 'for (;;)', 'for (const n of list)', 'while (x)', 'switch (k)', 'with (o)']) {
+    assert.deepEqual(inPlace(`items.sort(); ${header} { items.push(1); }`), [], `${header} at top level is initialization`);
+  }
+  assert.deepEqual(inPlace('async function f() { for await (const n of s) { items.push(n); } items = items; }'), []);
+  assert.deepEqual(inPlace('try { items.push(1); } catch (e) { items.pop(); }'), [], 'catch is not a function');
+});
+
+test('a scope ended by ASI no longer shadows the next statement', () => {
+  assert.deepEqual(inPlace('function f() {\n  const copy = items => items.slice()\n  items.push(1)\n}'), ['items.push@3:3']);
+  assert.deepEqual(inPlace('function f() {\n  const copy = (items) => items.slice()\n  items.push(1)\n}'), ['items.push@3:3']);
+  assert.deepEqual(inPlace('function g(groups) {\n  for (let items of groups)\n    use(items)\n  items.push(1)\n}'), ['items.push@4:3']);
+  // The unbraced body itself stays shadowed.
+  assert.deepEqual(inPlace('function g(groups) {\n  for (const items of groups)\n    items.push(1)\n}'), []);
+  // With semicolons, behavior was already right and stays so.
+  assert.deepEqual(inPlace('function f() { const copy = items => items.slice(); items.push(1); }'), ['items.push@1:53']);
+});
+
+test('one handler scan returns both kinds of finding', () => {
+  const { findUnscheduledHandlerChanges } = require('./assignmentInterceptor');
+  assert.deepEqual(findUnscheduledHandlerChanges('() => { g(count = 1); items.pop(); }', STATE), {
+    untracked: [{ name: 'count' }],
+    inPlace: [{ name: 'items', method: 'pop' }]
+  });
+  // Not a function literal: its mutations run at mount, and it has no
+  // function body for an in-place call to sit in.
+  assert.deepEqual(findUnscheduledHandlerChanges('count = 1', STATE), { untracked: [{ name: 'count' }], inPlace: [] });
+  assert.deepEqual(findUnscheduledHandlerChanges(undefined, STATE), { untracked: [], inPlace: [] });
+  assert.deepEqual(findUnscheduledHandlerChanges('() => items.push(1)', []), { untracked: [], inPlace: [] });
 });

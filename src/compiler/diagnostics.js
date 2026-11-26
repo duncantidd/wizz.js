@@ -114,7 +114,8 @@ const CODES = Object.freeze({
     hydrationEachUnsupportedNode: 'WIZZ-G023',
     persistSpanDrift: 'WIZZ-G024',
     reservedAuthorName: 'WIZZ-G025',
-    untrackedAssignment: 'WIZZ-G026'
+    untrackedAssignment: 'WIZZ-G026',
+    inPlaceMutation: 'WIZZ-G027'
   })
 });
 

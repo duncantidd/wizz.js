@@ -1832,6 +1832,24 @@ test('the JSON build envelope carries warnings beside errors without failing ok'
   assert.match(warning.message, / at App\.wizz:3:21\. /);
 });
 
+test('builds report in-place array changes as WIZZ-G027 in human and JSON output (milestone 26)', (t) => {
+  const projectDirectory = createTemporaryDirectory();
+  t.after(() => fs.rmSync(projectDirectory, { recursive: true, force: true }));
+  const inputDirectory = path.join(projectDirectory, 'src');
+  const outputDirectory = path.join(projectDirectory, 'dist');
+  writeFile(path.join(inputDirectory, 'App.wizz'), '<script>\nlet items = [];\nfunction add() { items.push(1); }\n</script><ul on:click={add}>{#each items as item}<li>{item}</li>{/each}</ul>');
+
+  const warned = [];
+  const logger = { ...createLogger(), warn: (line) => warned.push(line) };
+  assert.deepEqual(buildProject(inputDirectory, outputDirectory, logger), { compiledCount: 1, failedCount: 0 });
+  assert.equal(warned.length, 1);
+  assert.match(warned[0], /^Warning WIZZ-G027: 'items' is changed in place by \.push\(\) and never reassigned afterwards, so the DOM will not update at .*App\.wizz:3:18\./);
+
+  const result = buildProject(inputDirectory, outputDirectory, createLogger(), { json: true });
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.diagnostics.map(({ code, severity, file, line, column }) => [code, severity, file, line, column]), [['WIZZ-G027', 'warning', 'App.wizz', 3, 18]]);
+});
+
 // ---------------------------------------------------------------------------
 // Milestone 23: `--compact` production builds. Equivalence of the compacted
 // output is proven in test/compactBuild.test.js; these pin the flag, the

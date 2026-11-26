@@ -175,7 +175,7 @@ This is the module downstream compiler stages should use. It owns the ordering o
 9. `scanState()` turns recognized declarations into lightweight metadata.
 10. `desugarBindings()` rewrites `bind:` directives into their attribute and handler halves; it runs last because it needs the declarations.
 
-The facade also returns `scriptSource`, the unmodified script text (imports and `export let` lines still in place), and `scriptStart`, the component position of its first character (`null` without a script). Removing prop declarations shifts `rawScript`'s lines, so analyses that report component coordinates (the WIZZ-G026 warnings) scan `scriptSource` instead.
+The facade also returns `scriptSource`, the unmodified script text (imports and `export let` lines still in place), and `scriptStart`, the component position of its first character (`null` without a script). Removing prop declarations shifts `rawScript`'s lines, so analyses that report component coordinates (the WIZZ-G026 and WIZZ-G027 warnings) scan `scriptSource` instead.
 
 It throws `TypeError` unless `source` is a string. A component without `<script>` receives `script: []`, `rawScript: ''`, `imports: []`, and `props: []`, keeping the compiler handoff stable and avoiding special cases downstream.
 

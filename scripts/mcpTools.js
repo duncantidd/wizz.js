@@ -282,7 +282,7 @@ function assertWritableComponentPath(root, relativePath, source) {
  * throws for compile failures, so a clean source yields
  * `{ ok: true, diagnostics: [] }` and a broken one yields every
  * error-severity record for the caller to echo. Warning-severity records
- * (WIZZ-G026, issue #73) follow the errors in `diagnostics` but never make
+ * (WIZZ-G026, WIZZ-G027) follow the errors in `diagnostics` but never make
  * `ok` false: a component that compiles may be written.
  * @param {string} source - The proposed component source.
  * @param {string} filePathLabel - The label diagnostics are qualified with.
@@ -613,9 +613,9 @@ const TEMPLATE_LIMITS = Object.freeze([
   {
     area: '`{#each}` collection',
     supported: 'A bare identifier naming a top-level `let` array, keyed `(item.id)` or keyless.',
-    limit: 'No member collections (`state.items`) or index alias (`item, i`). A `const` collection renders once. In-place mutation (`items.push(x)`) does not update.',
-    failure: 'Syntax: WIZZ-P002; `const` and mutation: silent non-update',
-    workaround: 'Reassign the array: `items = [...items, x]`. Store any index or flag you need on the items themselves.'
+    limit: 'No member collections (`state.items`) or index alias (`item, i`). A `const` collection renders once. An in-place method (`items.push(x)`) changes the array without an update until the name is assigned.',
+    failure: 'Syntax: WIZZ-P002; `const`: silent; an in-place call with no later assignment in its function: warning WIZZ-G027',
+    workaround: 'Assign after mutating, `items.push(x); items = items;` (the assignment is the trigger, not a new reference; in-place-changed items re-render too), or assign a copy: `items = [...items, x]`. Store any index or flag you need on the items themselves.'
   },
   {
     area: '`{#each}` body',
@@ -709,6 +709,15 @@ Script boundary (inside <script>):
   assignment that is a statement of its own schedules the update; one nested
   in an expression (g(count = 1), an unbraced if body) compiles with
   warning WIZZ-G026.
+- Assignment is the only trigger, and there is no identity check: a
+  self-assignment re-renders. Mutate an array in place, then assign it:
+  items.push(x); items = items; (or assign a copy: items = [...items, x]).
+  Keyed and keyless lists re-run each item's update, so items changed in
+  place re-render. A member write (user.name = x; items[0] = y;) schedules
+  the update for the root name. An in-place array method call (push, pop,
+  shift, unshift, splice, sort, reverse, fill, copyWithin) in a function
+  with no later assignment of that name compiles with warning WIZZ-G027;
+  aliases (const a = items; a.push(x)) and Map/Set methods are not detected.
 - export let declares a prop the parent passes as an attribute on the
   component tag; props are reactive and read-only in the child. A bare
   declaration defaults to undefined.
