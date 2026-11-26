@@ -199,12 +199,23 @@
 // Node 18 and 20 (Node 22+ now) — a platform-support change shipped as a
 // minor by decision, since no contract surface changes.
 //
+// compiler 1.26.0 / syntax 1.6.0 / output 1.13.0: milestone 26. The compile()
+// `warnings` array gains WIZZ-G027: a statement-level call of an in-place
+// array method (push, pop, shift, unshift, splice, sort, reverse, fill,
+// copyWithin) on a reactive, non-prop `let` inside a function, with no later
+// mutation of that name before the outermost enclosing function closes. A new
+// analysis, so the compiler moves; the generated code is unchanged (warnings
+// never alter output) and no component that compiled before is rejected, so
+// syntax and output hold. Recorded decision: local state never gains an
+// identity check, so `items.push(x); items = items;` keeps scheduling its
+// update; props keep their separate `Object.is` short-circuit in setProps.
+//
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.25.0',
+  compiler: '1.26.0',
   syntax: '1.6.0',
   output: '1.13.0'
 });

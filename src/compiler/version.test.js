@@ -125,8 +125,10 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // (CLI only; package version lockstep). Syntax and output unchanged.
   // compiler 1.25.0: milestone 23 (--compact) and the script-lexer line
   // terminator fix; syntax and output unchanged.
+  // compiler 1.26.0: milestone 26's WIZZ-G027 in-place array warning (a new
+  // analyzer finding); generated output and accepted syntax unchanged.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.25.0',
+    compiler: '1.26.0',
     syntax: '1.6.0',
     output: '1.13.0'
   });

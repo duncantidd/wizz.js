@@ -11,6 +11,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added — Array Mutation Reactivity Documented and Guarded (milestone 26; compiler 1.25.0 → 1.26.0, syntax 1.6.0 and output 1.13.0 unchanged)
+
+#### Versions
+
+- Compiler minor for a new analyzer finding. Generated modules are byte-identical apart from the version banner (warnings never change output) and no component that compiled before is rejected, so syntax and output hold. `package.json` moves to 1.26.0 in lockstep.
+- Recorded decision: local state never gains an identity check. Every statement-level assignment schedules an update, so `items.push(x); items = items;` keeps working; props keep their separate `Object.is` short-circuit in `setProps`. Proxy-based deep reactivity and instrumenting array methods stay out of scope.
+
+#### Added
+
+- **WIZZ-G027** (`CODES.generator.inPlaceMutation`), a compiler warning: a statement-level call of `push`, `pop`, `shift`, `unshift`, `splice`, `sort`, `reverse`, `fill`, or `copyWithin` on a reactive, non-prop `let` (persistent state included), inside a function body or inline `on:` handler, with no later mutation of that name (assignment, member write, or update operator; rewritten or untracked) before the outermost enclosing function closes. Reported through the WIZZ-G026 channels: `compile().warnings`, `Warning WIZZ-G027: …` lines in human builds, `diagnostics` records in `--json`, and the MCP `component_diagnostics` and `create_or_update_component` tools. The message is located at the call (handlers: at their element) and its hint names both fixes, specific to the method: `items.sort(…); items = items;` or `items = items.toSorted(…)`.
+  - Not reported, by design: calls at the top level of the script (they run before the first render reads state), props (read-only, so reassignment is not the fix), names shadowed by a parameter, local declaration, for-header, or `{#each}` item, calls in expression position (`const n = items.push(x)`, `return items.pop()`, `g(items.push(x))`, an expression-bodied arrow outside a handler, an unbraced `if (x) items.push(x)` on one line), handler values that are not function literals, and a call followed by a reassignment in a nested callback (`setTimeout(() => { items = items; })`).
+  - Documented blind spots (syntactic analysis): aliases (`const a = items; a.push(x)`), computed member names (`items['push'](x)`, `items.push.call(…)`), and `Map`/`Set` methods.
+- `assignmentInterceptor.js`: `findInPlaceMutations(source, names)`, `findInPlaceHandlerMutations(expression, names)`, and `findUnscheduledChanges(source, names)`, which returns the untracked mutations and the unfollowed in-place calls from one scan. `scanReactiveMutations()` takes an optional `methodCalls` collector and marks function-body contexts (`opensFunctionBody()`); the rewrite is unchanged. In-place calls also begin a statement on a new line after `)` (semicolon-less scripts), which the rewriter's own ASI rule deliberately excludes. Suppression uses per-name sorted offsets and a binary search per call, and locations are computed in one ascending pass (`findUntrackedMutations()` now uses the same pass instead of rescanning the source per site).
+- `untrackedWarnings.js` emits both codes: script findings merged in source order, then handler findings in template order (G026 before G027 within one handler). The component script is scanned once for both.
+
+#### Docs
+
+- README: the `{#each}` collection row (generated from the MCP limits table) teaches `items.push(x); items = items;` beside the copy form and names WIZZ-G027; a new "Arrays and objects" subsection explains that the assignment, not a new reference, is the trigger, that member writes schedule the root name, that keyed and keyless lists re-run each item's update for in-place-changed items, and why there is no deep reactivity; the Lists section links it; "Compiler Warnings" documents WIZZ-G027 and its limits.
+- MCP `language_contract` script boundary gains the same rules; `src/compiler/README.md`, `src/compiler/generator/README.md`, and `STRUCTURE.md` describe the analysis.
+
+#### Tests
+
+- `componentGenerator.test.js` pins the semantics with mounted components: a bare push does not update; push plus self-assignment updates a keyless list; an element write updates by its root name; a keyed list re-runs `update` for an item mutated in place under the same reference without recreating its node; a keyless list does the same by position; `{items.length}` and `{#if items.length === 0}` follow push plus self-assignment; `user.name = x` schedules `user`; inline-handler self-assignment updates; a self-assignment in a loop renders each item once.
+- `assignmentInterceptor.test.js`: every method, suppression rules, function-scope kinds (arrow, async, function expression, generator, object and class methods, getters, `onMount` callbacks), control-flow blocks, shadowing, expression position, blind spots, optional chaining, comments, ASI, strings and regexes, unchanged rewrite, handlers, and a linear-time check. `untrackedWarnings.test.js`: located records, method-specific hints, ordering, props and persistent state, handlers, each shadowing, and prototype-named state. Channel tests in `index.test.js`, `build.test.js`, and `scripts/mcpTools.test.js`.
+
 ### Added — Compact Production Builds (milestone 23; compiler 1.24.0 → 1.25.0, syntax 1.6.0 and output 1.13.0 unchanged)
 
 #### Versions

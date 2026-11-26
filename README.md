@@ -47,7 +47,7 @@ The `.wizz` template language is deliberately small. Read this table before desi
 | --- | --- | --- | --- | --- |
 | Expressions `{...}` | Identifiers, member access (`a.b`), number (`1`, `1.5`), string, `true`/`false`/`null` literals, `+ - * /`, `=== !== < > <= >=`, `&&`/`\|\|`, unary `!`/`-`, the conditional `a ? b : c`, calls of a function or method (`plural(n)`, `name.trim()`), and parentheses. | No indexing (`a[0]`), `==`/`!=`, `??`, `?.`, `++`/`--`, template literals, array/object literals, arrow functions, or calling a call result (`f()()`). A call updates only when a reactive name it is given changes: a function reading state internally is not tracked. `eval`, `Function`, `constructor`, `__proto__`, and the timers cannot appear in an expression that calls. | Excluded forms: compile error (WIZZ-P033); state read inside a called function: silent | Pass the state a function needs as arguments: `{plural(entries.length)}`, not `{plural()}`. For anything outside the grammar, compute the value in a script handler into a reactive `let` and render `{label}`. |
 | `{#if}` | `{#if cond}...{:else}...{/if}`, nesting, events, lists, and components inside branches. The test is re-evaluated whenever a reactive `let` or prop it reads changes, and the branch is replaced: the old one leaves the DOM with its listeners and child components, and the new one is built from current state. | No `{:else if}`. A test that reads only `const` values is evaluated once, at mount. A replaced branch is rebuilt, so DOM state inside it (typed input text, scroll position, a child component's own state) is not kept. | `{:else if}`: compile error (WIZZ-P033); `const` test and lost branch state: silent | Chain conditions by nesting `{#if}` inside `{:else}`. Keep state that must survive a hidden branch in a script `let`, or keep the element mounted and toggle it with `hidden={flag}`. |
-| `{#each}` collection | A bare identifier naming a top-level `let` array, keyed `(item.id)` or keyless. | No member collections (`state.items`) or index alias (`item, i`). A `const` collection renders once. In-place mutation (`items.push(x)`) does not update. | Syntax: WIZZ-P002; `const` and mutation: silent non-update | Reassign the array: `items = [...items, x]`. Store any index or flag you need on the items themselves. |
+| `{#each}` collection | A bare identifier naming a top-level `let` array, keyed `(item.id)` or keyless. | No member collections (`state.items`) or index alias (`item, i`). A `const` collection renders once. An in-place method (`items.push(x)`) changes the array without an update until the name is assigned. | Syntax: WIZZ-P002; `const`: silent; an in-place call with no later assignment in its function: warning WIZZ-G027 | Assign after mutating, `items.push(x); items = items;` (the assignment is the trigger, not a new reference; in-place-changed items re-render too), or assign a copy: `items = [...items, x]`. Store any index or flag you need on the items themselves. |
 | `{#each}` body | Exactly one native root element per item; its text and dynamic attributes update. `on:` handlers anywhere in the item run with the item variable in scope (`on:click={() => remove(item.id)}`); they attach per item and detach when the item is removed. | No imported components (WIZZ-G004) or nested `{#if}`/`{#each}` (WIZZ-G005); one root element only (WIZZ-G003); the block must sit inside a native element. A handler expression is evaluated once per item, so `on:click={makeHandler(item)}` keeps the handler built from the item's first value. | Compile error; a stale `makeHandler(item)`: silent | Write per-row handlers as inline arrows, which read the item when they run: `on:click={() => pick(item.id)}`. Precompute per-row variants (class suffix, label) as item fields. |
 | Dynamic attributes | `name={expr}` updates reactively; `value`, `checked`, and `disabled` are set as DOM properties. HTML boolean attributes (`hidden`, `required`, `readonly`, `open`, `inert`, `multiple`, ...) are present when the value is truthy and removed when it is falsy, so `hidden={false}` shows the element. Any other attribute is removed when the value is `null` or `undefined`. | Outside the boolean list, `false` renders the string `"false"` rather than removing the attribute, because `aria-*`, `draggable`, and `spellcheck` give `"false"` its own meaning. | Silent | Hold `null` in state to drop a non-boolean attribute (`let tip = null;` with `title={tip}`). |
 | Quoted attribute values | Static text: `class="card"`. | Braces inside quotes are not interpolated, so `class="card {kind}"` is rejected instead of rendering literal text. Braces that hold no expression (`data-x='{"a":1}'`) stay literal. | Compile error (WIZZ-P055) | Use one expression for the whole value: `class={'card ' + kind}`. |
@@ -172,7 +172,7 @@ Print what you have installed with:
 wizz --version
 ```
 
-which prints the compiler and contract version triple, for example `wizz 1.25.0 (compiler 1.25.0, syntax 1.6.0, output 1.13.0)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `init` accepts an optional directory plus `--force` and one of `--sample`/`--bare`, `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json`, `--adapter <name>`, and `--compact` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
+which prints the compiler and contract version triple, for example `wizz 1.26.0 (compiler 1.26.0, syntax 1.6.0, output 1.13.0)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `init` accepts an optional directory plus `--force` and one of `--sample`/`--bare`, `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json`, `--adapter <name>`, and `--compact` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
 
 `wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
 
@@ -274,6 +274,33 @@ A binding is shorthand for the pair you would write by hand: `bind:value={food}`
 
 Reactive updates are batched. When a handler runs, each changed variable is marked, and one DOM update runs on the next microtask with all marks combined — a handler that changes several variables triggers a single update, and the DOM settles before the browser paints. Updates therefore happen asynchronously: read the DOM after an `await`, not synchronously after dispatching an event.
 
+### Arrays and objects
+
+Assignment is the trigger. Every statement-level assignment to a reactive `let` schedules an update, with no check of whether the value or reference changed, so there are two equally supported ways to change an array:
+
+```wizz
+<script>
+  let items = [];
+
+  function addCopy(x) {
+    items = [...items, x];      // assign a new array
+  }
+
+  function addInPlace(x) {
+    items.push(x);
+    items = items;              // mutate, then assign the same array
+  }
+</script>
+
+<p>{items.length} items</p>
+```
+
+The self-assignment `items = items` is not a no-op: the assignment, not the new reference, is what tells Wizz to re-render. A bare `items.push(x)` with no assignment changes the array but schedules nothing, so the DOM keeps showing the old list. The compiler reports that case as warning [`WIZZ-G027`](#compiler-warnings).
+
+Writes through a member also count, and schedule the update for the root name: `user.name = "Ada";`, `items[0] = "first";`, and `items.length = 0;` each re-render whatever reads `user` or `items`. When a list re-renders, both keyed and keyless `{#each}` blocks run every item's update, so an item object changed in place (`rows[1].name = "Cy"; rows = rows;`) shows its new values without being recreated.
+
+Deliberately, Wizz has no deep reactivity (no proxies) and does not instrument array methods: assignment stays the single trigger, which keeps generated code small and predictable. Props are a separate boundary: a parent passing the same reference again is skipped by an `Object.is` check in the child's `setProps`, and props are read-only in the child.
+
 Dynamic attributes use brace-delimited expressions. Wizz updates `value`, `checked`, and `disabled` as DOM properties; all other dynamic names are updated as HTML attributes:
 
 ```wizz
@@ -298,7 +325,7 @@ Render a collection with an `each` block. Give each item a unique key when node 
 </ul>
 ```
 
-When `items` is reassigned, Wizz retains nodes with matching keys, moves retained nodes into the new order, updates their text and dynamic attributes, creates new keys, and removes missing keys. Duplicate keys throw at runtime.
+When `items` is assigned (a new array, or `items = items` after changing it in place; see [Arrays and objects](#arrays-and-objects)), Wizz retains nodes with matching keys, moves retained nodes into the new order, updates their text and dynamic attributes, creates new keys, and removes missing keys. Duplicate keys throw at runtime.
 
 For arrays of primitives, or any collection where positional identity is enough, omit the key:
 
@@ -603,7 +630,7 @@ As a consumer of generated modules, within one `output` major version every gene
 A breaking change to either contract bumps its major version and the compiler's major version. Every compiled module is stamped with all three versions on its first line, so build artifacts stay traceable to the compiler that produced them:
 
 ```js
-// Generated by Wizz 1.25.0 (component syntax 1.6.0, generated output 1.13.0). Edits will be overwritten.
+// Generated by Wizz 1.26.0 (component syntax 1.6.0, generated output 1.13.0). Edits will be overwritten.
 ```
 
 `compile()` also returns the frozen version table as its `version` field.
@@ -661,13 +688,21 @@ The framework does not ship browser polyfills or transpiled legacy output. Inter
 
 ## Compiler Warnings
 
-Some code compiles but will not behave as written. The compiler reports it as a warning, which never fails a build. Today there is one: `WIZZ-G026`, a reactive variable assigned where the update scheduler does not see the change, so the DOM keeps showing the old value:
+Some code compiles but will not behave as written. The compiler reports it as a warning, which never fails a build. There are two. The first is `WIZZ-G026`, a reactive variable assigned where the update scheduler does not see the change, so the DOM keeps showing the old value:
 
 ```text
 Warning WIZZ-G026: 'count' is assigned where the update scheduler does not see it, so the DOM will not update at src/App.wizz:6:21. Make the assignment a statement of its own, in braces under an if/else or loop (`count += 1; g(count);`, `if (ready) { count = 2; }`), so the update is scheduled.
 ```
 
 The rewriter that schedules updates only instruments assignments that are statements of their own, because rewriting inside an expression could change what it means. Assignments in call arguments, conditions, object literals, template interpolations, unbraced `if`/`else`/loop bodies, and chained targets (`a = b = 1` updates `a` only) are reported; parameter defaults, declarations, class fields, and names shadowed by a parameter or local declaration are not.
+
+The second is `WIZZ-G027`, an array changed in place with no assignment after it:
+
+```text
+Warning WIZZ-G027: 'items' is changed in place by .push() and never reassigned afterwards, so the DOM will not update at src/App.wizz:7:3. Reassign it after the call (`items.push(x); items = items;`) or assign a new array instead (`items = [...items, x]`); assignment is what schedules the update.
+```
+
+It fires for a call of `push`, `pop`, `shift`, `unshift`, `splice`, `sort`, `reverse`, `fill`, or `copyWithin` on a reactive `let` when the call is a statement of its own inside a function (or an inline `on:` handler), and nothing assigns or member-writes that name later in the outermost enclosing function. A later assignment inside a nested callback counts. The check is syntactic and conservative, so some cases are not reported: aliases (`const a = items; a.push(x)`), computed names (`items['push'](x)`), calls in expression position or an unbraced `if` body on the same line, `Map`/`Set` methods, and props (read-only, so reassignment is not the fix). Calls at the top level of the script run before the first render and are never reported.
 
 `wizz build` prints warnings after the file's "Compiled" line, `--json` includes them in `diagnostics` with `"severity": "warning"` (they never set `ok` to false), `compile()` returns them as `result.warnings`, and the MCP `component_diagnostics` and `create_or_update_component` tools return them beside any errors.
 

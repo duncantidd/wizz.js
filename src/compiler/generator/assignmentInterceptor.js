@@ -275,6 +275,31 @@ function collectCallBodyParameters(tokens, braceIndex) {
   return collectIdentifierNames(tokens, openIndex, closeIndex);
 }
 
+/**
+ * True when the `{` at `braceIndex` opens a function body: an arrow body, a
+ * `function`/method/getter/setter body, or any `(...) {` directly inside an
+ * object literal or class body (only a method can stand there). Control-flow
+ * headers (`if (...) {`) and `catch` clauses are not functions.
+ */
+function opensFunctionBody(tokens, braceIndex, parentType) {
+  const previous = tokens[previousSignificantIndex(tokens, braceIndex - 1)];
+  if (isPunctuator(previous, '=>')) return true;
+  if (!isPunctuator(previous, ')')) return false;
+  if (parentType === 'objectLiteral' || parentType === 'classBody') return true;
+  const openIndex = findMatchingParen(tokens, previousSignificantIndex(tokens, braceIndex - 1));
+  if (openIndex === -1) return false;
+  const introducer = tokens[previousSignificantIndex(tokens, openIndex - 1)];
+  if (isPunctuator(introducer, '*')) return true;
+  return Boolean(introducer) && introducer.type === 'identifier'
+    && introducer.value !== 'catch'
+    && (!RESERVED_WORDS.has(introducer.value) || introducer.value === 'function');
+}
+
+// Array methods that change the receiver in place (milestone 26). A
+// statement-level call of one on a reactive name changes state without
+// scheduling an update, unless the name is reassigned afterwards.
+const MUTATING_METHODS = new Set(['push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin']);
+
 // Keywords that open a variable declaration and shadow component state for
 // their scope, so mutations of the declared name are left alone.
 const DECLARATION_KEYWORDS = new Set(['let', 'const', 'var']);
@@ -392,13 +417,26 @@ function collectDeclaredNames(tokens, keywordIndex) {
  * component state and are never recorded. Rewriting is unaffected.
  * @param {string} rawScript - The raw JavaScript string from the <script> block.
  * @param {Set<string>} reactiveNames - Reactive variable names.
+ *
+ * With a `methodCalls` array (milestone 26; requires `skipped`, whose
+ * shadowing analysis it shares), the scan also records every statement-level
+ * call of a MUTATING_METHODS member on an unshadowed reactive name
+ * (`items.push(x);`, `items?.sort();`) made inside a function body, as
+ * `{ name, method, at, scope }` where `scope.end` is the offset at which the
+ * outermost function enclosing the call closes. Calls outside every function
+ * run while the script initializes, before the first render reads state, so
+ * they are not recorded.
+ * @param {string} rawScript - The raw JavaScript string from the <script> block.
+ * @param {Set<string>} reactiveNames - Reactive variable names.
  * @param {Array<{ name: string, at: number }> | null} [skipped] - Collector
  *   for untracked mutations, or null to skip that analysis.
+ * @param {Array<{ name: string, method: string, at: number, scope: { end: number } }> | null} [methodCalls]
+ *   Collector for in-place method calls, or null.
  * @returns {Array<{ name: string, at: number, insertAt: number, semicolonTerminated: boolean, nextIndex: number }>}
  *   One record per detected mutation; `at` is the offset of the mutating
  *   token, the rest describe where a notification insertion would go.
  */
-function scanReactiveMutations(rawScript, reactiveNames, skipped = null) {
+function scanReactiveMutations(rawScript, reactiveNames, skipped = null, methodCalls = null) {
   const tokens = tokenizeScript(rawScript);
   const templatePairs = matchTemplateTokens(tokens);
   const mutations = [];
@@ -564,6 +602,21 @@ function scanReactiveMutations(rawScript, reactiveNames, skipped = null) {
     return { name, at: token.start };
   };
 
+  // `items.push(` / `items?.push(` at a statement start, inside a function.
+  const methodCallSite = (index) => {
+    const token = tokens[index];
+    if (token.type !== 'identifier' || !reactiveNames.has(token.value)) return null;
+    if (isShadowed(token.value) || (arrowShadowed.get(token.value) ?? 0) > 0 || pendingDeclared.includes(token.value)) return null;
+    const dotIndex = nextSignificantIndex(tokens, index + 1);
+    if (!isPunctuator(tokens[dotIndex], '.') && !isPunctuator(tokens[dotIndex], '?.')) return null;
+    const methodIndex = nextSignificantIndex(tokens, dotIndex + 1);
+    const method = tokens[methodIndex];
+    if (!method || method.type !== 'identifier' || !MUTATING_METHODS.has(method.value)) return null;
+    if (!isPunctuator(tokens[nextSignificantIndex(tokens, methodIndex + 1)], '(')) return null;
+    const outermost = contexts.find((context) => context.functionBody);
+    return outermost ? { name: token.value, method: method.value, at: token.start, scope: outermost.functionBody } : null;
+  };
+
   // A scope of untracked-analysis-only shadowing: the parameters of an
   // expression-bodied arrow, or a for-header declaration over an unbraced
   // body. It lasts until its expression or statement ends at its own depth:
@@ -641,6 +694,14 @@ function scanReactiveMutations(rawScript, reactiveNames, skipped = null) {
         mutations.push(mutation);
         if (mutation.nextIndex > index) resumeStatementStartAt = mutation.nextIndex;
       }
+    }
+    // In-place calls also begin a statement on a new line after a `)`
+    // (`load()\nitems.push(x)`): reporting a call, unlike rewriting, cannot
+    // break an `else` chain, so the rewriter's exclusion does not apply.
+    if (methodCalls && skipped && !recorded && isStatementContext()
+      && (detectionAllowed || (token.newlineBefore && isPunctuator(previousToken, ')')))) {
+      const call = methodCallSite(index);
+      if (call) methodCalls.push(call);
     }
 
     if (skipped) {
@@ -739,6 +800,9 @@ function scanReactiveMutations(rawScript, reactiveNames, skipped = null) {
         context = { type: 'objectLiteral' };
       }
 
+      if (methodCalls && context.type === 'block' && opensFunctionBody(tokens, index, topContext().type)) {
+        context.functionBody = { end: Infinity };
+      }
       contexts.push(context);
       if (context.parameters) pushShadowed(context.parameters);
       if (pendingDeclared.length > 0 && ['block', 'switchBody'].includes(context.type)) {
@@ -754,6 +818,7 @@ function scanReactiveMutations(rawScript, reactiveNames, skipped = null) {
         const closing = contexts.pop();
         if (closing.parameters) popShadowed(closing.parameters);
         if (closing.declared) popShadowed(closing.declared);
+        if (closing.functionBody) closing.functionBody.end = token.start;
         atStatementStart = ['block', 'switchBody'].includes(closing.type);
       } else {
         atStatementStart = false;
@@ -1058,7 +1123,8 @@ function findUntrackedMutations(source, names) {
   if (nameSet.size === 0) return [];
   const skipped = [];
   scanReactiveMutations(source, nameSet, skipped);
-  return skipped.map((site) => ({ name: site.name, ...lineAndColumn(source, site.at) }));
+  const locations = locateAscending(source, skipped);
+  return skipped.map((site, index) => ({ name: site.name, ...locations[index] }));
 }
 
 /**
@@ -1077,7 +1143,109 @@ function findUntrackedHandlerMutations(expression, names) {
     .map(({ name }) => ({ name }));
 }
 
+/**
+ * Reports statement-level calls of in-place array methods (`push`, `pop`,
+ * `shift`, `unshift`, `splice`, `sort`, `reverse`, `fill`, `copyWithin`) on
+ * reactive names that no update follows (milestone 26): no mutation of the
+ * same name — a reassignment such as `items = items`, a member write, or an
+ * update operator, tracked or not — appears after the call before the
+ * outermost function enclosing it closes. Later code in a nested callback
+ * counts, so `items.push(x); setTimeout(() => { items = items; })` is quiet.
+ * The analysis is syntactic and conservative: aliases (`const a = items;
+ * a.push(x)`), computed member names (`items['push'](x)`), calls in
+ * expression position or unbraced control-flow bodies, and Map/Set methods
+ * are not reported.
+ * @param {string} source - Script or handler source.
+ * @param {Iterable<string>} names - Reactive names.
+ * @returns {Array<{ name: string, method: string, line: number, column: number }>}
+ *   Located relative to `source`, in source order.
+ */
+function findInPlaceMutations(source, names) {
+  return findUnscheduledChanges(source, names).inPlace;
+}
+
+// Line/column for ascending offsets in one pass (lineAndColumn() per site
+// would rescan the source from the start each time).
+function locateAscending(source, sites) {
+  let line = 1;
+  let lastNewline = -1;
+  let cursor = 0;
+  return sites.map((site) => {
+    for (; cursor < site.at; cursor += 1) {
+      if (source[cursor] === '\n') {
+        line += 1;
+        lastNewline = cursor;
+      }
+    }
+    return { line, column: site.at - lastNewline };
+  });
+}
+
+/**
+ * One scan serving both warnings: the untracked mutations of
+ * findUntrackedMutations() and the in-place calls of findInPlaceMutations(),
+ * each located relative to `source` and in source order.
+ * @param {string} source - Script or handler source.
+ * @param {Iterable<string>} names - Reactive names.
+ * @returns {{ untracked: Array<{ name, line, column }>, inPlace: Array<{ name, method, line, column }> }}
+ */
+function findUnscheduledChanges(source, names) {
+  const none = { untracked: [], inPlace: [] };
+  if (!source) return none;
+  const nameSet = names instanceof Set ? names : new Set(names || []);
+  if (nameSet.size === 0) return none;
+  const skipped = [];
+  const calls = [];
+  const mutations = scanReactiveMutations(source, nameSet, skipped, calls);
+
+  let reported = calls;
+  if (calls.length > 0) {
+    // Per-name ascending mutation offsets, so each call needs one binary
+    // search for the first mutation after it (linear in calls and
+    // mutations, never their product).
+    const offsets = new Map();
+    for (const mutation of [...mutations, ...skipped]) {
+      if (!offsets.has(mutation.name)) offsets.set(mutation.name, []);
+      offsets.get(mutation.name).push(mutation.at);
+    }
+    for (const list of offsets.values()) list.sort((left, right) => left - right);
+    reported = calls.filter((call) => {
+      const list = offsets.get(call.name);
+      if (!list) return true;
+      let low = 0;
+      let high = list.length;
+      while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (list[middle] <= call.at) low = middle + 1;
+        else high = middle;
+      }
+      return low === list.length || list[low] >= call.scope.end;
+    });
+  }
+
+  const untrackedLocations = locateAscending(source, skipped);
+  const inPlaceLocations = locateAscending(source, reported);
+  return {
+    untracked: skipped.map((site, index) => ({ name: site.name, ...untrackedLocations[index] })),
+    inPlace: reported.map((call, index) => ({ name: call.name, method: call.method, ...inPlaceLocations[index] }))
+  };
+}
+
+/**
+ * The inline-handler counterpart of findInPlaceMutations(), scanning the
+ * handler in its instrumented (block-bodied) form. A handler value that is
+ * not a function literal is skipped.
+ */
+function findInPlaceHandlerMutations(expression, names) {
+  const normalized = normalizeHandlerExpression(expression);
+  if (normalized === null) return [];
+  return findInPlaceMutations(normalized, names).map(({ name, method }) => ({ name, method }));
+}
+
 module.exports = {
+  findUnscheduledChanges,
+  findInPlaceMutations,
+  findInPlaceHandlerMutations,
   findUntrackedMutations,
   findUntrackedHandlerMutations,
   collectDeclaredNames,
