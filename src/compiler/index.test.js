@@ -476,3 +476,18 @@ test('compile() reports untracked assignments as non-fatal warnings (issue #73)'
   // A failed collect-mode compile has diagnostics only.
   assert.equal('warnings' in compile('<main></section>', { diagnostics: 'collect' }), false);
 });
+
+test('compile() reports in-place array changes with no update as WIZZ-G027 warnings (milestone 26)', () => {
+  const source = '<script>\nlet items = [];\nfunction add(x) { items.push(x); }\n</script><ul on:click={() => add(1)}>{#each items as item}<li>{item}</li>{/each}</ul>';
+  const result = compile(source, { filePath: 'src/List.wizz' });
+  assert.deepEqual(result.warnings.map(({ code, severity, line, column }) => [code, severity, line, column]), [['WIZZ-G027', 'warning', 3, 19]]);
+  const collected = compile(source, { filePath: 'src/List.wizz', diagnostics: 'collect' });
+  assert.deepEqual(collected.diagnostics, []);
+  assert.equal(collected.warnings[0].code, 'WIZZ-G027');
+  // The warning changes no generated output; the fixed idiom schedules the
+  // update through its own statement.
+  const fixed = compile(source.replace('items.push(x); }', 'items.push(x); items = items; }'));
+  assert.deepEqual(fixed.warnings, []);
+  assert.match(fixed.source, /items\.push\(x\); items = items; __wizzQueueUpdate\(\{ items: true \}\);/);
+  assert.doesNotMatch(result.source, /items\.push\(x\); __wizzQueueUpdate/);
+});

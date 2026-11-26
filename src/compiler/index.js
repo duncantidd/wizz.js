@@ -50,7 +50,8 @@ const { collectUntrackedWarnings } = require('./generator/untrackedWarnings.js')
  *   source map, and frozen compatibility versions (`compiler`, `syntax`,
  *   `output`) the component was compiled with; `warnings`, records shaped
  *   like diagnostics with `severity: 'warning'` (WIZZ-G026: a reactive name
- *   assigned where no update is scheduled), which never fail the compile —
+ *   assigned where no update is scheduled; WIZZ-G027: an array changed in
+ *   place with no assignment after it), which never fail the compile —
  *   plus `diagnostics` when collect mode is requested.
  */
 function compile(source, options = {}) {
@@ -75,8 +76,8 @@ function compile(source, options = {}) {
       payload,
       sourceMap: createSourceMap(source, generatedSource, filePath, payload.rawScript),
       version: VERSIONS,
-      // Non-fatal findings (issue #73): state assigned where the update
-      // scheduler never hears about it. Reported by the client compile only;
+      // Non-fatal findings (issue #73, milestone 26): state changed where
+      // the update scheduler never hears about it. Reported by the client compile only;
       // compileServer() would repeat the same findings for the same source.
       warnings: collectUntrackedWarnings(payload, filePath)
     };

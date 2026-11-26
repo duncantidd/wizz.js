@@ -95,7 +95,7 @@ Wizz currently consists of a zero-dependency, build-time compiler written in Nod
 	  ├── domGenerator.js           Emits create() DOM construction function
 	  ├── updateGenerator.js        Emits update() and names the nodes it writes to (collectUpdateTargets)
 	  ├── assignmentInterceptor.js  Syntax-aware rewriter for reactive script mutations; also finds the mutations it leaves untracked
-	  ├── untrackedWarnings.js      WIZZ-G026 warnings for reactive assignments no update is scheduled for (compile().warnings)
+	  ├── untrackedWarnings.js      WIZZ-G026/G027 warnings for reactive changes no update is scheduled for (compile().warnings)
 	  ├── persistInitializer.js     Splices persist(key, default) markers into target-specific initializers
 	  ├── reservedNames.js          Rejects top-level author names generated code cannot make room for (WIZZ-G025)
 	  ├── serverGenerator.js        Emits the server-side HTML string renderer and the static-renderability gate (blocks, components, escaping)

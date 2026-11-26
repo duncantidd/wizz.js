@@ -247,7 +247,7 @@ function compileWizzFile(inputPath, outputPath, options = {}) {
   return { rawWizzCode, payload: result.payload, diagnostics: collect ? [] : undefined, warnings: result.warnings || [] };
 }
 
-// Non-fatal compiler findings (WIZZ-G026, issue #73) in human output: one
+// Non-fatal compiler findings (WIZZ-G026, WIZZ-G027) in human output: one
 // line per record, through the logger's warn channel when it has one.
 function logWarnings(logger, warnings) {
   for (const warning of warnings || []) {

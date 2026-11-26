@@ -250,10 +250,14 @@ test('language_contract documents the version triple, language surface, and diag
   const { text } = await registry.call('language_contract', {});
   // The literal triple is pinned deliberately: a version bump fails this
   // test until the contract text has been reviewed against the compiler.
-  assert.match(text, /compiler 1\.25\.0, syntax 1\.6\.0, output 1\.13\.0/);
+  assert.match(text, /compiler 1\.26\.0, syntax 1\.6\.0, output 1\.13\.1/);
   // Reviewed for 1.23.0 / output 1.13.0 (issues #69 and #73): the expression grammar, bindings, and G026 warnings.
   // Reviewed for 1.24.0: a CLI-only release (milestone 24, wizz init --sample/--bare); syntax and output are unchanged, so the contract text stands as is.
   // Reviewed for 1.25.0: --compact (milestone 23) and a script-lexer line-terminator fix; no component syntax or generated output change, so the contract text stands as is.
+  // Reviewed for 1.26.0 (milestone 26): the reactivity paragraph now teaches the self-assignment idiom and WIZZ-G027.
+  assert.match(text, /warning WIZZ-G027/);
+  assert.match(text, /items\.push\(x\); items = items;/);
+  assert.match(text, /user\.name = x/);
   assert.match(text, /- bind:value=\{name\} on <input>, <textarea>, <select>/);
   assert.match(text, /warning WIZZ-G026/);
   assert.match(text, /the conditional a \? b : c,\ncalls of a function or method/);
@@ -847,5 +851,16 @@ test('create_or_update_component writes a component with warnings and reports th
   assert.equal(fs.readFileSync(path.join(root, 'src', 'Bump.wizz'), 'utf8'), WARNING_SOURCE);
   assert.deepEqual(created.structured.diagnostics.map((diagnostic) => diagnostic.code), ['WIZZ-G026']);
   assert.match(created.text, /^Created src\/Bump\.wizz\.\nWIZZ-G026 \[warning\]/);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test('component_diagnostics reports WIZZ-G027 in-place array warnings (milestone 26)', async () => {
+  const root = createProjectFixture();
+  const registry = createRegistry(root);
+  const source = '<script>\nlet items = [];\nfunction add() { items.sort(); }\n</script><p on:click={add}>{items.length}</p>';
+  const { structured, text } = await registry.call('component_diagnostics', { source, path: 'src/List.wizz' });
+  assert.equal(structured.ok, true);
+  assert.deepEqual(structured.diagnostics.map((diagnostic) => [diagnostic.code, diagnostic.severity, diagnostic.line, diagnostic.column]), [['WIZZ-G027', 'warning', 3, 18]]);
+  assert.match(text, /WIZZ-G027 \[warning\] src\/List\.wizz:3:18/);
   fs.rmSync(root, { recursive: true, force: true });
 });
