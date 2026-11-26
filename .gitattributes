@@ -1,0 +1,25 @@
+# Store and check out text files with LF on every platform.
+#
+# Without this, Windows git (core.autocrlf=true) and WSL/Linux git (no
+# autocrlf) disagree about the same working copy: a file with CRLF line
+# endings looks clean to one and modified to the other, and committing from
+# the second stores CRLF in the repository. `eol=lf` overrides core.autocrlf,
+# so every client reads and writes the same bytes.
+* text=auto eol=lf
+
+# Binary formats are never line-ending converted.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.tgz binary
+*.vsix binary
+*.wasm binary
