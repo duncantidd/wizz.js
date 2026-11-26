@@ -282,7 +282,7 @@ function assertWritableComponentPath(root, relativePath, source) {
  * throws for compile failures, so a clean source yields
  * `{ ok: true, diagnostics: [] }` and a broken one yields every
  * error-severity record for the caller to echo. Warning-severity records
- * (WIZZ-G026, issue #73) follow the errors in `diagnostics` but never make
+ * (WIZZ-G026, WIZZ-G027) follow the errors in `diagnostics` but never make
  * `ok` false: a component that compiles may be written.
  * @param {string} source - The proposed component source.
  * @param {string} filePathLabel - The label diagnostics are qualified with.

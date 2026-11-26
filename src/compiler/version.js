@@ -199,14 +199,22 @@
 // Node 18 and 20 (Node 22+ now) — a platform-support change shipped as a
 // minor by decision, since no contract surface changes.
 //
-// compiler 1.26.0 / syntax 1.6.0 / output 1.13.0: milestone 26. The compile()
+// compiler 1.26.0 / syntax 1.6.0 / output 1.13.1: milestone 26. The compile()
 // `warnings` array gains WIZZ-G027: a statement-level call of an in-place
 // array method (push, pop, shift, unshift, splice, sort, reverse, fill,
 // copyWithin) on a reactive, non-prop `let` inside a function, with no later
 // mutation of that name before the outermost enclosing function closes. A new
 // analysis, so the compiler moves; the generated code is unchanged (warnings
 // never alter output) and no component that compiled before is rejected, so
-// syntax and output hold. Recorded decision: local state never gains an
+// syntax holds. Output patch, from the review of this milestone: the
+// rewriter's parameter detection now shares one rule (classifyParenGroup)
+// with function-scope detection, so parameters of anonymous generators,
+// computed methods, reserved-word methods (`set(items) {}`), and functions
+// named by contextual keywords (`function set(items) {}`) shadow reactive
+// names. Assigning such a parameter used to emit a spurious
+// `__wizzQueueUpdate` (and, for persistent state, a storage write of the
+// parameter's value); it no longer does. Every other module is byte-identical
+// apart from the version banner. Recorded decision: local state never gains an
 // identity check, so `items.push(x); items = items;` keeps scheduling its
 // update; props keep their separate `Object.is` short-circuit in setProps.
 //
@@ -217,7 +225,7 @@
 const VERSIONS = Object.freeze({
   compiler: '1.26.0',
   syntax: '1.6.0',
-  output: '1.13.0'
+  output: '1.13.1'
 });
 
 module.exports = { VERSIONS };

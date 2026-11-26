@@ -11,11 +11,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Added — Array Mutation Reactivity Documented and Guarded (milestone 26; compiler 1.25.0 → 1.26.0, syntax 1.6.0 and output 1.13.0 unchanged)
+### Added — Array Mutation Reactivity Documented and Guarded (milestone 26; compiler 1.25.0 → 1.26.0, output 1.13.0 → 1.13.1, syntax 1.6.0 unchanged)
 
 #### Versions
 
-- Compiler minor for a new analyzer finding. Generated modules are byte-identical apart from the version banner (warnings never change output) and no component that compiled before is rejected, so syntax and output hold. `package.json` moves to 1.26.0 in lockstep.
+- Compiler minor for a new analyzer finding. Warnings never change output and no component that compiled before is rejected, so syntax holds. Output patch for the rewriter fix under "Fixed (review of milestone 26)"; every other module is byte-identical apart from the version banner. `package.json` moves to 1.26.0 in lockstep.
 - Recorded decision: local state never gains an identity check. Every statement-level assignment schedules an update, so `items.push(x); items = items;` keeps working; props keep their separate `Object.is` short-circuit in `setProps`. Proxy-based deep reactivity and instrumenting array methods stay out of scope.
 
 #### Added
@@ -30,6 +30,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - README: the `{#each}` collection row (generated from the MCP limits table) teaches `items.push(x); items = items;` beside the copy form and names WIZZ-G027; a new "Arrays and objects" subsection explains that the assignment, not a new reference, is the trigger, that member writes schedule the root name, that keyed and keyless lists re-run each item's update for in-place-changed items, and why there is no deep reactivity; the Lists section links it; "Compiler Warnings" documents WIZZ-G027 and its limits.
 - MCP `language_contract` script boundary gains the same rules; `src/compiler/README.md`, `src/compiler/generator/README.md`, and `STRUCTURE.md` describe the analysis.
+
+#### Fixed (review of milestone 26)
+
+- One parameter-list rule. `classifyParenGroup()` now backs the rewrite's parameter shadowing, the parameter-default check, and the new function-scope detection; before, `collectCallBodyParameters()` lagged behind the other two. Parameters of anonymous generators (`function* (items) {}`), computed methods (`[k](items) {}`), reserved-word methods (`set(items) {}`, `delete(items) {}`), and functions named by contextual keywords (`function set(items) {}`) now shadow reactive names. This removes false WIZZ-G027 and WIZZ-G026 reports, and the rewriter no longer emits a spurious `__wizzQueueUpdate({ items: true })` (plus a `__wizzPersistWrite` of the parameter's value for persistent state) when such a parameter is assigned. That last part is pre-existing behavior in generated code, hence the output patch.
+- Functions named by contextual keywords (`get`, `set`, `of`, `async`, `static`) are function scopes, so an unfollowed in-place call inside `function set() {}` or `async function get() {}` is reported instead of being treated as script initialization.
+- In semicolon-less scripts, the in-place check runs after the shadow tracking for the token, so the parameters of an expression-bodied arrow (`const copy = items => items.slice()`) and the bindings of an unbraced `for` header stop shadowing at the next statement. The unbraced body itself stays shadowed.
+- Each inline handler is normalized and scanned once for both codes (`findUnscheduledHandlerChanges()`), mirroring the script path.
+- Comments in `src/compiler/index.js`, `build.js`, `scripts/mcpTools.js`, and `src/compiler/parser/README.md` that described the warnings as WIZZ-G026 alone now name both codes.
+- Known trade-off, kept: suppression is scoped to the outermost enclosing function, so inside an `onMount(() => { … })` callback a later assignment anywhere in that callback (a cleanup function, a sibling handler) silences an earlier nested call. This avoids false positives on synchronous callbacks such as `forEach`.
 
 #### Tests
 

@@ -24,11 +24,7 @@
 // every inline `on:` handler, with an {#each} item variable shadowing a
 // same-named reactive let inside the item body, as it does in generated code.
 const { CODES } = require('../diagnostics.js');
-const {
-  findUnscheduledChanges,
-  findUntrackedHandlerMutations,
-  findInPlaceHandlerMutations
-} = require('./assignmentInterceptor.js');
+const { findUnscheduledChanges, findUnscheduledHandlerChanges } = require('./assignmentInterceptor.js');
 
 const UNTRACKED_ADVICE = 'Make the assignment a statement of its own, in braces under an if/else or loop (`count += 1; g(count);`, `if (ready) { count = 2; }`), so the update is scheduled.';
 
@@ -81,7 +77,7 @@ function collectUntrackedWarnings(payload, filePath) {
     .filter((declaration) => declaration.type === 'VariableDeclaration' && declaration.isReactive);
   if (reactive.length === 0) return [];
   const reactiveNames = reactive.map((declaration) => declaration.name);
-  const stateNames = reactive.filter((declaration) => !declaration.isProp).map((declaration) => declaration.name);
+  const stateSet = new Set(reactive.filter((declaration) => !declaration.isProp).map((declaration) => declaration.name));
 
   const scriptSites = [];
   const base = payload.scriptStart;
@@ -97,9 +93,8 @@ function collectUntrackedWarnings(payload, filePath) {
       const { line, column } = locate(site);
       scriptSites.push(untracked(`'${site.name}' ${UNTRACKED} where the update scheduler does not see it, so the DOM will not update`, filePath, line, column));
     }
-    const state = new Set(stateNames);
     for (const site of changes.inPlace) {
-      if (!state.has(site.name)) continue;
+      if (!stateSet.has(site.name)) continue;
       const { line, column } = locate(site);
       scriptSites.push(inPlace(site, `'${site.name}' is changed in place by .${site.method}() and never reassigned afterwards, so the DOM will not update`, filePath, line, column));
     }
@@ -113,18 +108,20 @@ function collectUntrackedWarnings(payload, filePath) {
   while (stack.length) {
     const [node, shadowed] = stack.pop();
     if (!node || typeof node !== 'object') continue;
-    const visible = (names) => (shadowed.size > 0 ? names.filter((name) => !shadowed.has(name)) : names);
-    const names = visible(reactiveNames);
-    const state = visible(stateNames);
+    const names = shadowed.size > 0 ? reactiveNames.filter((name) => !shadowed.has(name)) : reactiveNames;
     for (const attribute of node.attributes || []) {
       // Desugared bind: handlers are statement-level by construction.
       if (!attribute.name.startsWith('on:') || typeof attribute.value !== 'string' || attribute.bindFor) continue;
       const start = node.loc?.start;
       const where = `in the '${attribute.name}' handler on <${node.name}>`;
-      for (const site of findUntrackedHandlerMutations(attribute.value, names)) {
+      // One normalize-and-scan per handler for both codes; prop calls are
+      // dropped as in the script.
+      const changes = findUnscheduledHandlerChanges(attribute.value, names);
+      for (const site of changes.untracked) {
         handlerWarnings.push(untracked(`'${site.name}' ${UNTRACKED} ${where} where the update scheduler does not see it, so the DOM will not update`, filePath, start?.line, start?.column));
       }
-      for (const site of findInPlaceHandlerMutations(attribute.value, state)) {
+      for (const site of changes.inPlace) {
+        if (!stateSet.has(site.name)) continue;
         handlerWarnings.push(inPlace(site, `'${site.name}' is changed in place by .${site.method}() ${where} and never reassigned afterwards, so the DOM will not update`, filePath, start?.line, start?.column));
       }
     }

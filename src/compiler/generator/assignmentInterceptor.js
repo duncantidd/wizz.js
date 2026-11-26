@@ -251,48 +251,63 @@ function collectArrowParameters(tokens, braceIndex) {
   return [];
 }
 
+// The only keywords whose `(...)` group can be followed by a `{` that is not
+// a function body: control-flow headers, `catch`, and `for await (...)`.
+// Every other identifier before such a group names a function or method —
+// including contextual keywords that are legal names (`function set() {}`,
+// `async function get() {}`, `function of() {}`) — so they must not be
+// excluded the way RESERVED_WORDS excludes them elsewhere.
+const PAREN_BLOCK_KEYWORDS = new Set(['if', 'for', 'while', 'switch', 'with', 'catch', 'await']);
+
 /**
- * Collects parameter names for a `) {` function body: the identifiers in the
- * closing parameter group, but only when the token before its `(` can
- * introduce a function - a `function` or `catch` keyword, or a non-reserved
- * name (function declaration, method shorthand, getter, setter). Control-flow
- * headers such as `if (...) {` and `while (...) {` bind no parameters.
+ * Classifies the `(...)` group opening at `openIndex` by what a `{` after its
+ * closing `)` would open. One rule shared by the rewrite's parameter
+ * shadowing, the parameter-default check, and function-scope detection, so
+ * the three can never disagree.
+ * @param {Array} tokens - The token stream.
+ * @param {number} openIndex - Index of the `(`.
+ * @param {string} parentType - Context type enclosing the group.
+ * @returns {'function' | 'catch' | null} `'function'` for a function or
+ *   method parameter list (named, anonymous, generator, computed, or a
+ *   method named by any word in an object literal or class body),
+ *   `'catch'` for a catch binding, null for a control-flow header.
  */
-function collectCallBodyParameters(tokens, braceIndex) {
+function classifyParenGroup(tokens, openIndex, parentType) {
+  if (parentType === 'objectLiteral' || parentType === 'classBody') return 'function';
+  const introducer = tokens[previousSignificantIndex(tokens, openIndex - 1)];
+  if (!introducer) return null;
+  if (isPunctuator(introducer, '*')) return 'function';
+  if (introducer.type !== 'identifier') return null;
+  if (introducer.value === 'catch') return 'catch';
+  return PAREN_BLOCK_KEYWORDS.has(introducer.value) ? null : 'function';
+}
+
+/**
+ * Collects parameter names for a `) {` body: the identifiers in the closing
+ * group when it is a function/method parameter list or a catch binding.
+ * Control-flow headers such as `if (...) {` and `while (...) {` bind no
+ * parameters.
+ */
+function collectCallBodyParameters(tokens, braceIndex, parentType) {
   const closeIndex = previousSignificantIndex(tokens, braceIndex - 1);
   if (closeIndex < 0 || !isPunctuator(tokens[closeIndex], ')')) return [];
-
   const openIndex = findMatchingParen(tokens, closeIndex);
-  if (openIndex === -1) return [];
-
-  const introducer = tokens[previousSignificantIndex(tokens, openIndex - 1)];
-  if (!introducer || introducer.type !== 'identifier') return [];
-  const introducesFunction = !RESERVED_WORDS.has(introducer.value)
-    || introducer.value === 'function'
-    || introducer.value === 'catch';
-  if (!introducesFunction) return [];
-
+  if (openIndex === -1 || classifyParenGroup(tokens, openIndex, parentType) === null) return [];
   return collectIdentifierNames(tokens, openIndex, closeIndex);
 }
 
 /**
- * True when the `{` at `braceIndex` opens a function body: an arrow body, a
- * `function`/method/getter/setter body, or any `(...) {` directly inside an
- * object literal or class body (only a method can stand there). Control-flow
- * headers (`if (...) {`) and `catch` clauses are not functions.
+ * True when the `{` at `braceIndex` opens a function body: an arrow body or
+ * a `(...) {` that classifyParenGroup() reads as a parameter list. Catch
+ * clauses and control-flow headers are not functions.
  */
 function opensFunctionBody(tokens, braceIndex, parentType) {
-  const previous = tokens[previousSignificantIndex(tokens, braceIndex - 1)];
+  const previousIndex = previousSignificantIndex(tokens, braceIndex - 1);
+  const previous = tokens[previousIndex];
   if (isPunctuator(previous, '=>')) return true;
   if (!isPunctuator(previous, ')')) return false;
-  if (parentType === 'objectLiteral' || parentType === 'classBody') return true;
-  const openIndex = findMatchingParen(tokens, previousSignificantIndex(tokens, braceIndex - 1));
-  if (openIndex === -1) return false;
-  const introducer = tokens[previousSignificantIndex(tokens, openIndex - 1)];
-  if (isPunctuator(introducer, '*')) return true;
-  return Boolean(introducer) && introducer.type === 'identifier'
-    && introducer.value !== 'catch'
-    && (!RESERVED_WORDS.has(introducer.value) || introducer.value === 'function');
+  const openIndex = findMatchingParen(tokens, previousIndex);
+  return openIndex !== -1 && classifyParenGroup(tokens, openIndex, parentType) === 'function';
 }
 
 // Array methods that change the receiver in place (milestone 26). A
@@ -526,23 +541,16 @@ function scanReactiveMutations(rawScript, reactiveNames, skipped = null, methodC
   // True when the innermost enclosing groups include a parameter list:
   // `(count = 1) => ...`, `function f(count = 1) {`, a method, or a catch
   // clause. Defaults there declare a parameter rather than mutate state.
-  // Directly inside an object literal or class body a `(...) {` can only be
-  // a method — computed (`[k](...)`) or named by a reserved word
-  // (`delete(...)`, `get(...)`, `async get(...)`) — since control-flow
-  // headers cannot appear there; after `*` it is a generator.
+  // A `(...) {` group is classified by classifyParenGroup(): methods of any
+  // name (computed, reserved-word, `async get(...)`), generators, and
+  // functions named by contextual keywords (`function set(count = 1) {`)
+  // all take parameters; only control-flow headers do not.
   const isParameterList = (context) => {
     if (context.parameterList === undefined) {
       const closeIndex = findMatchingCloseParen(tokens, context.openIndex);
       const after = closeIndex === -1 ? null : tokens[nextSignificantIndex(tokens, closeIndex + 1)];
-      const introducer = tokens[previousSignificantIndex(tokens, context.openIndex - 1)];
-      const methodPosition = context.parentType === 'objectLiteral' || context.parentType === 'classBody';
       context.parameterList = isPunctuator(after, '=>')
-        || (isPunctuator(after, '{') && Boolean(introducer) && (
-          methodPosition
-          || isPunctuator(introducer, '*')
-          || (introducer.type === 'identifier'
-            && (!RESERVED_WORDS.has(introducer.value) || introducer.value === 'function' || introducer.value === 'catch'))
-        ));
+        || (isPunctuator(after, '{') && classifyParenGroup(tokens, context.openIndex, context.parentType) !== null);
     }
     return context.parameterList;
   };
@@ -695,15 +703,6 @@ function scanReactiveMutations(rawScript, reactiveNames, skipped = null, methodC
         if (mutation.nextIndex > index) resumeStatementStartAt = mutation.nextIndex;
       }
     }
-    // In-place calls also begin a statement on a new line after a `)`
-    // (`load()\nitems.push(x)`): reporting a call, unlike rewriting, cannot
-    // break an `else` chain, so the rewriter's exclusion does not apply.
-    if (methodCalls && skipped && !recorded && isStatementContext()
-      && (detectionAllowed || (token.newlineBefore && isPunctuator(previousToken, ')')))) {
-      const call = methodCallSite(index);
-      if (call) methodCalls.push(call);
-    }
-
     if (skipped) {
       // A new statement begins at a statement start or, through ASI, at an
       // identifier on a new line after a completed operand (a continuation
@@ -715,6 +714,17 @@ function scanReactiveMutations(rawScript, reactiveNames, skipped = null, methodC
       if (!recorded) {
         const site = untrackedSite(index);
         if (site) skipped.push(site);
+      }
+      // In-place calls also begin a statement on a new line after a `)`
+      // (`load()\nitems.push(x)`): reporting a call, unlike rewriting, cannot
+      // break an `else` chain, so the rewriter's exclusion does not apply.
+      // This runs after trackArrowScopes(), so a scope that this token's
+      // statement start just ended (an expression-bodied arrow's parameters,
+      // an unbraced for-header's bindings) no longer shadows the name.
+      if (methodCalls && !recorded && isStatementContext()
+        && (detectionAllowed || (token.newlineBefore && isPunctuator(previousToken, ')')))) {
+        const call = methodCallSite(index);
+        if (call) methodCalls.push(call);
       }
     }
 
@@ -793,7 +803,7 @@ function scanReactiveMutations(rawScript, reactiveNames, skipped = null, methodC
       } else if (BLOCK_INTRODUCER_KEYWORDS.has(previousValue)) {
         context = { type: 'block' };
       } else if (isPunctuator(previous, ')')) {
-        context = { type: 'block', parameters: collectCallBodyParameters(tokens, index) };
+        context = { type: 'block', parameters: collectCallBodyParameters(tokens, index, topContext().type) };
       } else if (atStatementStart) {
         context = { type: 'block' };
       } else {
@@ -1133,14 +1143,36 @@ function findUntrackedMutations(source, names) {
  * becomes a block), so it reports exactly what interception leaves behind.
  */
 function findUntrackedHandlerMutations(expression, names) {
-  if (typeof expression !== 'string') return [];
+  return findUnscheduledHandlerChanges(expression, names).untracked;
+}
+
+/**
+ * The inline-handler counterpart of findUnscheduledChanges(): normalizes and
+ * scans the handler once for both warnings. Names only, since handler
+ * findings are located at their element.
+ * @param {string} expression - The raw directive value.
+ * @param {Iterable<string>} names - Reactive names.
+ * @returns {{ untracked: Array<{ name }>, inPlace: Array<{ name, method }> }}
+ */
+function findUnscheduledHandlerChanges(expression, names) {
+  if (typeof expression !== 'string') return { untracked: [], inPlace: [] };
   const normalized = normalizeHandlerExpression(expression);
-  if (normalized !== null) return findUntrackedMutations(normalized, names).map(({ name }) => ({ name }));
+  if (normalized !== null) {
+    const { untracked, inPlace } = findUnscheduledChanges(normalized, names);
+    return {
+      untracked: untracked.map(({ name }) => ({ name })),
+      inPlace: inPlace.map(({ name, method }) => ({ name, method }))
+    };
+  }
   // A value that is not a function literal (`on:click={count = 1}`) is
   // emitted untouched: even its statement-level mutations are untracked, and
-  // they run once, when the listener value is evaluated at mount.
-  return [...findReactiveMutations(expression, names), ...findUntrackedMutations(expression, names)]
-    .map(({ name }) => ({ name }));
+  // they run once, when the listener value is evaluated at mount. It is not
+  // a function body, so it has no in-place findings.
+  return {
+    untracked: [...findReactiveMutations(expression, names), ...findUntrackedMutations(expression, names)]
+      .map(({ name }) => ({ name })),
+    inPlace: []
+  };
 }
 
 /**
@@ -1237,13 +1269,12 @@ function findUnscheduledChanges(source, names) {
  * not a function literal is skipped.
  */
 function findInPlaceHandlerMutations(expression, names) {
-  const normalized = normalizeHandlerExpression(expression);
-  if (normalized === null) return [];
-  return findInPlaceMutations(normalized, names).map(({ name, method }) => ({ name, method }));
+  return findUnscheduledHandlerChanges(expression, names).inPlace;
 }
 
 module.exports = {
   findUnscheduledChanges,
+  findUnscheduledHandlerChanges,
   findInPlaceMutations,
   findInPlaceHandlerMutations,
   findUntrackedMutations,
