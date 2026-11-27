@@ -79,15 +79,15 @@ const { source } = compileServer(
 // <wizz:head>; head-free pages return exactly { html, state }.
 ```
 
-The server-renderable surface covers everything with a deterministic initial rendering: the root element, static markup, text interpolations, dynamic attributes, top-level props, the `{#if}` branch the test selects at render time (reactive on the client, which replaces it when the test changes), `{#each}` lists (each bodies keep the browser target's restrictions: exactly one root element, no components, no nested blocks; `on:` directives are validated and never rendered), and imported component tags. Because a component tag's renderability depends on the child's own template, the compile consults two gate options: `componentServerRenderable` maps import names to `true` when that child's own server pipeline compiles (a missing entry conservatively rejects the tag), and `componentIneligibilityReasons` maps import names to the child's own failure so the thrown diagnostic chains the deepest blocking construct (`Underlying reason: …`). Remaining rejections — void elements with children, reactive names matching `__proto__` or the reserved `__wizz` prefix, malformed `on:` directives — carry located diagnostics. The author's top-level script runs verbatim and trusted on both targets; event handlers and lifecycle hooks are client-only, and author scripts that read browser globals fail `renderComponent()` at runtime (the caller's fallback applies).
+The server-renderable surface covers everything with a deterministic initial rendering: the root element, static markup, text interpolations, dynamic attributes, top-level props, the `{#if}` branch the test selects at render time (reactive on the client, which replaces it when the test changes), `{#each}` lists (each bodies keep the browser target's restrictions: exactly one root, an element or a component tag, and no nested blocks; `on:` directives are validated and never rendered; component tags in items follow the same vouching rules as anywhere else), and imported component tags. Because a component tag's renderability depends on the child's own template, the compile consults two gate options: `componentServerRenderable` maps import names to `true` when that child's own server pipeline compiles (a missing entry conservatively rejects the tag), and `componentIneligibilityReasons` maps import names to the child's own failure so the thrown diagnostic chains the deepest blocking construct (`Underlying reason: …`). Remaining rejections — void elements with children, reactive names matching `__proto__` or the reserved `__wizz` prefix, malformed `on:` directives — carry located diagnostics. The author's top-level script runs verbatim and trusted on both targets; event handlers and lifecycle hooks are client-only, and author scripts that read browser globals fail `renderComponent()` at runtime (the caller's fallback applies).
 
-Component tags render recursively: the server module namespace-imports each rendered child's `.server.js` build and calls its `renderComponent()` with the evaluated props at the tag position; the child's state snapshot rides under the framework-reserved `__wizz` key (`state.__wizz.components["<componentId>"]`, emitted only when the template contains component tags — a static presence check, so a tag in an untaken branch still emits it).
+Component tags render recursively: the server module namespace-imports each rendered child's `.server.js` build and calls its `renderComponent()` with the evaluated props at the tag position; the child's state snapshot rides under the framework-reserved `__wizz` key (`state.__wizz.components["<componentId>"]`, or `["<componentId>:<index>"]` for a tag inside an each item, keyed by the item's position; emitted only when the template contains component tags — a static presence check, so a tag in an untaken branch still emits it).
 
 ## Document Head
 
 A component can declare one top-level `<wizz:head>` block containing only `<title>`, `<meta>`, and `<link>` (anything else fails compilation with a located, file-aware diagnostic; the block is pruned from the template AST so it never renders into body markup). Expressions inside head reuse the body machinery: `<title>{title}</title>` text and dynamic attribute values evaluate at render time server-side and at mount time client-side; `on:` directives are skipped.
 
-On the server, `renderComponent()` gains the additive `head` field — the component's head markup followed by each rendered child's head in tree order, every node tagged `data-wizz-head-id="<ownerPath>"` (page `'r'`, child `'r/<componentId>'`) and `data-wizz-loc="<file>:<line>:<col>"` when the compile carries `filePath`. On the client, `mountComponent` builds and prepends head nodes to `document.head` (tagged `data-wizz-head`), `destroy` releases them, and hydration verifies the delivered head against compile-time expectations before adopting it in place — mismatch falls back to a fresh mount exactly like the body tree. Multiple `<title>` declarations resolve last-in-tree-wins with one development warning naming both locations; `<meta>`/`<link>` concatenate. Reactive head updates are deliberately out of scope — head follows navigation, not state changes.
+On the server, `renderComponent()` gains the additive `head` field — the component's head markup followed by each rendered child's head in tree order, every node tagged `data-wizz-head-id="<ownerPath>"` (page `'r'`, child `'r/<componentId>'`, or `'r/<componentId>:<index>'` for a child in an each item) and `data-wizz-loc="<file>:<line>:<col>"` when the compile carries `filePath`. On the client, `mountComponent` builds and prepends head nodes to `document.head` (tagged `data-wizz-head`), `destroy` releases them, and hydration verifies the delivered head against compile-time expectations before adopting it in place — mismatch falls back to a fresh mount exactly like the body tree. Multiple `<title>` declarations resolve last-in-tree-wins with one development warning naming both locations; `<meta>`/`<link>` concatenate. Reactive head updates are deliberately out of scope — head follows navigation, not state changes.
 
 Escaping and delivery boundaries: text output escapes `&`, `<`, `>`; attribute values additionally escape `"`. Adjacent text-like children carry `<!-- -->` markers so browser parsing preserves the positional node layout client updates target. State serializes through `serializeInitialState()` with every `<` escaped; the delivery script is a sibling of the mount point, never a child.
 
@@ -182,9 +182,9 @@ Every successful `compile()` result carries `warnings`, in both modes: records w
 
 ```js
 {
-  compiler: '1.26.0', // The compiler itself
-  syntax: '1.6.0',   // The component language contract
-  output: '1.13.1'    // The generated module contract
+  compiler: '1.27.0', // The compiler itself
+  syntax: '1.7.0',   // The component language contract
+  output: '1.14.0'    // The generated module contract
 }
 ```
 
@@ -200,7 +200,7 @@ Every successful `compile()` result carries `warnings`, in both modes: records w
 - Every generated module self-identifies with a first-line comment stamped from the table:
 
   ```js
-  // Generated by Wizz 1.26.0 (component syntax 1.6.0, generated output 1.13.1). Edits will be overwritten.
+  // Generated by Wizz 1.27.0 (component syntax 1.7.0, generated output 1.14.0). Edits will be overwritten.
   ```
 
   Server modules stamp the same table with a `server output` label.

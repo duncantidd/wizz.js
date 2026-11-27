@@ -872,12 +872,6 @@ function generateComponent(astPayload, options = {}) {
 }
 
 /**
- * Reports whether the template renders the named import. Component tags
- * cannot appear inside each bodies (the renderable gate refuses them), and
- * IfBlock.children aliases its consequent, so walking consequent plus
- * alternate covers every branch exactly once.
- */
-/**
  * Maps each template `on:` attribute to its instrumented handler source.
  * A handler that mutates a prop is the inline form of the script-level
  * read-only violation and fails with the same diagnostic code.
@@ -918,6 +912,12 @@ function collectHandlerSources(templateAST, reactiveNames, persistentVars, propN
   return sources;
 }
 
+/**
+ * Reports whether the template renders the named import, in a branch, an
+ * each item, or anywhere else under an element. IfBlock.children aliases its
+ * consequent, so walking consequent plus alternate covers every branch
+ * exactly once.
+ */
 function renderedImportNames(templateAST, name) {
   const scan = (node) => {
     if (node.type === 'Element') {
@@ -927,6 +927,7 @@ function renderedImportNames(templateAST, name) {
     if (node.type === 'IfBlock') {
       return (node.consequent || []).some(scan) || (node.alternate || []).some(scan);
     }
+    if (node.type === 'EachBlock') return (node.children || []).some(scan);
     return false;
   };
   return (templateAST.children || []).some(scan);

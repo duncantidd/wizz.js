@@ -235,6 +235,47 @@ test('emits per-list machinery for each blocks', () => {
   assert.match(source, /__wizzLists\.push\(\(__wizzChanged\) => \{ if \(__wizzChanged\.fruits\) __wizzHydrateUpdateList_1\(\); \}\);/);
 });
 
+// Milestone 25 step 1: children of each items are adopted per row.
+const rowListSource = (body) => '<script>\nimport Row from "./Row.wizz";\nlet todos = [{ id: 1 }];\n</script>'
+  + `<ul>{#each todos as todo (todo.id)}${body}{/each}</ul>`;
+const rowGate = { componentServerRenderable: { Row: true } };
+
+test('adopts each-item children after the walk, keyed by position, owned by the record', () => {
+  const source = generateHydratable(rowListSource('<li><Row todo={todo} /></li>'), rowGate);
+
+  // The child's hydratable module is imported although the tag only appears in a list.
+  assert.match(source, /^import \* as __wizzHydrate_Row from "\.\/Row\.hydrate\.js";$/m);
+  assert.match(source, /const __wizzPendingAdoptions = \[\];/);
+  assert.match(source, /function __wizzHydrateListItem_1\(todo, __wizzParent, __wizzIndex, __wizzOrdinal\) \{/);
+  // A component position is only checked for an element: tag checks are the child's own.
+  assert.match(source, /if \(!__wizzNode_1_0_1 \|\| __wizzNode_1_0_1\.nodeType !== 1\) \{/);
+  assert.match(source, /__wizzPendingAdoptions\.push\(\(\) => \{\n\s+__wizzChild_1 = __wizzHydrate_Row\.hydrateRoot\(__wizzNode_1_0_1, \{ "todo": todo \}, __wizzReadSlice\(__wizzState, "1:" \+ __wizzOrdinal\), __wizzHeadOwner \+ "\/" \+ "1:" \+ __wizzOrdinal\);\n\s+__wizzDrop\.push\(\(\) => __wizzChild_1\.destroy\(\)\);/);
+  assert.match(source, /__wizzHydrateListItem_1\(todo, __wizzParent, __wizzIndex, __wizzIndex - __wizzStart\)/);
+  // Adoption runs once, after the walk and before the head-run leftover check.
+  const adoptIndex = source.indexOf('if (__wizzProblems.length === 0) for (const __wizzAdopt of __wizzPendingAdoptions) __wizzAdopt();');
+  const leftoverIndex = source.indexOf('delivered head nodes were never claimed');
+  const fallbackIndex = source.indexOf("console.warn('[wizz] hydration mismatch: '");
+  assert.ok(adoptIndex !== -1 && adoptIndex < leftoverIndex && leftoverIndex < fallbackIndex);
+  // Fresh rows after hydration mount through the deferred-mount path.
+  assert.match(source, /function __wizzCreateFreshItem_1\(todo, __wizzMounts\) \{/);
+  assert.match(source, /for \(const __wizzMount of __wizzPendingMounts\) __wizzMount\(\);/);
+  // Removal tolerates an adopted child that leaves its root in place.
+  assert.match(source, /if \(__wizzRecord\.node\.parentNode === __wizzAnchor_1\.parentNode\) __wizzAnchor_1\.parentNode\.removeChild\(__wizzRecord\.node\);/);
+});
+
+test('a component item root is verified as an element and not walked into', () => {
+  const source = generateHydratable(rowListSource('<Row todo={todo} />'), rowGate);
+  assert.match(source, /if \(!__wizzNode_1_root \|\| __wizzNode_1_root\.nodeType !== 1\) \{/);
+  assert.doesNotMatch(source, /__wizzStripComments\(__wizzNode_1_root\)/, 'the child strips its own markers');
+  assert.match(source, /hydrateRoot\(__wizzNode_1_root, /);
+  assert.match(source, /__wizzRecord\.node = __wizzFresh_1_0\.previousSibling;/);
+});
+
+test('lists without components emit no adoption queue or ordinal', () => {
+  const source = generateHydratable('<script>let todos = [{ id: 1 }];</script><ul>{#each todos as todo (todo.id)}<li>{todo.id}</li>{/each}</ul>');
+  assert.doesNotMatch(source, /__wizzPendingAdoptions|__wizzOrdinal|__wizzMounts|__wizzReadSlice/);
+});
+
 test('collects instrumented inline handlers for adoption', () => {
   const source = generateHydratable('<script>let name = "";</script><main><input value={name} on:input={(e) => name = e.target.value} /></main>');
   assert.match(source, /__wizzPendingListeners\.push\(\[\w+, "input", \(e\) => \{ name = e\.target\.value; __wizzQueueUpdate\(\{ name: true \}\); \}\]\);/);

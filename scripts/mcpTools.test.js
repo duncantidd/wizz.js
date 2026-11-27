@@ -250,11 +250,15 @@ test('language_contract documents the version triple, language surface, and diag
   const { text } = await registry.call('language_contract', {});
   // The literal triple is pinned deliberately: a version bump fails this
   // test until the contract text has been reviewed against the compiler.
-  assert.match(text, /compiler 1\.26\.0, syntax 1\.6\.0, output 1\.13\.1/);
+  assert.match(text, /compiler 1\.27\.0, syntax 1\.7\.0, output 1\.14\.0/);
   // Reviewed for 1.23.0 / output 1.13.0 (issues #69 and #73): the expression grammar, bindings, and G026 warnings.
   // Reviewed for 1.24.0: a CLI-only release (milestone 24, wizz init --sample/--bare); syntax and output are unchanged, so the contract text stands as is.
   // Reviewed for 1.25.0: --compact (milestone 23) and a script-lexer line-terminator fix; no component syntax or generated output change, so the contract text stands as is.
   // Reviewed for 1.26.0 (milestone 26): the reactivity paragraph now teaches the self-assignment idiom and WIZZ-G027.
+  // Reviewed for 1.27.0 (milestone 25 step 1): {#each} bodies and the Components section admit component tags with per-row ownership.
+  assert.match(text, /root: a native element or a component tag/);
+  assert.match(text, /\(<TodoItem todo=\{todo\} onRemove=\{remove\} \/>\)/);
+  assert.doesNotMatch(text, /do not support\n?\s*components/);
   assert.match(text, /warning WIZZ-G027/);
   assert.match(text, /items\.push\(x\); items = items;/);
   assert.match(text, /user\.name = x/);
@@ -718,7 +722,6 @@ test('every documented compile-error limit fails with the code the table cites',
     ['{:else if}', component('let a = 1;', '<div>{#if a === 1}<b>a</b>{:else if a === 2}<i>b</i>{/if}</div>'), 'WIZZ-P033'],
     ['each member collection', component('let s = { xs: [] };', '<ul>{#each s.xs as x}<li>{x}</li>{/each}</ul>'), 'WIZZ-P002'],
     ['each index alias', component('let xs = [];', '<ul>{#each xs as x, i}<li>{x}</li>{/each}</ul>'), 'WIZZ-P002'],
-    ['each body component', component(imports, '<ul>{#each xs as x}<li><Card /></li>{/each}</ul>'), 'WIZZ-G004'],
     ['each body nested if', component('let xs = [];', '<ul>{#each xs as x}<li>{#if x === 1}<b>a</b>{/if}</li>{/each}</ul>'), 'WIZZ-G005'],
     ['each body nested each', component('let xs = [];', '<ul>{#each xs as x}<li>{#each xs as y}<b>{y}</b>{/each}</li>{/each}</ul>'), 'WIZZ-G005'],
     ['each body two roots', component('let xs = [];', '<ul>{#each xs as x}<li>{x}</li><li>{x}</li>{/each}</ul>'), 'WIZZ-G003'],
@@ -738,6 +741,15 @@ test('every documented compile-error limit fails with the code the table cites',
   for (const [name, source, code] of cases) {
     assert.equal(compileCode(source), code, name);
   }
+  // Retired with milestone 25 step 1: components inside {#each} bodies
+  // compile, nested in the item or as its root, and no limit row cites G004.
+  assert.equal(compileCode(component(imports, '<ul>{#each xs as x}<li><Card /></li>{/each}</ul>')), null);
+  assert.equal(compileCode(component(imports, '<ul>{#each xs as x (x.id)}<Card item={x} onPick={f} />{/each}</ul>')), null);
+  assert.ok(TEMPLATE_LIMITS.every((row) => !row.limit.includes('WIZZ-G004') && !row.failure.includes('WIZZ-G004')));
+  // The {#each} body workaround's claims about props: an arrow prop is a
+  // grammar error, and a call that returns a function compiles.
+  assert.equal(compileCode(component(imports, '<ul>{#each xs as x (x.id)}<Card onPick={() => f(x.id)} />{/each}</ul>')), 'WIZZ-P032');
+  assert.equal(compileCode(component(imports, '<ul>{#each xs as x (x.id)}<Card onPick={f(x.id)} />{/each}</ul>')), null);
 });
 
 test('every documented silent limit compiles and generates the documented behavior', () => {

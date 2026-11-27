@@ -90,6 +90,8 @@ const CODES = Object.freeze({
     missingRootElement: 'WIZZ-G001',
     eachOutsideElement: 'WIZZ-G002',
     eachRootCount: 'WIZZ-G003',
+    // Retired in syntax 1.7.0: each bodies accept component tags (milestone
+    // 25). The code stays reserved and is never reused or thrown.
     componentInsideEach: 'WIZZ-G004',
     eachBodyUnsupported: 'WIZZ-G005',
     // Retired in syntax 1.5.0: each bodies accept `on:` directives (issue

@@ -22,9 +22,20 @@ function createEnhancedDocument() {
   const elements = new Map();
   const metrics = { elements: 0, textNodes: 0, textWrites: 0, addedListeners: 0, removedListeners: 0, createdNames: [] };
 
+  // Real DOM sibling lookup through the tracked parent; a component that is
+  // an each item's root reads its anchor's previous sibling after mounting.
+  function previousSiblingOf(node) {
+    const parent = node.parentNode;
+    if (!parent) return null;
+    const index = parent.childNodes.indexOf(node);
+    return index > 0 ? parent.childNodes[index - 1] : null;
+  }
+
   function makeTextNode(initialValue) {
     return {
       nodeType: 3,
+      parentNode: null,
+      get previousSibling() { return previousSiblingOf(this); },
       _nodeValue: initialValue,
       get nodeValue() { return this._nodeValue; },
       set nodeValue(value) {
@@ -43,6 +54,8 @@ function createEnhancedDocument() {
       attributes: {},
       childNodes: [],
       listeners: {},
+      parentNode: null,
+      get previousSibling() { return previousSiblingOf(this); },
       setAttribute(attributeName, value) {
         this.attributes[attributeName] = String(value);
         if (attributeName === 'data-wizz-id') {
@@ -83,9 +96,16 @@ function createEnhancedDocument() {
       get firstElementChild() {
         return this.childNodes.find((node) => node.nodeType === 1) ?? null;
       },
-      appendChild(node) { this.childNodes.push(node); },
+      // Browsers move an attached node and keep parentNode current; removal
+      // checks in list reconciliation compare it.
+      appendChild(node) {
+        if (node.parentNode) node.parentNode.removeChild(node);
+        this.childNodes.push(node);
+        node.parentNode = this;
+      },
       // Moves a node already in this parent, as list reconciliation relies on.
       insertBefore(node, referenceNode) {
+        if (node.parentNode && node.parentNode !== this) node.parentNode.removeChild(node);
         const currentIndex = this.childNodes.indexOf(node);
         if (currentIndex !== -1) this.childNodes.splice(currentIndex, 1);
         const index = referenceNode ? this.childNodes.indexOf(referenceNode) : this.childNodes.length;
@@ -94,7 +114,9 @@ function createEnhancedDocument() {
       },
       removeChild(node) {
         const index = this.childNodes.indexOf(node);
-        if (index !== -1) this.childNodes.splice(index, 1);
+        if (index === -1) throw new Error('removeChild: the node is not a child of this element');
+        this.childNodes.splice(index, 1);
+        node.parentNode = null;
       },
       addEventListener(eventName, listener) {
         this.listeners[eventName] = listener;
@@ -208,7 +230,7 @@ function parseMarkup(markup, document) {
     if (markup.startsWith('<!--', index)) {
       const end = markup.indexOf('-->', index + 4);
       if (end === -1) throw new Error('Unterminated comment in delivered markup');
-      parent.childNodes.push({ nodeType: 8, nodeValue: markup.slice(index + 4, end) });
+      parent.childNodes.push({ nodeType: 8, nodeValue: markup.slice(index + 4, end), parentNode: parent.name === null ? null : parent });
       index = end + 3;
       continue;
     }
@@ -239,6 +261,7 @@ function parseMarkup(markup, document) {
         if (match[0] === '') break;
         element.setAttribute(match[1], decodeEntities(match[2] ?? ''));
       }
+      if (parent.name !== null) element.parentNode = parent;
       parent.childNodes.push(element);
       // Void and self-closed elements take no end tag, so they are never
       // pushed onto the open-element stack.
@@ -251,7 +274,9 @@ function parseMarkup(markup, document) {
     const text = markup.slice(index, nextTag === -1 ? markup.length : nextTag);
     // Parsed text nodes share the counting shim's value setter so reactive
     // writes onto adopted markup are observable.
-    parent.childNodes.push(document.makeTextNode(decodeEntities(text)));
+    const textNode = document.makeTextNode(decodeEntities(text));
+    if (parent.name !== null) textNode.parentNode = parent;
+    parent.childNodes.push(textNode);
     index = nextTag === -1 ? markup.length : nextTag;
   }
 
@@ -509,8 +534,8 @@ async function loadNestedModules(t, parentSource, childSource) {
     metricsBefore,
     warnings,
     render() {
-      const { html, state } = serverModule.renderComponent();
-      return { html, state, stateScript: serverModule.serializeInitialState(state) };
+      const { html, head, state } = serverModule.renderComponent();
+      return { html, head, state, stateScript: serverModule.serializeInitialState(state) };
     }
   };
 }
@@ -1249,7 +1274,10 @@ const orderTemplates = {
   'a child in the else branch': `<script>\n${importCounter}\nlet open = false;\n</script><main>{#if open}<p>no</p>{:else}<Counter />{/if}<p>out</p></main>`,
   'a child before a list': `<script>\n${importCounter}\nlet rows = [1, 2];\n</script><main><Counter /><ul>{#each rows as row}<li>{row}</li>{/each}</ul></main>`,
   'a child beside list items': `<script>\n${importCounter}\nlet rows = [1, 2];\n</script><main><Counter />{#each rows as row}<li>{row}</li>{/each}<Counter /></main>`,
-  'a child nested in an element': `<script>\n${importCounter}\n</script><main><section><Counter /><i>x</i></section><p>y</p></main>`
+  'a child nested in an element': `<script>\n${importCounter}\n</script><main><section><Counter /><i>x</i></section><p>y</p></main>`,
+  'children as keyed item roots': `<script>\n${importCounter}\nlet rows = [{ id: 1, t: "a" }, { id: 2, t: "b" }];\n</script><main><ul>{#each rows as row (row.id)}<Counter text={row.t} />{/each}</ul><p>after</p></main>`,
+  'children between keyless item siblings': `<script>\n${importCounter}\nlet rows = ["a", "b"];\n</script><main><ul>{#each rows as row}<li><b>{row}</b><Counter text={row} /><i>x</i></li>{/each}</ul></main>`,
+  'a static child beside list children': `<script>\n${importCounter}\nlet rows = ["a"];\n</script><main><Counter text="top" /><ul>{#each rows as row}<Counter text={row} />{/each}</ul></main>`
 };
 
 for (const [name, parentSource] of Object.entries(orderTemplates)) {
@@ -1938,3 +1966,266 @@ test('issue #73: bound controls server-render their values, hydrate without recr
   component.destroy();
   assert.deepEqual(target.childNodes, []);
 });
+
+// --- Components inside {#each} bodies (milestone 25, step 1) ---
+// Each item record owns its child instance: it mounts when the item is
+// created, receives setProps() when the item updates, is destroyed when the
+// item leaves, and keeps its identity and state when a keyed item moves.
+// Every behavior is asserted on a fresh mount and on adopted server markup.
+const rowChildSource = (rootTag) => '<script>\nexport let todo = { id: 0, text: "" };\nexport let onRemove = null;\nlet clicks = 0;\nfunction bump() { clicks += 1; }\n'
+  + 'onDestroy(() => { globalThis.__wizzTestRowsDestroyed += 1; });\n</script>'
+  + `<${rootTag}><span on:click={bump}>{todo.text}</span><i>{clicks}</i><button on:click={() => onRemove(todo.id)}>x</button></${rootTag}>`;
+const rowParentSource = (body, keyed = true) => '<script>\nimport Counter from "./Counter.wizz";\n'
+  + 'let todos = [{ id: 1, text: "a" }, { id: 2, text: "b" }, { id: 3, text: "c" }];\n'
+  + 'function remove(id) { todos = todos.filter((todo) => todo.id !== id); }\n'
+  + 'function add() { todos = [...todos, { id: 9, text: "z" }]; }\n'
+  + 'function reverse() { todos = [...todos].reverse(); }\n'
+  + 'function rename() { todos = todos.map((todo) => (todo.id === 2 ? { id: 2, text: "B" } : todo)); }\n'
+  + 'function touch() { todos = todos; }\n</script>'
+  + `<main on:keydown={add} on:keyup={reverse} on:focus={rename} on:blur={touch}><ul>{#each todos as todo${keyed ? ' (todo.id)' : ''}}${body}{/each}</ul></main>`;
+const rowShapes = {
+  'the item root': { body: '<Counter todo={todo} onRemove={remove} />', childRoot: 'li', rowTag: 'li' },
+  'nested in the item element': { body: '<li class="row"><Counter todo={todo} onRemove={remove} /></li>', childRoot: 'div', rowTag: 'div' }
+};
+const rowTexts = (target) => elementsNamed(target, 'span').map(textOf);
+const rowClicks = (target) => elementsNamed(target, 'i').map(textOf);
+const countRowDestroys = (t) => {
+  globalThis.__wizzTestRowsDestroyed = 0;
+  t.after(() => { delete globalThis.__wizzTestRowsDestroyed; });
+};
+
+for (const [mode, mount] of Object.entries(mountBothWays)) {
+  for (const [shape, { body, childRoot, rowTag }] of Object.entries(rowShapes)) {
+    test(`${mode}: a keyed list renders one child per item with the child as ${shape}`, async (t) => {
+      countRowDestroys(t);
+      const { target, component, document } = await mount(t, rowParentSource(body), rowChildSource(childRoot));
+      const main = target.childNodes[0];
+      const list = elementsNamed(target, 'ul')[0];
+      assert.deepEqual(rowTexts(target), ['a', 'b', 'c']);
+      // Two listeners per row, four on the parent's root.
+      assert.equal(liveListeners(document), 10);
+      const rows = elementsNamed(target, rowTag);
+      assert.equal(rows.length, 3);
+
+      // Row state survives a keyed reorder: the instance moves with its item.
+      await fireEvent(elementsNamed(target, 'span')[1]);
+      await fireEvent(elementsNamed(target, 'span')[1]);
+      assert.deepEqual(rowClicks(target), ['0', '2', '0']);
+      await fireEvent(main, 'keyup');
+      assert.deepEqual(rowTexts(target), ['c', 'b', 'a']);
+      assert.deepEqual(rowClicks(target), ['0', '2', '0']);
+      assert.deepEqual(elementsNamed(target, rowTag), [rows[2], rows[1], rows[0]], 'keyed rows move, never rebuild');
+      assert.equal(list.childNodes.at(-1).nodeType, 3, 'the list anchor stays last');
+
+      // A replaced item object reaches the row through setProps; its state stays.
+      await fireEvent(main, 'focus');
+      assert.deepEqual(rowTexts(target), ['c', 'B', 'a']);
+      assert.deepEqual(rowClicks(target), ['0', '2', '0']);
+
+      // The child calls the parent's callback prop with its current item.
+      const removedButton = elementsNamed(target, 'button')[1];
+      await fireEvent(removedButton);
+      assert.deepEqual(rowTexts(target), ['c', 'a']);
+      assert.equal(globalThis.__wizzTestRowsDestroyed, 1, 'the removed row was destroyed');
+      assert.equal(removedButton.listeners.click, undefined, 'and released its listeners');
+      assert.equal(liveListeners(document), 8);
+      assert.ok(!elementsNamed(target, rowTag).includes(rows[1]), 'its root left the list');
+
+      // A row added after mount is a working instance at its keyed place.
+      await fireEvent(main, 'keydown');
+      assert.deepEqual(rowTexts(target), ['c', 'a', 'z']);
+      await fireEvent(elementsNamed(target, 'span')[2]);
+      assert.deepEqual(rowClicks(target), ['0', '0', '1']);
+      await fireEvent(elementsNamed(target, 'button')[2]);
+      assert.deepEqual(rowTexts(target), ['c', 'a']);
+      assert.equal(globalThis.__wizzTestRowsDestroyed, 2);
+
+      component.destroy();
+      assert.equal(globalThis.__wizzTestRowsDestroyed, 4, 'destroying the parent destroys every row');
+      assert.equal(liveListeners(document), 0);
+      assert.deepEqual(target.childNodes, []);
+    });
+  }
+
+  test(`${mode}: unchanged props never re-render a row`, async (t) => {
+    countRowDestroys(t);
+    const { target, component, document } = await mount(t, rowParentSource(rowShapes['the item root'].body), rowChildSource('li'));
+    const writesBefore = document.metrics.textWrites;
+    await fireEvent(target.childNodes[0], 'blur');
+    assert.equal(document.metrics.textWrites, writesBefore, 'self-assignment reaches every record, and setProps skips equal values');
+    await fireEvent(target.childNodes[0], 'focus');
+    assert.equal(document.metrics.textWrites, writesBefore + 1, 'only the renamed row writes');
+    component.destroy();
+  });
+
+  test(`${mode}: keyless children are reused by position`, async (t) => {
+    countRowDestroys(t);
+    const { target, component, document } = await mount(t, rowParentSource(rowShapes['the item root'].body, false), rowChildSource('li'));
+    const rows = elementsNamed(target, 'li');
+    await fireEvent(elementsNamed(target, 'span')[0]);
+    await fireEvent(elementsNamed(target, 'button')[0]);
+    // Position 0 keeps its instance (and its state) and now shows item 2.
+    assert.deepEqual(rowTexts(target), ['b', 'c']);
+    assert.deepEqual(rowClicks(target), ['1', '0']);
+    assert.deepEqual(elementsNamed(target, 'li'), rows.slice(0, 2));
+    assert.equal(globalThis.__wizzTestRowsDestroyed, 1, 'the last position was destroyed');
+    component.destroy();
+    assert.equal(globalThis.__wizzTestRowsDestroyed, 3);
+    assert.equal(liveListeners(document), 0);
+  });
+
+  for (const placement of ['inside an element', 'directly in the branch']) {
+    test(`${mode}: rows in a reactive branch leave with the branch (${placement})`, async (t) => {
+      countRowDestroys(t);
+      const list = placement === 'inside an element'
+        ? '{#if open}<ol>{#each todos as todo (todo.id)}<Counter todo={todo} onRemove={remove} />{/each}</ol>{/if}'
+        : '{#if open}{#each todos as todo (todo.id)}<Counter todo={todo} onRemove={remove} />{/each}{/if}';
+      const source = '<script>\nimport Counter from "./Counter.wizz";\nlet open = true;\nlet todos = [{ id: 1, text: "a" }, { id: 2, text: "b" }];\n'
+        + 'function toggle() { open = !open; }\nfunction remove(id) { todos = todos.filter((todo) => todo.id !== id); }\n</script>'
+        + `<main on:keydown={toggle}>${list}<p>end</p></main>`;
+      const { target, component, document } = await mount(t, source, rowChildSource('li'));
+      const main = target.childNodes[0];
+      assert.deepEqual(rowTexts(target), ['a', 'b']);
+
+      await fireEvent(main, 'keydown');
+      assert.equal(globalThis.__wizzTestRowsDestroyed, 2);
+      assert.deepEqual(elementsNamed(target, 'li'), [], 'no row root is left behind');
+      assert.equal(liveListeners(document), 1);
+
+      await fireEvent(main, 'keydown');
+      assert.deepEqual(rowTexts(target), ['a', 'b'], 'fresh rows mount with the branch');
+      const paragraph = elementsNamed(target, 'p')[0];
+      assert.equal(main.childNodes.indexOf(paragraph), main.childNodes.length - 1, 'rows stay in front of later siblings');
+      await fireEvent(elementsNamed(target, 'button')[0]);
+      assert.deepEqual(rowTexts(target), ['b']);
+      component.destroy();
+      assert.equal(globalThis.__wizzTestRowsDestroyed, 4);
+      assert.equal(liveListeners(document), 0);
+      assert.deepEqual(target.childNodes, []);
+    });
+  }
+
+  test(`${mode}: a row child sits between its item siblings and follows position updates`, async (t) => {
+    const source = '<script>\nimport Counter from "./Counter.wizz";\nlet tags = ["x", "y"];\nfunction drop() { tags = tags.slice(1); }\n</script>'
+      + '<main on:keydown={drop}><ul>{#each tags as tag}<li><b>{tag}</b><Counter text={tag} /><i>after</i></li>{/each}</ul></main>';
+    const { target, component } = await mount(t, source, labelChildSource);
+    const outlineList = () => outline(elementsNamed(target, 'ul')[0]);
+    assert.equal(outlineList(), 'ul[li[b["x"] span["x"] i["after"]] li[b["y"] span["y"] i["after"]] ""]');
+    await fireEvent(target.childNodes[0], 'keydown');
+    assert.equal(outlineList(), 'ul[li[b["y"] span["y"] i["after"]] ""]', 'position 0 now shows y through setProps');
+    component.destroy();
+    assert.deepEqual(target.childNodes, []);
+  });
+}
+
+test('hydration adopts row children without recreating them and routes each slice by position', async (t) => {
+  countRowDestroys(t);
+  const modules = await loadNestedModules(t, rowParentSource(rowShapes['the item root'].body), rowChildSource('li'));
+  const { html, state } = modules.render();
+  assert.deepEqual(Object.keys(state.__wizz.components), ['1:0', '1:1', '1:2']);
+  // Deliver row 1 with a different count, consistently in markup and state.
+  state.__wizz.components['1:1'].clicks = 42;
+  const tampered = html.replace('>b</span><i data-wizz-id="2">0</i>', '>b</span><i data-wizz-id="2">42</i>');
+  assert.notEqual(tampered, html);
+  const target = deliverMarkup(modules.document, tampered);
+  const delivered = elementsNamed(target, 'li');
+  const component = modules.clientModule.hydrateComponent(target, {}, state);
+
+  assert.deepEqual(modules.warnings, []);
+  assert.equal(modules.document.metrics.elements, modules.metricsBefore.elements, 'adoption creates no elements');
+  assert.deepEqual(elementsNamed(target, 'li'), delivered);
+  assert.deepEqual(rowClicks(target), ['0', '42', '0'], 'each row read its own slice');
+  await fireEvent(elementsNamed(target, 'span')[1]);
+  assert.deepEqual(rowClicks(target), ['0', '43', '0'], 'the adopted row is live');
+  component.destroy();
+  assert.equal(liveListeners(modules.document), 0);
+  assert.deepEqual(target.childNodes, []);
+});
+
+test('a mismatch inside one row child remounts inside that row and leaves its siblings adopted', async (t) => {
+  countRowDestroys(t);
+  const modules = await loadNestedModules(t, rowParentSource(rowShapes['nested in the item element'].body), rowChildSource('div'));
+  const { html, state } = modules.render();
+  const target = deliverMarkup(modules.document, html.replace('>b</span>', '>tampered</span>'));
+  const deliveredItems = elementsNamed(target, 'li');
+  const deliveredRoots = elementsNamed(target, 'div');
+  const component = modules.clientModule.hydrateComponent(target, {}, state);
+
+  assert.equal(modules.warnings.length, 1, 'only the row child reports');
+  assert.match(modules.warnings[0], /^\[wizz\] hydration mismatch: expected expression text/);
+  assert.deepEqual(elementsNamed(target, 'li'), deliveredItems, 'the parent tree is intact');
+  assert.equal(elementsNamed(target, 'div')[0], deliveredRoots[0], 'sibling rows stay adopted');
+  assert.deepEqual(rowTexts(target), ['a', 'b', 'c'], 'the tampered row rendered fresh inside its root');
+
+  // The remounted row still works, removes itself, and tears down.
+  await fireEvent(elementsNamed(target, 'button')[1]);
+  assert.deepEqual(rowTexts(target), ['a', 'c']);
+  assert.ok(!elementsNamed(target, 'li').includes(deliveredItems[1]));
+  component.destroy();
+  assert.equal(globalThis.__wizzTestRowsDestroyed, 3);
+  assert.equal(liveListeners(modules.document), 0);
+  assert.deepEqual(target.childNodes, []);
+});
+
+test('a mismatch inside a child that is the item root keeps the row removable', async (t) => {
+  countRowDestroys(t);
+  const modules = await loadNestedModules(t, rowParentSource(rowShapes['the item root'].body), rowChildSource('li'));
+  const { html, state } = modules.render();
+  const target = deliverMarkup(modules.document, html.replace('>b</span>', '>tampered</span>'));
+  const component = modules.clientModule.hydrateComponent(target, {}, state);
+  assert.equal(modules.warnings.length, 1);
+  await fireEvent(elementsNamed(target, 'button')[1]);
+  assert.deepEqual(rowTexts(target), ['a', 'c']);
+  // The delivered root that hosted the fresh remount left with its row.
+  const list = elementsNamed(target, 'ul')[0];
+  assert.equal(list.childNodes.filter((node) => node.nodeType === 1).length, 2);
+  component.destroy();
+  assert.equal(liveListeners(modules.document), 0);
+  assert.deepEqual(target.childNodes, []);
+});
+
+test('row children adopt their delivered head slices by position and consume the run', async (t) => {
+  const childSource = '<script>\nexport let todo = { id: 0, text: "" };\nexport let onRemove = null;\n</script>'
+    + '<wizz:head><meta name="row" content={todo.text}></wizz:head><li>{todo.text}</li>';
+  const modules = await loadNestedModules(t, rowParentSource(rowShapes['the item root'].body), childSource);
+  const { html, head, state } = modules.render();
+  assert.match(head, /data-wizz-head-id="r\/1:2"/);
+  deliverHeadRun(modules.document, head);
+  const target = deliverMarkup(modules.document, html);
+  const component = modules.clientModule.hydrateComponent(target, {}, state);
+
+  assert.deepEqual(modules.warnings, []);
+  const metas = () => modules.document.head.childNodes.filter((node) => node.nodeName === 'META');
+  assert.deepEqual(metas().map((node) => node.attributes.content).sort(), ['a', 'b', 'c']);
+  assert.ok(metas().every((node) => !('data-wizz-head-id' in node.attributes)), 'every slice was claimed');
+  assert.ok(!modules.document.head.childNodes.some((node) => node.nodeType === 8), 'the run markers were consumed');
+
+  component.destroy();
+  assert.deepEqual(metas(), [], 'every row released its head node');
+});
+
+// Review of milestone 25 step 1: a child that declares no props returns no
+// setProps(), and the parent compiles without seeing the child. Dynamic
+// attributes on such a tag are ignored instead of throwing on the parent's
+// first update, inside a list or not.
+for (const [mode, mount] of Object.entries(mountBothWays)) {
+  for (const [placement, body] of [
+    ['in an each item', '<ul>{#each todos as todo (todo.id)}<li><Counter extra={todo.text} /></li>{/each}</ul>'],
+    ['as an each item root', '<ul>{#each todos as todo (todo.id)}<Counter extra={todo.text} />{/each}</ul>'],
+    ['outside any list', '<div><Counter extra={label} /></div>']
+  ]) {
+    test(`${mode}: dynamic attributes on a prop-less child are ignored ${placement}`, async (t) => {
+      const source = '<script>\nimport Counter from "./Counter.wizz";\nlet todos = [{ id: 1, text: "a" }];\nlet label = "x";\n'
+        + 'function change() { todos = [{ id: 1, text: "b" }, { id: 2, text: "c" }]; label = "y"; }\n</script>'
+        + `<main on:click={change}>${body}</main>`;
+      const { target, component } = await mount(t, source, noChildSource);
+      const childCount = () => elementsNamed(target, 'span').length;
+      assert.equal(childCount(), 1);
+      await fireEvent(target.childNodes[0]);
+      assert.equal(childCount(), placement === 'outside any list' ? 1 : 2);
+      assert.deepEqual(elementsNamed(target, 'span').map(textOf), placement === 'outside any list' ? ['child'] : ['child', 'child']);
+      component.destroy();
+      assert.deepEqual(target.childNodes, []);
+    });
+  }
+}

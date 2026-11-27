@@ -2,7 +2,7 @@
 const { CodeBuilder } = require('./codeBuilder');
 const { CODES, compilerDiagnostic } = require('../diagnostics.js');
 const { attributeWriteSource } = require('./attributePolicy');
-const { analyzeBlocks, eachHasListeners, isEventAttribute, isReactiveIf, makerName, ifRecheckSource } = require('./blockScopes');
+const { analyzeBlocks, eachHasListeners, eachHasComponents, isEventAttribute, isReactiveIf, makerName, ifRecheckSource } = require('./blockScopes');
 
 /**
  * Validates an `on:` directive and returns its listener parts.
@@ -47,6 +47,82 @@ function buildComponentPropsSource(node) {
 }
 
 /**
+ * Validates a component tag rendered inside an each item and returns what the
+ * list generators (create() and the hydration walk's fresh items) emit for it.
+ * The child instance lives in a variable local to the item, not in a
+ * factory-scope reference: every row has its own. update() hands it every
+ * dynamic prop through setProps(), whose Object.is check skips unchanged
+ * values, so a row whose props did not change does not re-render. A child
+ * that declares no props has no setProps() (the parent compiles without
+ * seeing the child), so the call is guarded: undeclared attributes are
+ * ignored, as the component-tag contract says.
+ * @param {Object} node - The component tag.
+ * @returns {{propsSource: string, childVar: string, setPropsSource: string|null}}
+ */
+function itemComponentParts(node) {
+  if (node.componentId == null) {
+    throw compilerDiagnostic(CODES.generator.missingComponentId, `Component <${node.name}> is missing its componentId; run the analyzer before generation.`);
+  }
+  if (node.children.length > 0) {
+    throw compilerDiagnostic(CODES.generator.componentChildrenUnsupported, `Component <${node.name}> does not support children.`);
+  }
+  // Validates prop names (no `__proto__`) and rejects `on:` before any of
+  // the names below are spliced into an object literal.
+  const propsSource = buildComponentPropsSource(node);
+  const childVar = `__wizzChild_${node.componentId}`;
+  const dynamic = (node.attributes || []).filter((attribute) => attribute.dynamic);
+  const setPropsSource = dynamic.length === 0
+    ? null
+    : `if (${childVar} && ${childVar}.setProps) ${childVar}.setProps({ ${dynamic.map((attribute) => `${JSON.stringify(attribute.name)}: ${attribute.value}`).join(', ')} });`;
+  return { propsSource, childVar, setPropsSource };
+}
+
+/**
+ * Lines of the deferred mount for a component inside an each item. The
+ * placeholder holds the tag's position until the item is attached; the child
+ * then inserts its root before it, the placeholder leaves, and the item's
+ * `drop` array takes ownership of the instance. A component that is the
+ * item's root becomes the record's node, so keyed moves and removals act on
+ * the child's own root. mountComponent inserts the root synchronously before
+ * its anchor, so the anchor's previous sibling is that root.
+ * @param {Object} node - The component tag.
+ * @param {string} placeholderVar - The placeholder text node variable.
+ * @param {ReturnType<typeof itemComponentParts>} parts - From itemComponentParts.
+ * @param {boolean} isRoot - Whether the tag is the item's root.
+ * @returns {string[]} Source lines, unindented.
+ */
+function itemComponentMountLines(node, placeholderVar, parts, isRoot) {
+  return [
+    '__wizzMounts.push(() => {',
+    `  const __wizzMountParent = ${placeholderVar}.parentNode;`,
+    `  ${parts.childVar} = ${node.name}(__wizzMountParent, ${parts.propsSource}, ${placeholderVar});`,
+    ...(isRoot ? [`  __wizzRecord.node = ${placeholderVar}.previousSibling;`] : []),
+    `  __wizzMountParent.removeChild(${placeholderVar});`,
+    `  __wizzDrop.push(() => ${parts.childVar}.destroy());`,
+    '});'
+  ];
+}
+
+/**
+ * Source that drops one removed record. Records with children run their
+ * disposers first: a freshly mounted child's destroy() removes its own root,
+ * while an adopted (hydrated) child leaves it in place, so the node is
+ * removed only if it is still attached to the list's parent.
+ * @param {string} parentSource - The list parent expression.
+ * @param {boolean} ownsScope - Whether records carry a `drop` array.
+ * @param {boolean} hasComponents - Whether items render component tags.
+ * @returns {string} Statements for a `__wizzRecord` in scope.
+ */
+function removeRecordSource(parentSource, ownsScope, hasComponents) {
+  if (hasComponents) {
+    return `for (const __wizzDropItem of __wizzRecord.drop) __wizzDropItem(); if (__wizzRecord.node.parentNode === ${parentSource}) ${parentSource}.removeChild(__wizzRecord.node);`;
+  }
+  return ownsScope
+    ? `${parentSource}.removeChild(__wizzRecord.node); for (const __wizzDropItem of __wizzRecord.drop) __wizzDropItem();`
+    : `${parentSource}.removeChild(__wizzRecord.node);`;
+}
+
+/**
  * Collects the factory-scope reference variable names for component tags that
  * carry reactive props. The generated create() assigns the mounted instance
  * and the generated update() reads it to deliver prop updates.
@@ -59,6 +135,9 @@ function collectComponentRefNames(templateAST, componentImports = []) {
   const refNames = [];
 
   function walk(node) {
+    // Components inside an each item belong to their record (one instance
+    // per row) and receive setProps() from the record's update().
+    if (node.type === 'EachBlock') return;
     if (node.type === 'Element' && importedComponents.has(node.name)
       && (node.attributes || []).some((attribute) => attribute.dynamic && attribute.dependencies?.length > 0)) {
       refNames.push(`__wizzComponent_${node.componentId}`);
@@ -167,23 +246,38 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
       const createName = `__wizzCreateItem_${listId}`;
       const updateName = `__wizzUpdateList_${listId}`;
       const itemRoot = contentNodes[0];
-      // Items with listeners own them through a per-record `drop` array.
+      // Items with listeners or child components own them through a
+      // per-record `drop` array.
       const hasListeners = eachHasListeners(node);
+      const hasComponents = eachHasComponents(node);
+      const ownsScope = hasListeners || hasComponents;
+      const rootIsComponent = importedComponents.has(itemRoot.name);
+      // Child components inside items mount once the item is attached:
+      // createItem queues them on `__wizzMounts`, which updateList runs after
+      // inserting its records (or hands to the enclosing scope's deferred
+      // mounts on the first pass, before this tree is in the document).
+      const itemComponents = new Map();
 
       builder.add(`const ${anchorName} = document.createTextNode("");`);
       attach(parentVarName, anchorName, top);
       builder.add(`const ${recordsName} = new Map();`)
-        .add(`function ${createName}(${node.item}) {`).indent();
-      if (hasListeners) builder.add('const __wizzDrop = [];');
+        .add(`function ${createName}(${node.item}${hasComponents ? ', __wizzMounts' : ''}) {`).indent();
+      if (ownsScope) builder.add('const __wizzDrop = [];');
 
       const listNodeVariables = new Map();
       function walkListNode(listNode, listParentName) {
         const listVarName = `__wizzNode_${++nodeCounter}`;
         listNodeVariables.set(listNode, listVarName);
+        if (listNode.type === 'Element' && importedComponents.has(listNode.name)) {
+          const parts = itemComponentParts(listNode);
+          itemComponents.set(listNode, parts);
+          builder.add(`const ${listVarName} = document.createTextNode("");`)
+            .add(`let ${parts.childVar} = null;`);
+          if (listParentName) builder.add(`${listParentName}.appendChild(${listVarName});`);
+          itemComponentMountLines(listNode, listVarName, parts, listNode === itemRoot).forEach((line) => builder.add(line));
+          return listVarName;
+        }
         if (listNode.type === 'Element') {
-          if (importedComponents.has(listNode.name)) {
-            throw compilerDiagnostic(CODES.generator.componentInsideEach, 'Imported components are not supported inside each blocks.');
-          }
           builder.add(`const ${listVarName} = document.createElement(${JSON.stringify(listNode.name)});`);
           for (const attribute of listNode.attributes || []) {
             if (attribute.dynamic) {
@@ -212,13 +306,15 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
         return listVarName;
       }
       const itemRootName = walkListNode(itemRoot, null);
-      builder.add('return {')
+      // The record is named when a root component's mount must repoint its
+      // node at the child's root.
+      builder.add(hasComponents ? 'const __wizzRecord = {' : 'return {')
         .indent()
         .add(`node: ${itemRootName},`);
-      if (hasListeners) {
-        // Handlers close over the item parameter, so an update rebinds it:
-        // a keyed item replaced by a new object must not leave its handlers
-        // reading the old one.
+      if (ownsScope) {
+        // Handlers and deferred child mounts close over the item parameter,
+        // so an update rebinds it: a keyed item replaced by a new object must
+        // not leave them reading the old one.
         builder.add('drop: __wizzDrop,')
           .add('update(__wizzItem) {').indent()
           .add(`${node.item} = __wizzItem;`);
@@ -228,6 +324,11 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
 
       function emitListUpdates(listNode) {
         const listVarName = listNodeVariables.get(listNode);
+        if (itemComponents.has(listNode)) {
+          const { setPropsSource } = itemComponents.get(listNode);
+          if (setPropsSource) builder.add(setPropsSource);
+          return;
+        }
         if (listNode.type === 'Element') {
           for (const attribute of listNode.attributes || []) {
             if (!attribute.dynamic) continue;
@@ -241,12 +342,16 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
       }
       emitListUpdates(itemRoot);
       builder.dedent().add('}')
-        .dedent().add('};')
-        .dedent().add('}')
+        .dedent().add('};');
+      if (hasComponents) builder.add('return __wizzRecord;');
+      const removeRecord = removeRecordSource(parentVarName, ownsScope, hasComponents);
+      builder.dedent().add('}')
         // The `__wizz` prefix keeps these locals clear of the author's item and
         // collection names, which share this scope.
-        .add(`function ${updateName}(__wizzItems) {`).indent()
-        .add('const __wizzNext = new Map();')
+        .add(`function ${updateName}(__wizzItems${hasComponents ? ', __wizzMounts' : ''}) {`).indent();
+      // Without a deferred list, mounts run once this pass placed its records.
+      if (hasComponents) builder.add('const __wizzPendingMounts = __wizzMounts || [];');
+      builder.add('const __wizzNext = new Map();')
         .add('const __wizzSeen = new Set();')
         .add(`__wizzItems.forEach((${node.item}${node.key ? '' : `, __wizzIndex_${listId}`}) => {`).indent()
         .add(node.key ? `const __wizzKey = ${node.item}.${node.key};` : `const __wizzKey = __wizzIndex_${listId};`)
@@ -254,26 +359,30 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
         .add('__wizzSeen.add(__wizzKey);')
         .add(`let __wizzRecord = ${recordsName}.get(__wizzKey);`)
         .add(`if (__wizzRecord) __wizzRecord.update(${node.item});`)
-        .add(`else __wizzRecord = ${createName}(${node.item});`)
+        .add(`else __wizzRecord = ${createName}(${node.item}${hasComponents ? ', __wizzPendingMounts' : ''});`)
         .add(`${parentVarName}.insertBefore(__wizzRecord.node, ${anchorName});`)
         .add('__wizzNext.set(__wizzKey, __wizzRecord);')
         .dedent().add('});')
-        .add(hasListeners
-          ? `${recordsName}.forEach((__wizzRecord, __wizzKey) => { if (!__wizzNext.has(__wizzKey)) { ${parentVarName}.removeChild(__wizzRecord.node); for (const __wizzDropItem of __wizzRecord.drop) __wizzDropItem(); } });`
-          : `${recordsName}.forEach((__wizzRecord, __wizzKey) => { if (!__wizzNext.has(__wizzKey)) ${parentVarName}.removeChild(__wizzRecord.node); });`)
+        .add(`${recordsName}.forEach((__wizzRecord, __wizzKey) => { if (!__wizzNext.has(__wizzKey)) ${ownsScope ? `{ ${removeRecord} }` : removeRecord} });`)
         .add(`${recordsName}.clear();`)
-        .add(`__wizzNext.forEach((__wizzRecord, __wizzKey) => ${recordsName}.set(__wizzKey, __wizzRecord));`)
-        .dedent().add('}')
-        .add(`${updateName}(${node.collection});`)
+        .add(`__wizzNext.forEach((__wizzRecord, __wizzKey) => ${recordsName}.set(__wizzKey, __wizzRecord));`);
+      if (hasComponents) builder.add('if (!__wizzMounts) for (const __wizzMount of __wizzPendingMounts) __wizzMount();');
+      builder.dedent().add('}')
+        .add(`${updateName}(${node.collection}${hasComponents ? ', __wizzChildMounts' : ''});`)
         .add(`__wizzLists.push((__wizzChanged) => { if (__wizzChanged.${node.collection}) ${updateName}(${node.collection}); });`);
-      if (hasListeners || top) {
-        // The owning scope releases the live records: their listeners always,
-        // and their nodes when the list sits directly in a replaced branch
-        // (deeper lists leave the DOM with the element that holds them).
+      if (ownsScope || top) {
+        // The owning scope releases the live records: their listeners and
+        // children always, and their nodes when the list sits directly in a
+        // replaced branch (deeper lists leave the DOM with the element that
+        // holds them).
         builder.add('__wizzDrop.push((__wizzDetach) => {').indent()
           .add(`${recordsName}.forEach((__wizzRecord) => {`).indent();
-        if (hasListeners) builder.add('for (const __wizzDropItem of __wizzRecord.drop) __wizzDropItem();');
-        if (top) builder.add(`if (__wizzDetach) ${parentVarName}.removeChild(__wizzRecord.node);`);
+        if (ownsScope) builder.add('for (const __wizzDropItem of __wizzRecord.drop) __wizzDropItem();');
+        if (top) {
+          builder.add(hasComponents
+            ? `if (__wizzDetach && __wizzRecord.node.parentNode === ${parentVarName}) ${parentVarName}.removeChild(__wizzRecord.node);`
+            : `if (__wizzDetach) ${parentVarName}.removeChild(__wizzRecord.node);`);
+        }
         builder.dedent().add('});')
           .add(`${recordsName}.clear();`)
           .dedent().add('});');
@@ -426,4 +535,12 @@ function generateCreateFunction(templateAST, componentImports = [], handlerSourc
   return [builder.generate(), ...makerSources].join('\n');
 }
 
-module.exports = { generateCreateFunction, collectComponentRefNames, buildComponentPropsSource, eventListenerParts };
+module.exports = {
+  generateCreateFunction,
+  collectComponentRefNames,
+  buildComponentPropsSource,
+  eventListenerParts,
+  itemComponentParts,
+  itemComponentMountLines,
+  removeRecordSource
+};
