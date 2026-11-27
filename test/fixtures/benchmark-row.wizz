@@ -1,0 +1,12 @@
+<script>
+  export let row = { id: 0, label: '' };
+  export let onPick = null;
+  let clicks = 0;
+
+  function bump() {
+    clicks += 1;
+    onPick(row.id);
+  }
+</script>
+
+<li><button on:click={bump}>{row.label}</button><span>{clicks}</span></li>

@@ -276,6 +276,91 @@ test('each items without listeners keep the listener-free record shape', () => {
   assert.match(source, /update\(item\) \{/);
 });
 
+// Milestone 25 step 1: component tags inside each bodies (WIZZ-G004 retired).
+const rowImports = [{ name: 'Row', source: './Row.wizz' }];
+const rowTag = (attributes = [{ name: 'todo', value: 'item', dynamic: true, dependencies: [] }], extra = {}) => ({
+  type: 'Element', name: 'Row', componentId: 1, attributes, children: [], ...extra
+});
+
+test('a nested each-body component mounts per item after attachment and is owned by the record', () => {
+  const source = generateCreateFunction(createEachTemplate('id', [
+    { type: 'Element', name: 'li', attributes: [], children: [{ type: 'Expression', value: 'item.name' }, rowTag()] }
+  ]), rowImports);
+
+  assert.match(source, /function __wizzCreateItem_2\(item, __wizzMounts\) \{\n {4}const __wizzDrop = \[\];/);
+  // A placeholder holds the position; the mount resolves its parent then.
+  assert.match(source, /const __wizzNode_5 = document\.createTextNode\(""\);\n {4}let __wizzChild_1 = null;\n {4}__wizzNode_3\.appendChild\(__wizzNode_5\);/);
+  assert.match(source, /__wizzMounts\.push\(\(\) => \{\n {6}const __wizzMountParent = __wizzNode_5\.parentNode;\n {6}__wizzChild_1 = Row\(__wizzMountParent, \{ "todo": item \}, __wizzNode_5\);\n {6}__wizzMountParent\.removeChild\(__wizzNode_5\);\n {6}__wizzDrop\.push\(\(\) => __wizzChild_1\.destroy\(\)\);\n {4}\}\);/);
+  assert.doesNotMatch(source, /__wizzRecord\.node = /, 'only a root component repoints the record');
+  // The record rebinds the item and hands the row its props.
+  assert.match(source, /update\(__wizzItem\) \{\n {8}item = __wizzItem;\n {8}__wizzNode_3\.childNodes\[0\]\.nodeValue = String\(item\.name\);\n {8}if \(__wizzChild_1\) __wizzChild_1\.setProps\(\{ "todo": item \}\);/);
+  // First pass defers mounts to the component scope; later passes run them.
+  assert.match(source, /__wizzUpdateList_2\(items, __wizzChildMounts\);/);
+  assert.match(source, /__wizzLists\.push\(\(__wizzChanged\) => \{ if \(__wizzChanged\.items\) __wizzUpdateList_2\(items\); \}\);/);
+  assert.match(source, /if \(!__wizzMounts\) for \(const __wizzMount of __wizzPendingMounts\) __wizzMount\(\);/);
+  // Removal drops first (a fresh child removes its own root), then detaches what is left.
+  assert.match(source, /\{ for \(const __wizzDropItem of __wizzRecord\.drop\) __wizzDropItem\(\); if \(__wizzRecord\.node\.parentNode === __wizzNode_1\) __wizzNode_1\.removeChild\(__wizzRecord\.node\); \}/);
+  // Row instances are never factory-scope references or component-wide children.
+  assert.doesNotMatch(source, /__wizzComponent_1|__wizzChildren\.push/);
+});
+
+test('a component as the item root becomes the record node once it mounts', () => {
+  const source = generateCreateFunction(createEachTemplate('id', [{ type: 'Text', value: '\n' }, rowTag()]), rowImports);
+  assert.match(source, /const __wizzNode_3 = document\.createTextNode\(""\);\n {4}let __wizzChild_1 = null;\n {4}__wizzMounts\.push/);
+  assert.match(source, /__wizzRecord\.node = __wizzNode_3\.previousSibling;\n {6}__wizzMountParent\.removeChild\(__wizzNode_3\);/);
+  assert.match(source, /const __wizzRecord = \{\n {6}node: __wizzNode_3,\n {6}drop: __wizzDrop,/);
+  assert.match(source, /\n {4}return __wizzRecord;\n {2}\}/);
+});
+
+test('static props never reach setProps, and a prop-less row gets no update call', () => {
+  const mixed = generateCreateFunction(createEachTemplate(null, [rowTag([
+    { name: 'label', value: 'fixed', dynamic: false },
+    { name: 'on', value: null, dynamic: false },
+    { name: 'todo', value: 'item', dynamic: true, dependencies: [] }
+  ])]), rowImports);
+  assert.match(mixed, /Row\(__wizzMountParent, \{ "label": "fixed", "on": true, "todo": item \}, __wizzNode_3\)/);
+  assert.match(mixed, /__wizzChild_1\.setProps\(\{ "todo": item \}\);/);
+
+  const bare = generateCreateFunction(createEachTemplate(null, [rowTag([])]), rowImports);
+  assert.match(bare, /Row\(__wizzMountParent, \{\}, __wizzNode_3\)/);
+  assert.doesNotMatch(bare, /setProps/);
+});
+
+test('an each list of components directly in a branch detaches only roots still attached', () => {
+  const template = { type: 'Root', children: [{ type: 'Element', name: 'main', attributes: [], children: [{
+    type: 'IfBlock', test: 'open', dependencies: ['open'],
+    consequent: [{ type: 'EachBlock', collection: 'items', item: 'item', key: 'id', children: [rowTag()] }],
+    alternate: null
+  }] }] };
+  const source = generateCreateFunction(template, rowImports);
+  // Inside the maker, the first pass hands mounts to the branch's deferred list.
+  assert.match(source, /__wizzUpdateList_\d+\(items, __wizzChildMounts\);/);
+  assert.match(source, /if \(__wizzDetach && __wizzRecord\.node\.parentNode === __wizzParent\) __wizzParent\.removeChild\(__wizzRecord\.node\);/);
+});
+
+test('each-body component tags keep the component-tag rules', () => {
+  const cases = [
+    [rowTag(undefined, { children: [{ type: 'Text', value: 'x' }] }), 'WIZZ-G008', /does not support children/],
+    [rowTag([{ name: '__proto__', value: 'item', dynamic: true }]), 'WIZZ-G007', /cannot be used as a prop name/],
+    [rowTag([{ name: 'on:click', value: 'go' }]), 'WIZZ-G011', /not supported on component <Row>/],
+    [rowTag(undefined, { componentId: undefined }), 'WIZZ-G009', /missing its componentId/]
+  ];
+  for (const [tag, code, message] of cases) {
+    assert.throws(
+      () => generateCreateFunction(createEachTemplate(null, [{ type: 'Element', name: 'li', attributes: [], children: [tag] }]), rowImports),
+      (error) => error.code === code && message.test(error.message),
+      code
+    );
+    assert.throws(() => generateCreateFunction(createEachTemplate(null, [tag]), rowImports), (error) => error.code === code, `${code} at the item root`);
+  }
+});
+
+test('lists without components keep their exact emission', () => {
+  const source = generateCreateFunction(createEachTemplate('id', [listItem()]), rowImports);
+  assert.doesNotMatch(source, /__wizzMounts|__wizzPendingMounts|const __wizzRecord =|parentNode/);
+  assert.match(source, /__wizzUpdateList_2\(items\);/);
+});
+
 test('uses the instrumented handler source for an each-item directive', () => {
   const attribute = { name: 'on:click', value: '() => total += item' };
   const handlerSources = new WeakMap([[attribute, '() => { total += item; __wizzQueueUpdate({ total: true }); }']]);

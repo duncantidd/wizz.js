@@ -48,12 +48,12 @@ The `.wizz` template language is deliberately small. Read this table before desi
 | Expressions `{...}` | Identifiers, member access (`a.b`), number (`1`, `1.5`), string, `true`/`false`/`null` literals, `+ - * /`, `=== !== < > <= >=`, `&&`/`\|\|`, unary `!`/`-`, the conditional `a ? b : c`, calls of a function or method (`plural(n)`, `name.trim()`), and parentheses. | No indexing (`a[0]`), `==`/`!=`, `??`, `?.`, `++`/`--`, template literals, array/object literals, arrow functions, or calling a call result (`f()()`). A call updates only when a reactive name it is given changes: a function reading state internally is not tracked. `eval`, `Function`, `constructor`, `__proto__`, and the timers cannot appear in an expression that calls. | Excluded forms: compile error (WIZZ-P033); state read inside a called function: silent | Pass the state a function needs as arguments: `{plural(entries.length)}`, not `{plural()}`. For anything outside the grammar, compute the value in a script handler into a reactive `let` and render `{label}`. |
 | `{#if}` | `{#if cond}...{:else}...{/if}`, nesting, events, lists, and components inside branches. The test is re-evaluated whenever a reactive `let` or prop it reads changes, and the branch is replaced: the old one leaves the DOM with its listeners and child components, and the new one is built from current state. | No `{:else if}`. A test that reads only `const` values is evaluated once, at mount. A replaced branch is rebuilt, so DOM state inside it (typed input text, scroll position, a child component's own state) is not kept. | `{:else if}`: compile error (WIZZ-P033); `const` test and lost branch state: silent | Chain conditions by nesting `{#if}` inside `{:else}`. Keep state that must survive a hidden branch in a script `let`, or keep the element mounted and toggle it with `hidden={flag}`. |
 | `{#each}` collection | A bare identifier naming a top-level `let` array, keyed `(item.id)` or keyless. | No member collections (`state.items`) or index alias (`item, i`). A `const` collection renders once. An in-place method (`items.push(x)`) changes the array without an update until the name is assigned. | Syntax: WIZZ-P002; `const`: silent; an in-place call with no later assignment in its function: warning WIZZ-G027 | Assign after mutating, `items.push(x); items = items;` (the assignment is the trigger, not a new reference; in-place-changed items re-render too), or assign a copy: `items = [...items, x]`. Store any index or flag you need on the items themselves. |
-| `{#each}` body | Exactly one native root element per item; its text and dynamic attributes update. `on:` handlers anywhere in the item run with the item variable in scope (`on:click={() => remove(item.id)}`); they attach per item and detach when the item is removed. | No imported components (WIZZ-G004) or nested `{#if}`/`{#each}` (WIZZ-G005); one root element only (WIZZ-G003); the block must sit inside a native element. A handler expression is evaluated once per item, so `on:click={makeHandler(item)}` keeps the handler built from the item's first value. | Compile error; a stale `makeHandler(item)`: silent | Write per-row handlers as inline arrows, which read the item when they run: `on:click={() => pick(item.id)}`. Precompute per-row variants (class suffix, label) as item fields. |
+| `{#each}` body | Exactly one root per item: a native element or a component tag (`<TodoItem todo={todo} />`), and components anywhere inside the item element. Text, dynamic attributes, and component props update when the collection is assigned. Each row gets its own component instance: it mounts with the item, is destroyed with it, and keeps its own state when a keyed item moves (keyless rows reuse instances by position). `on:` handlers anywhere in the item run with the item variable in scope (`on:click={() => remove(item.id)}`); they attach per item and detach when the item is removed. | No nested `{#if}`/`{#each}` (WIZZ-G005); one root only (WIZZ-G003); the block must sit inside a native element. A row re-renders only when the collection is assigned, so a row prop or text that reads other state (`selected={current}`) keeps its old value until then. A handler expression is evaluated once per item, so `on:click={makeHandler(item)}` keeps the handler built from the item's first value. | Compile error; a stale `makeHandler(item)` or outer-state read: silent | Write per-row handlers as inline arrows, which read the item when they run: `on:click={() => pick(item.id)}`. Pass row components the item and a stable callback (`<TodoItem todo={todo} onRemove={remove} />`, the child calls `onRemove(todo.id)`): a prop arrow built per item (`onRemove={() => remove(todo.id)}`) is a new value on every list update and re-renders its row. Put per-row flags and variants (`selected`, a class suffix) on the items themselves. |
 | Dynamic attributes | `name={expr}` updates reactively; `value`, `checked`, and `disabled` are set as DOM properties. HTML boolean attributes (`hidden`, `required`, `readonly`, `open`, `inert`, `multiple`, ...) are present when the value is truthy and removed when it is falsy, so `hidden={false}` shows the element. Any other attribute is removed when the value is `null` or `undefined`. | Outside the boolean list, `false` renders the string `"false"` rather than removing the attribute, because `aria-*`, `draggable`, and `spellcheck` give `"false"` its own meaning. | Silent | Hold `null` in state to drop a non-boolean attribute (`let tip = null;` with `title={tip}`). |
 | Quoted attribute values | Static text: `class="card"`. | Braces inside quotes are not interpolated, so `class="card {kind}"` is rejected instead of rendering literal text. Braces that hold no expression (`data-x='{"a":1}'`) stay literal. | Compile error (WIZZ-P055) | Use one expression for the whole value: `class={'card ' + kind}`. |
 | Event handlers | `on:<event>={handler}` with a named script function or an inline arrow; assignments inside inline arrows update the DOM, parenthesized or not (`on:input={(e) => (name = e.target.value)}`). | An assignment nested inside an expression (`ok ? a = 1 : 0`, `g(a = 1)`, an unbraced `if (x) a = 1`), in a handler or in the script, does not schedule an update. | Compiles with warning WIZZ-G026 (build output, MCP diagnostics, `compile().warnings`) | Write each mutation as its own statement (`a = 1; g(a);`, `if (x) { a = 1; }`), or move the logic into a named function. |
 | Bindings | `bind:value={name}` on `<input>`, `<textarea>`, and `<select>`, and `bind:checked={done}` on `<input type="checkbox">`, two-way with a top-level `let` (persistent state included). `type="number"`/`"range"` inputs bind numbers, with an empty field as `null`. | No `bind:group`, `bind:this`, or other properties; no member targets (`user.name`), props, or `const`s; not on component tags or inside `{#each}` bodies; a bound `<input>` needs a static `type`; no explicit `value`/`checked` beside the binding. | Compile error (WIZZ-P062, WIZZ-P063, WIZZ-P064) | Pair `value={...}` with an `on:input` handler for anything a binding does not cover, such as a per-row field: `on:input={(e) => rename(item.id, e.target.value)}`. |
-| Component tags | Default `.wizz` imports rendered self-closing inside a native element (`<Card title={t} />`); attributes, including functions, pass as props. | No children (WIZZ-G008), no `on:` directives (WIZZ-G011), not at the template root (WIZZ-G010), not inside `{#each}` (WIZZ-G004). | Compile error | Pass callbacks as props (`onSelect={select}`) instead of `on:`. Render list rows as native elements and keep per-row logic in item fields. |
+| Component tags | Default `.wizz` imports rendered self-closing inside a native element or as an `{#each}` item (`<Card title={t} />`); attributes, including functions, pass as props. | No children (WIZZ-G008), no `on:` directives (WIZZ-G011), not at the template root (WIZZ-G010). | Compile error | Pass callbacks as props (`onSelect={select}`) instead of `on:`. Wrap content in a native element inside the child instead of passing it as children. |
 
 ## CLI
 
@@ -172,7 +172,7 @@ Print what you have installed with:
 wizz --version
 ```
 
-which prints the compiler and contract version triple, for example `wizz 1.26.0 (compiler 1.26.0, syntax 1.6.0, output 1.13.1)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `init` accepts an optional directory plus `--force` and one of `--sample`/`--bare`, `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json`, `--adapter <name>`, and `--compact` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
+which prints the compiler and contract version triple, for example `wizz 1.27.0 (compiler 1.27.0, syntax 1.7.0, output 1.14.0)`. The public CLI accepts `init`, `build`, `dev`, `mcp`, `update`, `install-vscode-extension`, and `--version`; `init` accepts an optional directory plus `--force` and one of `--sample`/`--bare`, `build` accepts either no directory arguments or both an input and an output directory, plus the optional `--json`, `--adapter <name>`, and `--compact` flags, `dev` accepts optional `--port <n>` and `--host <addr>`, and `mcp` accepts optional `--root <dir>` and `--allow-write`.
 
 `wizz dev` requires an `index.html` document shell in the project directory. It validates that requirement before opening the server, so a missing shell reports an error and exits instead of failing later while handling a request. Build failures and invalid command usage also exit non-zero.
 
@@ -343,7 +343,7 @@ For arrays of primitives, or any collection where positional identity is enough,
 
 A keyless block reconciles by array index: on reassignment each rendered row updates in place with the item now at its position, rows are appended as the collection grows, and rows beyond the new length are removed. Rows are reused by position, not by item identity.
 
-In both forms the collection must be a reactive `let` for updates to run (a `const` collection renders once at mount), the block must be nested inside a native element, and the body must contain exactly one native root element. Each blocks do not support imported components or nested `if`/`each` blocks inside the repeated content yet; these are compile-time errors rather than silently ignored.
+In both forms the collection must be a reactive `let` for updates to run (a `const` collection renders once at mount), the block must be nested inside a native element, and the body must contain exactly one root: a native element or an imported component tag. Each blocks do not support nested `if`/`each` blocks inside the repeated content yet; that is a compile-time error rather than silently ignored. A row re-renders only when the collection is assigned, so text or a prop in the row that reads other state keeps its old value until the next assignment — put per-row values on the items.
 
 Event directives work anywhere inside the repeated content, and their handlers see the item variable:
 
@@ -364,6 +364,30 @@ Event directives work anywhere inside the repeated content, and their handlers s
 ```
 
 Each rendered item gets its own listeners; they are attached when the item is created and removed when the item leaves the list (or the component is destroyed). An inline arrow reads the item when it runs, so it always sees the item's current value — including after a keyed item is replaced by a new object. The handler expression itself is evaluated once per item, so prefer `on:click={() => pick(item.id)}` over `on:click={makeHandler(item)}`, which would keep the handler built from the item's first value.
+
+### Row components
+
+An imported component can render each row, either as the item's root or anywhere inside the item element:
+
+```wizz
+<script>
+  import TodoItem from './TodoItem.wizz';
+
+  let todos = [{ id: 1, text: 'Write docs', done: false }];
+
+  function remove(id) {
+    todos = todos.filter((todo) => todo.id !== id);
+  }
+</script>
+
+<ul>
+  {#each todos as todo (todo.id)}
+    <TodoItem todo={todo} onRemove={remove} />
+  {/each}
+</ul>
+```
+
+Every row owns its own instance. It mounts when its item is created, receives new props through `setProps()` whenever the list updates, and is destroyed (hooks, listeners, and its own children included) when its item leaves the list, when a branch holding the list is replaced, or when the parent is destroyed. In a keyed block the instance moves with its item and keeps its internal state; a keyless block reuses instances by position, so position 0 keeps its instance (and that instance's state) while showing whichever item is now first. Props are compared with `Object.is`, so a row whose props did not change does not re-render. That makes stable callbacks matter: pass the item and a named function (`onRemove={remove}`, with the child calling `onRemove(todo.id)`) rather than an arrow built per row (`onRemove={() => remove(todo.id)}`), which is a new value on every list update and re-renders every row. Server rendering renders each row through the child's server module, and hydration adopts every row's child in place; a mismatch inside one row remounts only inside that row.
 
 ## Conditional Rendering
 
@@ -630,7 +654,7 @@ As a consumer of generated modules, within one `output` major version every gene
 A breaking change to either contract bumps its major version and the compiler's major version. Every compiled module is stamped with all three versions on its first line, so build artifacts stay traceable to the compiler that produced them:
 
 ```js
-// Generated by Wizz 1.26.0 (component syntax 1.6.0, generated output 1.13.1). Edits will be overwritten.
+// Generated by Wizz 1.27.0 (component syntax 1.7.0, generated output 1.14.0). Edits will be overwritten.
 ```
 
 `compile()` also returns the frozen version table as its `version` field.

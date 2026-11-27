@@ -218,14 +218,36 @@
 // identity check, so `items.push(x); items = items;` keeps scheduling its
 // update; props keep their separate `Object.is` short-circuit in setProps.
 //
+// compiler 1.27.0 / syntax 1.7.0 / output 1.14.0: milestone 25 step 1,
+// imported component tags inside `{#each}` bodies, nested in the item element
+// or as the item's root. WIZZ-G004 is retired (kept in the catalog, never
+// reused or thrown). Each item record owns its child instances through its
+// `drop` array: a child mounts once the item is attached (create() queues it
+// on `__wizzMounts`; the first list pass defers to the enclosing scope's
+// child mounts), receives every dynamic prop through setProps() from the
+// record's update() (its Object.is check skips unchanged values), is
+// destroyed when the item leaves, and keeps its identity and state when a
+// keyed record moves; keyless records reuse instances by position. A
+// component at the item root becomes the record's node (the anchor's
+// previous sibling once mounted). Server rendering renders each row's child
+// through its server module, keying the state slice and head owner by the
+// item's position (`<componentId>:<index>`, never author data), and the
+// hydration walk adopts each row's child through hydrateRoot after the walk
+// passes, with the same keys; a mismatch inside a row child remounts inside
+// that child's root. Syntax minor: a template form that used to be rejected
+// compiles. Output minor: lists with components gain the deferred-mount
+// parameters, per-item child variables, and the drop-first removal; lists
+// without components, and every other module, are byte-identical apart from
+// the version banner. The module surface is unchanged.
+//
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor
 // version. Fixes bump patch versions. The contract test in version.test.js
 // pins the current values so a bump can only happen deliberately.
 const VERSIONS = Object.freeze({
-  compiler: '1.26.0',
-  syntax: '1.6.0',
-  output: '1.13.1'
+  compiler: '1.27.0',
+  syntax: '1.7.0',
+  output: '1.14.0'
 });
 
 module.exports = { VERSIONS };

@@ -1,8 +1,8 @@
 // src/compiler/generator/hydrationGenerator.js
 const { CodeBuilder } = require('./codeBuilder');
 const { CODES, compilerDiagnostic } = require('../diagnostics.js');
-const { buildComponentPropsSource, eventListenerParts } = require('./domGenerator');
-const { analyzeBlocks, eachHasListeners, isEventAttribute, isReactiveIf, makerName, ifRecheckSource } = require('./blockScopes');
+const { buildComponentPropsSource, eventListenerParts, itemComponentParts, itemComponentMountLines, removeRecordSource } = require('./domGenerator');
+const { analyzeBlocks, eachHasListeners, eachHasComponents, itemSliceKeySource, isEventAttribute, isReactiveIf, makerName, ifRecheckSource } = require('./blockScopes');
 const { attributeWriteSource, attributeValueSource, isBooleanAttribute } = require('./attributePolicy');
 
 /**
@@ -136,6 +136,10 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
   builder.add('  const __wizzPendingListeners = [];');
   builder.add('  const __wizzChildren = [];');
   builder.add('  const __wizzLists = [];');
+  // Children of adopted each items: like the static tags below, they are
+  // adopted only once the whole walk has passed.
+  const itemAdoptions = eachComponentsExist(templateAST);
+  if (itemAdoptions) builder.add('  const __wizzPendingAdoptions = [];');
 
   // Component-tag refs are declared at hydrateCreate scope up front: the
   // adoption block after the walk references them at function scope, but a
@@ -155,8 +159,8 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
       (node.consequent || []).forEach(preAllocateRefs);
       (node.alternate || []).forEach(preAllocateRefs);
     }
-    // EachBlock bodies cannot contain component tags (the server-renderable
-    // gate refuses them), so no allocation is needed there.
+    // Component tags inside each bodies belong to their item records, which
+    // hold their own per-row references; none is allocated here.
   };
   (templateAST.children || []).forEach(preAllocateRefs);
   for (const componentRef of componentRefs.values()) {
@@ -497,11 +501,19 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     const itemRoot = contentNodes[0];
     const keylessIndex = `__wizzIndex_${listId}`;
     const hasListeners = eachHasListeners(node);
-    // Handlers close over the item parameter, so update() rebinds it.
-    const updateHead = hasListeners ? 'update(__wizzItem) {' : `update(${itemVar}) {`;
+    // Items with child components own them through the record's `drop`
+    // array, exactly as listeners are owned (see blockScopes.js).
+    const hasComponents = eachHasComponents(node);
+    const ownsScope = hasListeners || hasComponents;
+    const isComponent = (listNode) => listNode.type === 'Element' && importedNames.has(listNode.name);
+    // Handlers and child mounts close over the item parameter, so update()
+    // rebinds it.
+    const updateHead = ownsScope ? 'update(__wizzItem) {' : `update(${itemVar}) {`;
     const dropRecordSource = 'for (const __wizzDropItem of __wizzRecord.drop) __wizzDropItem();';
 
     const itemVars = new Map();
+    // Component tags of the item in template order, with their emitted parts.
+    const itemComponents = new Map();
 
     builder.add(`  const ${recordsRef} = new Map();`);
     builder.add(`  let ${anchorRef} = null;`);
@@ -509,20 +521,37 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     // Per-item verification: the item variable is in scope, so expression
     // text is re-evaluated per item exactly as the server rendered it.
     // Author expressions run in this scope, so its parameters and the list
-    // functions' locals below carry the reserved `__wizz` prefix.
-    builder.add(`  function __wizzHydrateListItem_${listId}(${itemVar}, __wizzParent, __wizzIndex) {`).indent();
+    // functions' locals below carry the reserved `__wizz` prefix. The
+    // ordinal (the item's position) keys its children's state slices the way
+    // the server keyed them.
+    builder.add(`  function __wizzHydrateListItem_${listId}(${itemVar}, __wizzParent, __wizzIndex${hasComponents ? ', __wizzOrdinal' : ''}) {`).indent();
     const rootVar = `__wizzNode_${listId}_root`;
     builder.add(`    const ${rootVar} = __wizzParent.childNodes[__wizzIndex];`);
-    builder.add(`    if (!${rootVar} || ${rootVar}.nodeType !== 1 || __wizzNodeTag(${rootVar}) !== '${itemRoot.name.toLowerCase()}') {`).indent();
+    // A component's rendered root occupies the item's position; its tag is
+    // the child's own first check, as for a component tag anywhere else.
+    builder.add(isComponent(itemRoot)
+      ? `    if (!${rootVar} || ${rootVar}.nodeType !== 1) {`
+      : `    if (!${rootVar} || ${rootVar}.nodeType !== 1 || __wizzNodeTag(${rootVar}) !== '${itemRoot.name.toLowerCase()}') {`).indent();
     builder.add(`      __wizzProblems.push('expected <${itemRoot.name}> at index ' + __wizzIndex + ' of <' + __wizzNodeTag(__wizzParent) + '>, found ' + __wizzDescribe(${rootVar}));`);
     builder.add('      return null;');
     builder.dedent().add('    }');
     itemVars.set(itemRoot, rootVar);
+    if (isComponent(itemRoot)) itemComponents.set(itemRoot, itemComponentParts(itemRoot));
 
     const walkItemNode = (listNode, parentVar) => {
       builder.add(`    __wizzStripComments(${parentVar});`);
       (listNode.children || []).forEach((child, childIndex) => {
         const childVar = `__wizzNode_${listId}_${childIndex}_${itemVars.size}`;
+        if (isComponent(child)) {
+          builder.add(`    const ${childVar} = ${parentVar}.childNodes[${childIndex}];`);
+          builder.add(`    if (!${childVar} || ${childVar}.nodeType !== 1) {`).indent();
+          builder.add(`      __wizzProblems.push('expected <${child.name}> at index ${childIndex} of <' + __wizzNodeTag(${parentVar}) + '>, found ' + __wizzDescribe(${childVar}));`);
+          builder.add('      return null;');
+          builder.dedent().add('    }');
+          itemVars.set(child, childVar);
+          itemComponents.set(child, itemComponentParts(child));
+          return;
+        }
         if (child.type === 'Element') {
           builder.add(`    const ${childVar} = ${parentVar}.childNodes[${childIndex}];`);
           builder.add(`    if (!${childVar} || ${childVar}.nodeType !== 1 || __wizzNodeTag(${childVar}) !== '${child.name.toLowerCase()}') {`).indent();
@@ -552,12 +581,12 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
         throw compilerDiagnostic(CODES.generator.hydrationEachUnsupportedNode, `Hydration does not support ${child.type} nodes inside each blocks.`);
       });
     };
-    walkItemNode(itemRoot, rootVar);
+    if (!isComponent(itemRoot)) walkItemNode(itemRoot, rootVar);
 
+    if (ownsScope) builder.add('    const __wizzDrop = [];');
     if (hasListeners) {
       // Queued only once the whole item verified, so a failed item never
       // leaves a listener behind.
-      builder.add('    const __wizzDrop = [];');
       for (const [listNode, listVar] of itemVars) {
         for (const attribute of listNode.attributes || []) {
           if (!isEventAttribute(attribute)) continue;
@@ -566,12 +595,23 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
         }
       }
     }
+    // The item's children are adopted through their hydratable modules once
+    // the whole walk passes, each with the slice and head owner the server
+    // gave this row; a mismatch inside one remounts inside its own root.
+    for (const [componentNode, parts] of itemComponents) {
+      const keySource = itemSliceKeySource(componentNode, '__wizzOrdinal');
+      builder.add(`    let ${parts.childVar} = null;`);
+      builder.add('    __wizzPendingAdoptions.push(() => {').indent();
+      builder.add(`      ${parts.childVar} = __wizzHydrate_${componentNode.name}.hydrateRoot(${itemVars.get(componentNode)}, ${parts.propsSource}, __wizzReadSlice(__wizzState, ${keySource}), __wizzHeadOwner + "/" + ${keySource});`);
+      builder.add(`      __wizzDrop.push(() => ${parts.childVar}.destroy());`);
+      builder.dedent().add('    });');
+    }
 
     builder.add('    return {').indent();
     builder.add(`      node: ${rootVar},`);
-    if (hasListeners) builder.add('      drop: __wizzDrop,');
+    if (ownsScope) builder.add('      drop: __wizzDrop,');
     builder.add(`      ${updateHead}`).indent();
-    if (hasListeners) builder.add(`        ${itemVar} = __wizzItem;`);
+    if (ownsScope) builder.add(`        ${itemVar} = __wizzItem;`);
     emitItemUpdates(itemRoot);
     builder.dedent().add('      }');
     builder.dedent().add('    };');
@@ -580,6 +620,11 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     // Positional writes into an adopted (or freshly created) item root,
     // matching the browser target's emitListUpdates exactly.
     function emitItemUpdates(listNode) {
+      if (itemComponents.has(listNode)) {
+        const { setPropsSource } = itemComponents.get(listNode);
+        if (setPropsSource) builder.add(`        ${setPropsSource}`);
+        return;
+      }
       const varName = itemVars.get(listNode);
       if (listNode.type !== 'Element' || !varName) return;
       for (const attribute of listNode.attributes || []) {
@@ -595,11 +640,19 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     // Fresh item creation for items the client adds after hydration; the
     // emission mirrors the browser target's createItem.
     const freshVars = new Map();
-    builder.add(`  function __wizzCreateFreshItem_${listId}(${itemVar}) {`).indent();
-    if (hasListeners) builder.add('    const __wizzDrop = [];');
+    builder.add(`  function __wizzCreateFreshItem_${listId}(${itemVar}${hasComponents ? ', __wizzMounts' : ''}) {`).indent();
+    if (ownsScope) builder.add('    const __wizzDrop = [];');
     const buildFreshNode = (listNode, listParentName) => {
       const varName = `__wizzFresh_${listId}_${freshVars.size}`;
       freshVars.set(listNode, varName);
+      if (isComponent(listNode)) {
+        const parts = itemComponents.get(listNode);
+        builder.add(`    const ${varName} = document.createTextNode("");`);
+        builder.add(`    let ${parts.childVar} = null;`);
+        if (listParentName) builder.add(`    ${listParentName}.appendChild(${varName});`);
+        itemComponentMountLines(listNode, varName, parts, listNode === itemRoot).forEach((line) => builder.add(`    ${line}`));
+        return varName;
+      }
       if (listNode.type === 'Element') {
         builder.add(`    const ${varName} = document.createElement(${JSON.stringify(listNode.name)});`);
         for (const attribute of listNode.attributes || []) {
@@ -624,13 +677,18 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
       return varName;
     };
     const freshRoot = buildFreshNode(itemRoot, null);
-    builder.add('    return {').indent();
+    builder.add(hasComponents ? '    const __wizzRecord = {' : '    return {').indent();
     builder.add(`      node: ${freshRoot},`);
-    if (hasListeners) builder.add('      drop: __wizzDrop,');
+    if (ownsScope) builder.add('      drop: __wizzDrop,');
     builder.add(`      ${updateHead}`).indent();
-    if (hasListeners) builder.add(`        ${itemVar} = __wizzItem;`);
+    if (ownsScope) builder.add(`        ${itemVar} = __wizzItem;`);
     const emitFreshUpdates = (listNode) => {
       const varName = freshVars.get(listNode);
+      if (itemComponents.has(listNode)) {
+        const { setPropsSource } = itemComponents.get(listNode);
+        if (setPropsSource) builder.add(`        ${setPropsSource}`);
+        return;
+      }
       if (listNode.type === 'Element') {
         for (const attribute of listNode.attributes || []) {
           if (!attribute.dynamic) continue;
@@ -645,10 +703,14 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     emitFreshUpdates(itemRoot);
     builder.dedent().add('      }');
     builder.dedent().add('    };');
+    if (hasComponents) builder.add('    return __wizzRecord;');
     builder.dedent().add('  }');
 
     builder.add(`  function __wizzHydrateUpdateList_${listId}() {`).indent();
     builder.add(`    const __wizzItems = ${node.collection};`);
+    // Runs only after hydration, with the list attached: fresh children
+    // mount as soon as this pass has placed its records.
+    if (hasComponents) builder.add('    const __wizzPendingMounts = [];');
     builder.add('    const __wizzNext = new Map();');
     builder.add('    const __wizzSeen = new Set();');
     builder.add(`    __wizzItems.forEach((${itemVar}${node.key ? '' : `, ${keylessIndex}`}) => {`).indent();
@@ -657,15 +719,15 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     builder.add('      __wizzSeen.add(__wizzKey);');
     builder.add(`      let __wizzRecord = ${recordsRef}.get(__wizzKey);`);
     builder.add(`      if (__wizzRecord) __wizzRecord.update(${itemVar});`);
-    builder.add(`      else __wizzRecord = __wizzCreateFreshItem_${listId}(${itemVar});`);
+    builder.add(`      else __wizzRecord = __wizzCreateFreshItem_${listId}(${itemVar}${hasComponents ? ', __wizzPendingMounts' : ''});`);
     builder.add(`      ${anchorRef}.parentNode.insertBefore(__wizzRecord.node, ${anchorRef});`);
     builder.add('      __wizzNext.set(__wizzKey, __wizzRecord);');
     builder.dedent().add('    });');
-    builder.add(hasListeners
-      ? `    ${recordsRef}.forEach((__wizzRecord, __wizzKey) => { if (!__wizzNext.has(__wizzKey)) { ${anchorRef}.parentNode.removeChild(__wizzRecord.node); ${dropRecordSource} } });`
-      : `    ${recordsRef}.forEach((__wizzRecord, __wizzKey) => { if (!__wizzNext.has(__wizzKey)) ${anchorRef}.parentNode.removeChild(__wizzRecord.node); });`);
+    const removeRecord = removeRecordSource(`${anchorRef}.parentNode`, ownsScope, hasComponents);
+    builder.add(`    ${recordsRef}.forEach((__wizzRecord, __wizzKey) => { if (!__wizzNext.has(__wizzKey)) ${ownsScope ? `{ ${removeRecord} }` : removeRecord} });`);
     builder.add(`    ${recordsRef}.clear();`);
     builder.add(`    __wizzNext.forEach((__wizzRecord, __wizzKey) => ${recordsRef}.set(__wizzKey, __wizzRecord));`);
+    if (hasComponents) builder.add('    for (const __wizzMount of __wizzPendingMounts) __wizzMount();');
     builder.dedent().add('  }');
 
     builder.add(`  function __wizzHydrateList_${listId}(__wizzParent, __wizzStart) {`).indent();
@@ -675,7 +737,7 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     builder.add('      if (__wizzProblems.length > 0) return;');
     builder.add(node.key ? `      const __wizzKey = ${itemVar}.${node.key};` : `      const __wizzKey = ${keylessIndex};`);
     builder.add(`      if (${recordsRef}.has(__wizzKey)) __wizzProblems.push('Each block keys must be unique.');`);
-    builder.add(`      const __wizzRecord = __wizzHydrateListItem_${listId}(${itemVar}, __wizzParent, __wizzIndex);`);
+    builder.add(`      const __wizzRecord = __wizzHydrateListItem_${listId}(${itemVar}, __wizzParent, __wizzIndex${hasComponents ? ', __wizzIndex - __wizzStart' : ''});`);
     builder.add('      if (__wizzRecord) {');
     builder.add(`        ${recordsRef}.set(__wizzKey, __wizzRecord);`);
     builder.add('        __wizzIndex += 1;');
@@ -687,13 +749,18 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     builder.add(`    __wizzParent.insertBefore(${anchorRef}, __wizzParent.childNodes[__wizzIndex] || null);`);
     builder.add(`    ${listsOf(sc)}.push((__wizzChanged) => { if (__wizzChanged.${node.collection}) __wizzHydrateUpdateList_${listId}(); });`);
     if (top) builder.add(`    ${sc}.nodes.push(${anchorRef});`);
-    if (hasListeners || top) {
-      // The owning scope releases the live records: their listeners always,
-      // their nodes when the list sits directly in a replaced branch.
+    if (ownsScope || top) {
+      // The owning scope releases the live records: their listeners and
+      // children always, their nodes when the list sits directly in a
+      // replaced branch.
       builder.add(`    ${dropOf(sc)}.push((__wizzDetach) => {`).indent();
       builder.add(`      ${recordsRef}.forEach((__wizzRecord) => {`).indent();
-      if (hasListeners) builder.add(`        ${dropRecordSource}`);
-      if (top) builder.add('        if (__wizzDetach) __wizzParent.removeChild(__wizzRecord.node);');
+      if (ownsScope) builder.add(`        ${dropRecordSource}`);
+      if (top) {
+        builder.add(hasComponents
+          ? '        if (__wizzDetach && __wizzRecord.node.parentNode === __wizzParent) __wizzParent.removeChild(__wizzRecord.node);'
+          : '        if (__wizzDetach) __wizzParent.removeChild(__wizzRecord.node);');
+      }
       builder.dedent().add('      });');
       builder.add(`      ${recordsRef}.clear();`);
       builder.dedent().add('    });');
@@ -794,6 +861,9 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
     }
     builder.dedent().add('  }');
   }
+  if (itemAdoptions) {
+    builder.add('  if (__wizzProblems.length === 0) for (const __wizzAdopt of __wizzPendingAdoptions) __wizzAdopt();');
+  }
 
   // Consume the run only after every claim succeeded: any node still tagged
   // with a delivery owner was not adopted by any component, so the delivery
@@ -844,13 +914,13 @@ function generateHydrationFunction(templateAST, componentImports = [], headBlock
 }
 
 /**
- * Reports whether the template renders any imported component tag. Component
- * tags cannot appear inside each bodies (the renderable gate refuses them),
- * and IfBlock.children aliases its consequent, so walking consequent plus
- * alternate covers every branch exactly once.
+ * Reports whether the template renders any imported component tag, including
+ * inside each bodies. IfBlock.children aliases its consequent, so walking
+ * consequent plus alternate covers every branch exactly once. Must agree with
+ * componentGenerator's renderedImportNames, which gates the same head
+ * machinery and the child hydration imports.
  */
 function componentTagsExist(templateAST, importedNames) {
-  let found = false;
   const scan = (node) => {
     if (node.type === 'Element') {
       if (importedNames.has(node.name)) return true;
@@ -859,7 +929,20 @@ function componentTagsExist(templateAST, importedNames) {
     if (node.type === 'IfBlock') {
       return (node.consequent || []).some(scan) || (node.alternate || []).some(scan);
     }
+    if (node.type === 'EachBlock') return (node.children || []).some(scan);
     return false;
+  };
+  return (templateAST.children || []).some(scan);
+}
+
+/** Reports whether any each block in the template renders a component tag. */
+function eachComponentsExist(templateAST) {
+  const scan = (node) => {
+    if (node.type === 'EachBlock') return eachHasComponents(node);
+    if (node.type === 'IfBlock') {
+      return (node.consequent || []).some(scan) || (node.alternate || []).some(scan);
+    }
+    return (node.children || []).some(scan);
   };
   return (templateAST.children || []).some(scan);
 }

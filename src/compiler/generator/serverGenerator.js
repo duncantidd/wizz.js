@@ -8,6 +8,7 @@ const { buildComponentPropsSource } = require('./domGenerator');
 const { scopeCss } = require('../analyzer/cssScanner.js');
 const { VERSIONS } = require('../version.js');
 const { isBooleanAttribute } = require('./attributePolicy');
+const { eachHasComponents, itemSliceKeySource } = require('./blockScopes');
 
 // Server half of the dynamic-attribute policy (see attributePolicy.js): an
 // expression yielding the serialized ` name="value"` fragment, or '' when the
@@ -68,8 +69,8 @@ function __wizzSerializeInitialState(state) {
  * behavior for callers that pass no options at all.
  *
  * Both targets must agree on the surface, so these rules mirror the browser
- * generator exactly: `{#each}` bodies hold one root element with no nested
- * blocks or imported components (domGenerator's walkListNode restrictions;
+ * generator exactly: `{#each}` bodies hold one root element (or component
+ * tag) with no nested blocks (domGenerator's walkListNode restrictions;
  * their event directives are validated and never rendered), component tags take no children and no event
  * directives (buildComponentPropsSource), and event directives on regular
  * elements are validated with identical messages. Only the first root
@@ -146,9 +147,11 @@ function assertServerRenderable(astPayload, options = {}) {
   };
 
   // Each bodies mirror the browser target's list-node restrictions exactly:
-  // one root element, Text/Expression/Element children only, no nested
-  // blocks, and no imported components. Event directives are client-only and
-  // validated like any other; the markup never carries them.
+  // one root element or component tag, Text/Expression/Element children only,
+  // and no nested blocks. Component tags inside items are held to the same
+  // rules as anywhere else (a vouched server build, no children, no `on:`).
+  // Event directives are client-only and validated like any other; the
+  // markup never carries them.
   const assertEachBody = (node) => {
     const contentNodes = node.children.filter((child) => child.type !== 'Text' || child.value.trim() !== '');
     if (contentNodes.length !== 1 || contentNodes[0].type !== 'Element') {
@@ -160,7 +163,8 @@ function assertServerRenderable(astPayload, options = {}) {
       }
       if (listNode.type === 'Element') {
         if (importedNames.has(listNode.name)) {
-          throw compilerDiagnostic(CODES.generator.componentInsideEach, `Imported components are not supported inside each blocks at ${where(listNode)}.`);
+          assertComponentTag(listNode);
+          return;
         }
         if (VOID_ELEMENTS.has(listNode.name.toLowerCase()) && listNode.children && listNode.children.length > 0) {
           throw compilerDiagnostic(CODES.generator.voidWithChildren, `Void element <${listNode.name}> cannot have children at ${where(listNode)}.`);
@@ -379,6 +383,9 @@ function generateServerComponent(astPayload, options = {}) {
   }
 
   const isTextLike = (node) => node.type === 'Text' || node.type === 'Expression';
+  // Position counter of the each item being emitted (null outside items).
+  let itemOrdinal = null;
+  let eachCounter = 0;
 
   function emitChildren(builder, children) {
     let previousWasTextLike = false;
@@ -437,13 +444,28 @@ function generateServerComponent(astPayload, options = {}) {
       return;
     }
     if (node.type === 'EachBlock') {
-      // Only the single root element of the body renders per item (the gate
-      // enforces the same shape the browser target builds). Item bodies are
-      // element roots, so list items never introduce text adjacency.
+      // Only the single root of the body renders per item (the gate enforces
+      // the same shape the browser target builds). Item roots are elements or
+      // component tags (which render one root element), so list items never
+      // introduce text adjacency.
       const contentNodes = node.children.filter((child) => child.type !== 'Text' || child.value.trim() !== '');
-      builder.add(`for (const ${node.item} of ${node.collection}) {`).indent();
-      emitElement(builder, contentNodes[0]);
-      builder.dedent().add('}');
+      if (!eachHasComponents(node)) {
+        builder.add(`for (const ${node.item} of ${node.collection}) {`).indent();
+        emitNode(builder, contentNodes[0]);
+        builder.dedent().add('}');
+        return;
+      }
+      // Each row's children get their own state slice and head owner, keyed
+      // by the item's position (see itemSliceKeySource).
+      const ordinal = `__wizzOrdinal_${++eachCounter}`;
+      builder.add(`let ${ordinal} = 0;`)
+        .add(`for (const ${node.item} of ${node.collection}) {`).indent();
+      const outerOrdinal = itemOrdinal;
+      itemOrdinal = ordinal;
+      emitNode(builder, contentNodes[0]);
+      itemOrdinal = outerOrdinal;
+      builder.add(`${ordinal} += 1;`)
+        .dedent().add('}');
       return;
     }
     // The renderable gate rejects every other node type before generation.
@@ -534,16 +556,23 @@ function generateServerComponent(astPayload, options = {}) {
     if (node.componentId == null) {
       throw compilerDiagnostic(CODES.generator.missingComponentId, `Component <${node.name}> is missing its componentId; run the analyzer before generation.`);
     }
-    const idLiteral = JSON.stringify(String(node.componentId));
+    // A tag inside an each item renders once per row, so its key carries the
+    // row's position; a tag anywhere else keeps its plain componentId key.
+    const keySource = itemOrdinal
+      ? itemSliceKeySource(node, itemOrdinal)
+      : JSON.stringify(String(node.componentId));
     // The child's head slice gets a scoped owner path so the hydration walk
     // can attribute run nodes to the component that rendered them, and the
     // shared style-scope accumulator so styles inject once per document.
+    const ownerSource = itemOrdinal
+      ? `__wizzHeadOwner + "/" + ${keySource}`
+      : `__wizzHeadOwner + ${JSON.stringify(`/${node.componentId}`)}`;
     const optionsArg = hasHeadMarkup
-      ? `, { headOwner: __wizzHeadOwner + ${JSON.stringify(`/${node.componentId}`)}, styleScopes: __wizzStyleScopes }`
+      ? `, { headOwner: ${ownerSource}, styleScopes: __wizzStyleScopes }`
       : '';
     builder.add('{').indent();
     builder.add(`const __wizzChild_${node.componentId} = __wizzServer_${node.name}.renderComponent(${buildComponentPropsSource(node)}${optionsArg});`);
-    builder.add(`__wizzChildStates[${idLiteral}] = __wizzChild_${node.componentId}.state;`);
+    builder.add(`__wizzChildStates[${keySource}] = __wizzChild_${node.componentId}.state;`);
     if (hasHeadMarkup) {
       builder.add(`if (__wizzChild_${node.componentId}.head) __wizzHeadParts.push(__wizzChild_${node.componentId}.head);`);
     }

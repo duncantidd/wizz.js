@@ -21,7 +21,10 @@
 // factory-level `__wizzDrop` array, which destroy() runs with `detach` false
 // (the root is removed as a whole, so individual nodes are left alone).
 // Each-item records carry a `drop` array of their own for the same reason:
-// a removed item must take its listeners with it.
+// a removed item must take its listeners and child component instances with
+// it. A child inside an item mounts once the item's nodes are attached
+// (deferred like a branch's `mounts`), receives setProps() from the record's
+// update(), and keeps its identity when a keyed record moves.
 //
 // The functions below are emitted verbatim into generated modules through
 // Function.prototype.toString (the pattern the head and persistence helpers
@@ -90,8 +93,10 @@ function analyzeBlocks(templateAST) {
   const ifIds = new Map();
   let scopedListeners = false;
   let listenersInEach = false;
+  let componentsInEach = false;
 
   function walk(node, scoped, insideEach) {
+    if (insideEach && node.componentId != null) componentsInEach = true;
     if (node.type === 'IfBlock') {
       const reactive = isReactiveIf(node);
       if (reactive) ifIds.set(node, ifIds.size + 1);
@@ -115,7 +120,7 @@ function analyzeBlocks(templateAST) {
 
   const rootElement = (templateAST.children || []).find((node) => node.type === 'Element');
   if (rootElement) walk(rootElement, false, false);
-  return { ifIds, scopedListeners, needsDrop: ifIds.size > 0 || listenersInEach };
+  return { ifIds, scopedListeners, needsDrop: ifIds.size > 0 || listenersInEach || componentsInEach };
 }
 
 /** Reports whether an each body carries any `on:` directive. */
@@ -124,6 +129,30 @@ function eachHasListeners(eachNode) {
     && ((node.attributes || []).some(isEventAttribute) || (node.children || []).some(scan));
   return (eachNode.children || []).some(scan);
 }
+
+/**
+ * Reports whether an each body renders an imported component tag. Such
+ * items own their child instances through the record's `drop` array, like
+ * listeners. Component tags are recognized by the analyzer's `componentId`.
+ */
+function eachHasComponents(eachNode) {
+  const scan = (node) => node.type === 'Element'
+    && (node.componentId != null || (node.children || []).some(scan));
+  return (eachNode.children || []).some(scan);
+}
+
+/**
+ * The state-slice key of a component tag rendered inside an each item: the
+ * tag's componentId and the item's position in the collection when it was
+ * rendered, so every row's child gets its own slice. The server render and
+ * the hydration walk both key by position (never by the author's item key,
+ * which is arbitrary data), and the result is always `<digits>:<digits>`,
+ * so it can never name a prototype property.
+ * @param {Object} componentNode - The component tag.
+ * @param {string} ordinalSource - Source of the item's numeric position.
+ * @returns {string} Source of the key expression.
+ */
+const itemSliceKeySource = (componentNode, ordinalSource) => `${JSON.stringify(`${componentNode.componentId}:`)} + ${ordinalSource}`;
 
 const makerName = (id, key) => `__wizzIfMake_${id}_${key}`;
 
@@ -139,6 +168,8 @@ module.exports = {
   __wizzIfBlock,
   analyzeBlocks,
   eachHasListeners,
+  eachHasComponents,
+  itemSliceKeySource,
   isEventAttribute,
   isReactiveIf,
   makerName,

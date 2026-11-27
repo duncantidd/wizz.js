@@ -344,7 +344,7 @@ test('rejects each bodies that do not hold exactly one root element', () => {
   );
 });
 
-test('rejects nested blocks and imported components inside each bodies', () => {
+test('rejects nested blocks inside each bodies', () => {
   // A block as the body root trips the shape check; the per-node
   // restrictions fire for content nested inside the body root element.
   assert.throws(
@@ -355,13 +355,86 @@ test('rejects nested blocks and imported components inside each bodies', () => {
     () => assertServerRenderable(analyze('<main>{#each items as item}<div>{#if item}x{/if}</div>{/each}</main>')),
     /Each block bodies do not support 'IfBlock' nodes yet at 1:\d+\./
   );
+});
+
+// Milestone 25 step 1: WIZZ-G004 is retired. Component tags inside each
+// bodies follow the same gate as anywhere else.
+const eachCounterSource = (body) => `<script>\nimport Counter from "./Counter.wizz";\nlet items = [{ id: 1 }];\n</script><main><ul>{#each items as item (item.id)}${body}{/each}</ul></main>`;
+
+test('accepts vouched component tags inside each bodies, nested or as the item root', () => {
+  for (const body of ['<li><Counter n={item.id} /></li>', '<Counter n={item.id} />', '<li><b>x</b><Counter /><Counter /></li>']) {
+    assert.doesNotThrow(() => assertServerRenderable(analyze(eachCounterSource(body)), { componentServerRenderable: { Counter: true } }), body);
+  }
+});
+
+test('each-body component tags still need a vouched build and take no children or on:', () => {
+  const unvouched = (body) => () => assertServerRenderable(analyze(eachCounterSource(body)));
+  assert.throws(unvouched('<li><Counter /></li>'), (error) => error.code === 'WIZZ-G020' && /cannot be rendered server-side at 4:\d+\. No server-renderable build/.test(error.message));
+  assert.throws(unvouched('<Counter />'), (error) => error.code === 'WIZZ-G020');
   assert.throws(
-    () => assertServerRenderable(analyze(
-      '<script>\nimport Counter from "./Counter.wizz";\n</script><main>{#each items as item}<div><Counter /></div>{/each}</main>'
-    ), { componentServerRenderable: { Counter: true } }),
-    // The each-body restriction fires before component vouching is consulted.
-    /Imported components are not supported inside each blocks/
+    () => assertServerRenderable(analyze(eachCounterSource('<li><Counter>x</Counter></li>')), { componentServerRenderable: { Counter: true } }),
+    (error) => error.code === 'WIZZ-G008'
   );
+  assert.throws(
+    () => assertServerRenderable(analyze(eachCounterSource('<Counter on:click={go} />')), { componentServerRenderable: { Counter: true } }),
+    (error) => error.code === 'WIZZ-G011'
+  );
+  assert.throws(
+    () => assertServerRenderable(analyze(eachCounterSource('<li><Counter /></li>')), { componentServerRenderable: { Counter: false }, componentIneligibilityReasons: { Counter: 'it uses X.' } }),
+    /Underlying reason: it uses X\./
+  );
+});
+
+const rowChild = '<script>\nexport let label = "?";\nlet clicks = 0;\n</script><span>{label}</span>';
+const rowParent = (body, items = '[{ id: 7, name: "a" }, { id: 3, name: "b<" }]') => `<script>\nimport Row from "./Row.wizz";\nlet items = ${items};\n</script><main><ul>{#each items as item (item.id)}${body}{/each}</ul></main>`;
+const rowGate = { componentServerRenderable: { Row: true } };
+
+test('each-body components render once per item with a positional state slice and head owner', async () => {
+  const mod = await loadServerModule(generateServer(rowParent('<li><Row label={item.name} /></li>'), rowGate), { 'Row.wizz': rowChild });
+  const { html, state } = mod.renderComponent();
+  // Child output is escaped by the child's own server module.
+  assert.equal(html, '<main><ul><li><span data-wizz-id="1">a</span></li><li><span data-wizz-id="1">b&lt;</span></li></ul></main>');
+  // Keyed by position, never by the author's key, so the slice names are
+  // independent of item data.
+  assert.deepEqual(Object.keys(state.__wizz.components), ['1:0', '1:1']);
+  assert.deepEqual(state.__wizz.components['1:1'], { clicks: 0 });
+  assert.equal(Object.getPrototypeOf(state.__wizz.components), Object.prototype);
+});
+
+test('a component can be the item root and renders its own root element', async () => {
+  const mod = await loadServerModule(generateServer(rowParent('<Row label={item.name} />'), rowGate), { 'Row.wizz': rowChild });
+  const { html, state } = mod.renderComponent();
+  assert.equal(html, '<main><ul><span data-wizz-id="1">a</span><span data-wizz-id="1">b&lt;</span></ul></main>');
+  assert.deepEqual(Object.keys(state.__wizz.components), ['1:0', '1:1']);
+});
+
+test('each-body children deliver their heads with per-row owner paths', async () => {
+  const headChild = '<script>\nexport let label = "?";\n</script><wizz:head><meta name="row" content={label}></wizz:head><span>{label}</span>';
+  const mod = await loadServerModule(generateServer(rowParent('<li><Row label={item.name} /></li>'), rowGate), { 'Row.wizz': headChild });
+  const { head } = mod.renderComponent();
+  assert.match(head, /<meta data-wizz-head-id="r\/1:0"[^>]* content="a">/);
+  assert.match(head, /<meta data-wizz-head-id="r\/1:1"[^>]* content="b&lt;">/);
+});
+
+test('an empty collection renders no children and an empty slice table', async () => {
+  const mod = await loadServerModule(generateServer(rowParent('<li><Row /></li>', '[]'), rowGate), { 'Row.wizz': rowChild });
+  const { html, state } = mod.renderComponent();
+  assert.equal(html, '<main><ul></ul></main>');
+  assert.deepEqual(state.__wizz.components, {});
+});
+
+test('static and each-body tags of one import keep distinct slice keys', async () => {
+  const source = '<script>\nimport Row from "./Row.wizz";\nlet items = [1, 2];\n</script><main><Row label="top" /><ul>{#each items as item}<li><Row label={String(item)} /></li>{/each}</ul></main>';
+  const mod = await loadServerModule(generateServer(source, rowGate), { 'Row.wizz': rowChild });
+  const { html, state } = mod.renderComponent();
+  assert.equal(html, '<main><span data-wizz-id="1">top</span><ul><li><span data-wizz-id="1">1</span></li><li><span data-wizz-id="1">2</span></li></ul></main>');
+  assert.deepEqual(Object.keys(state.__wizz.components), ['1', '2:0', '2:1']);
+});
+
+test('lists without components keep their exact server emission', () => {
+  const moduleSource = generateServer('<script>\nlet items = [1];\n</script><main><ul>{#each items as item}<li>{item}</li>{/each}</ul></main>');
+  assert.doesNotMatch(moduleSource, /__wizzOrdinal/);
+  assert.match(moduleSource, /for \(const item of items\) \{/);
 });
 
 test('accepts event directives inside each bodies and keeps them out of the markup', async () => {

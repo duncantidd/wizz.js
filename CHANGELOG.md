@@ -11,6 +11,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added — Components Inside `{#each}` Bodies (milestone 25, step 1; compiler 1.26.0 → 1.27.0, syntax 1.6.0 → 1.7.0, output 1.13.1 → 1.14.0)
+
+#### Versions
+
+- Syntax minor: a component tag inside an each body, which used to fail with WIZZ-G004, compiles. Output minor: lists that render components gain new generated structures (below). Lists without components, and every other module, are byte-identical apart from the version banner, and the module surface (`mountComponent`, `hydrateComponent`, `hydrateRoot`, `{ setProps?, destroy() }`, `renderComponent`) is unchanged. Compiler minor with them; `package.json` moves to 1.27.0 in lockstep.
+- **WIZZ-G004 is retired.** It stays in the catalog, reserved and never reused, and is no longer thrown.
+
+#### Added
+
+- Imported component tags inside `{#each}` bodies, nested anywhere in the item element or as the item's single root: `{#each todos as todo (todo.id)}<TodoItem todo={todo} onRemove={remove} />{/each}`. Each item record owns its child instance:
+  - it mounts once the item's nodes are attached: `createItem(item, __wizzMounts)` emits a placeholder text node and queues the mount, and `updateList(items, mounts)` hands the first pass's mounts to the enclosing scope's `__wizzChildMounts` (create() or a branch maker) and runs later passes' mounts itself after placing every record;
+  - the record's `update()` calls `setProps()` with every dynamic prop, and `setProps`'s `Object.is` check keeps a row with unchanged props from re-rendering; static props are left out;
+  - removing the record runs its `drop` array (which destroys the child) and then removes the node only if it is still attached to the list parent (`removeRecordSource()`), because a fresh child removes its own root and an adopted one does not. The owning scope's disposer applies the same check when a list directly in a replaced branch detaches;
+  - a keyed move keeps the instance and its state; keyless records reuse instances by position;
+  - a component at the item root becomes the record's node: after mounting, the mount repoints `record.node` at the placeholder's previous sibling, which is the child's root.
+- Server rendering renders every row's child through its server module. Its state slice is `state.__wizz.components["<componentId>:<index>"]` and its head owner path `<owner>/<componentId>:<index>`. Both are keyed by the item's position and never by author data (`itemSliceKeySource()`), so they cannot name a prototype property. `assertServerRenderable` applies the usual component-tag rules inside items (vouched build, no children, no `on:`), so `computeServerEligibility` treats such pages as eligible when their children are.
+- Hydration verifies each component position as an element, then adopts every row's child through `__wizzHydrate_<Name>.hydrateRoot()` with the matching slice and owner. The adoptions are queued on `__wizzPendingAdoptions` and run only after the whole walk passes, before the head-run leftover check. A mismatch inside a row child remounts inside that child's root and leaves the parent and the sibling rows adopted. Rows the client adds after hydration mount through the same deferred-mount path as create().
+- `blockScopes.js`: `eachHasComponents()` and `itemSliceKeySource()`. `analyzeBlocks().needsDrop` covers components in each items. `domGenerator.js`: `itemComponentParts()`, `itemComponentMountLines()`, and `removeRecordSource()`, which the hydration walk reuses for fresh items. `collectComponentRefNames()` skips each bodies (rows never get factory-scope references), and `renderedImportNames()` / `componentTagsExist()` see tags inside each bodies, so the hydratable child import and head machinery turn on for them.
+
+#### Tests
+
+- `domGenerator.test.js`, `serverGenerator.test.js`, `hydrationGenerator.test.js`, and `blockScopes.test.js` pin the emission: deferred mounts, record ownership, root repointing, the drop-first removal, positional slice keys, the adoption queue, rejection of G007/G008/G009/G011 inside items, and byte-identical output for lists without components.
+- `test/hydration.test.js` runs every behavior on a fresh mount and on adopted server markup: a keyed list of row components (as the item root and nested), state kept across keyed reorders, props through `setProps`, callback props, rows added and removed, keyless reuse by position, rows in a reactive branch (inside an element and directly in the branch), rows whose children have children, and zero extra text writes for unchanged props. Destroy counts, live-listener balances, and empty targets check for leaks. Hydration-only tests cover per-row slice routing, a mismatch inside a nested row child and inside a row-root child (the row stays removable), and per-row head slices. Three new fresh-versus-hydrated DOM parity templates are included. The DOM shim now tracks `parentNode`, exposes `previousSibling`, and throws on `removeChild` of a non-child, as browsers do.
+- `test/benchmarks.test.js` adds `benchmark-rows.wizz` / `benchmark-row.wizz`: 1,000 keyed row components mount with no leftover placeholder (5 + 3,000 elements, 1,003 listeners). Relabelling every tenth item costs exactly 100 text writes. A keyed reverse creates and writes nothing and keeps row state. Dropping one row releases exactly one listener, and destroy releases all of them. The benchmark shim gains the same `parentNode` and `previousSibling` faithfulness.
+- `scripts/mcpTools.test.js`: the G004 limit case becomes a compile-success check, and the contract text is pinned for the new rows.
+
+#### Docs
+
+- README: the generated `{#each}` body and component-tag rows, the Lists section's structural rules (a row updates only when its collection is assigned), and a new "Row components" subsection on ownership, keyed versus keyless identity, stable callback props, and SSR/hydration. The MCP `language_contract` and limits table, `src/compiler/README.md`, the generator README (a new "Components inside each items" section), the parser README, and `STRUCTURE.md` are updated to match.
+
 ### Added — Array Mutation Reactivity Documented and Guarded (milestone 26; compiler 1.25.0 → 1.26.0, output 1.13.0 → 1.13.1, syntax 1.6.0 unchanged)
 
 #### Versions

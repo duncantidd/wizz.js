@@ -9,6 +9,8 @@ const {
   __wizzIfBlock,
   analyzeBlocks,
   eachHasListeners,
+  eachHasComponents,
+  itemSliceKeySource,
   isReactiveIf,
   makerName,
   ifRecheckSource
@@ -132,6 +134,36 @@ test('eachHasListeners finds directives at any depth of the body', () => {
   assert.equal(eachHasListeners(each('<li>{x}</li>')), false);
   assert.equal(eachHasListeners(each('<li on:click={go}>{x}</li>')), true);
   assert.equal(eachHasListeners(each('<li><span><button on:click={go}>x</button></span></li>')), true);
+});
+
+test('eachHasComponents finds component tags at the item root or any depth', () => {
+  const each = (body) => analyze(`<script>
+import Row from "./Row.wizz";
+let xs = [];
+</script><ul>{#each xs as x}${body}{/each}</ul>`)
+    .children.find((node) => node.type === 'Element').children[0];
+  assert.equal(eachHasComponents(each('<li>{x}</li>')), false);
+  assert.equal(eachHasComponents(each('<Row />')), true);
+  assert.equal(eachHasComponents(each('<li><span><Row x={x} /></span></li>')), true);
+  // An element merely named like a component is not one without the import.
+  const unimported = analyze('<script>let xs = [];</script><ul>{#each xs as x}<li><Row /></li>{/each}</ul>')
+    .children.find((node) => node.type === 'Element').children[0];
+  assert.equal(eachHasComponents(unimported), false);
+});
+
+test('components in each items need the component-scope drop list', () => {
+  const result = analyzeBlocks(analyze('<script>\nimport Row from "./Row.wizz";\nlet xs = [];\n</script><ul>{#each xs as x}<Row x={x} />{/each}</ul>'));
+  assert.deepEqual([result.ifIds.size, result.scopedListeners, result.needsDrop], [0, false, true]);
+  // A component outside any list keeps the plain child-list ownership.
+  const outside = analyzeBlocks(analyze('<script>\nimport Row from "./Row.wizz";\n</script><main><Row /></main>'));
+  assert.equal(outside.needsDrop, false);
+});
+
+test('item slice keys combine the componentId and the item position', () => {
+  assert.equal(itemSliceKeySource({ componentId: 4 }, '__wizzOrdinal'), '"4:" + __wizzOrdinal');
+  const key = new Function('__wizzOrdinal', `return ${itemSliceKeySource({ componentId: 12 }, '__wizzOrdinal')};`);
+  assert.equal(key(0), '12:0');
+  assert.equal(key(31), '12:31');
 });
 
 test('names makers by block id and branch key and builds the recheck guard', () => {

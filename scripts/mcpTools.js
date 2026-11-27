@@ -619,10 +619,10 @@ const TEMPLATE_LIMITS = Object.freeze([
   },
   {
     area: '`{#each}` body',
-    supported: 'Exactly one native root element per item; its text and dynamic attributes update. `on:` handlers anywhere in the item run with the item variable in scope (`on:click={() => remove(item.id)}`); they attach per item and detach when the item is removed.',
-    limit: 'No imported components (WIZZ-G004) or nested `{#if}`/`{#each}` (WIZZ-G005); one root element only (WIZZ-G003); the block must sit inside a native element. A handler expression is evaluated once per item, so `on:click={makeHandler(item)}` keeps the handler built from the item\'s first value.',
-    failure: 'Compile error; a stale `makeHandler(item)`: silent',
-    workaround: 'Write per-row handlers as inline arrows, which read the item when they run: `on:click={() => pick(item.id)}`. Precompute per-row variants (class suffix, label) as item fields.'
+    supported: 'Exactly one root per item: a native element or a component tag (`<TodoItem todo={todo} />`), and components anywhere inside the item element. Text, dynamic attributes, and component props update when the collection is assigned. Each row gets its own component instance: it mounts with the item, is destroyed with it, and keeps its own state when a keyed item moves (keyless rows reuse instances by position). `on:` handlers anywhere in the item run with the item variable in scope (`on:click={() => remove(item.id)}`); they attach per item and detach when the item is removed.',
+    limit: 'No nested `{#if}`/`{#each}` (WIZZ-G005); one root only (WIZZ-G003); the block must sit inside a native element. A row re-renders only when the collection is assigned, so a row prop or text that reads other state (`selected={current}`) keeps its old value until then. A handler expression is evaluated once per item, so `on:click={makeHandler(item)}` keeps the handler built from the item\'s first value.',
+    failure: 'Compile error; a stale `makeHandler(item)` or outer-state read: silent',
+    workaround: 'Write per-row handlers as inline arrows, which read the item when they run: `on:click={() => pick(item.id)}`. Pass row components the item and a stable callback (`<TodoItem todo={todo} onRemove={remove} />`, the child calls `onRemove(todo.id)`): a prop arrow built per item (`onRemove={() => remove(todo.id)}`) is a new value on every list update and re-renders its row. Put per-row flags and variants (`selected`, a class suffix) on the items themselves.'
   },
   {
     area: 'Dynamic attributes',
@@ -654,10 +654,10 @@ const TEMPLATE_LIMITS = Object.freeze([
   },
   {
     area: 'Component tags',
-    supported: 'Default `.wizz` imports rendered self-closing inside a native element (`<Card title={t} />`); attributes, including functions, pass as props.',
-    limit: 'No children (WIZZ-G008), no `on:` directives (WIZZ-G011), not at the template root (WIZZ-G010), not inside `{#each}` (WIZZ-G004).',
+    supported: 'Default `.wizz` imports rendered self-closing inside a native element or as an `{#each}` item (`<Card title={t} />`); attributes, including functions, pass as props.',
+    limit: 'No children (WIZZ-G008), no `on:` directives (WIZZ-G011), not at the template root (WIZZ-G010).',
     failure: 'Compile error',
-    workaround: 'Pass callbacks as props (`onSelect={select}`) instead of `on:`. Render list rows as native elements and keep per-row logic in item fields.'
+    workaround: 'Pass callbacks as props (`onSelect={select}`) instead of `on:`. Wrap content in a native element inside the child instead of passing it as children.'
   }
 ].map((row) => Object.freeze(row)));
 
@@ -754,14 +754,18 @@ Directives:
 - {#each items as item (item.id)} ... {/each} — keyed, or keyless for
   positional identity. The collection must be a reactive let, the block
   must sit inside a native element, and the body must contain exactly one
-  native root element. on: handlers inside the body see the item
-  variable: on:click={() => remove(item.id)}. Each bodies do not support
-  components or nested blocks (compile-time errors, never silent).
+  root: a native element or a component tag. on: handlers inside the body
+  see the item variable: on:click={() => remove(item.id)}. A row updates
+  only when the collection is assigned. Each bodies do not support nested
+  blocks (compile-time error, never silent).
 
 Components:
 - Import a component with a default import from a .wizz path and render it
-  self-closing inside a native element (<Counter />). Imported component
-  tags take no children or event directives; attributes pass as props.
+  self-closing inside a native element (<Counter />) or as an {#each} item
+  (<TodoItem todo={todo} onRemove={remove} />). Each row owns its own
+  instance: destroyed with its item, kept (with its state) when a keyed item
+  moves. Imported component tags take no children or event directives;
+  attributes pass as props.
 
 Warnings (compile().warnings, build output, component_diagnostics records
 with severity "warning") never fail a compile.

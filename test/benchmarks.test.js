@@ -14,6 +14,13 @@ function loadFixture(name) {
 function createInstrumentedDocument() {
   const elements = new Map();
   const metrics = { elements: 0, textNodes: 0, queries: 0, textWrites: 0, addedListeners: 0, removedListeners: 0 };
+  // Real DOM sibling lookup through the tracked parent: a component that is
+  // an each item's root is found through its anchor's previous sibling.
+  const previousSiblingOf = (node) => {
+    const siblings = node.parentNode ? node.parentNode.childNodes : null;
+    const index = siblings ? siblings.indexOf(node) : -1;
+    return index > 0 ? siblings[index - 1] : null;
+  };
 
   return {
     metrics,
@@ -26,6 +33,8 @@ function createInstrumentedDocument() {
         attributes: {},
         childNodes: [],
         listeners: {},
+        parentNode: null,
+        get previousSibling() { return previousSiblingOf(this); },
         setAttribute(attributeName, value) {
           this.attributes[attributeName] = value;
           if (attributeName === 'data-wizz-id') elements.set(`[data-wizz-id="${value}"]`, this);
@@ -45,15 +54,26 @@ function createInstrumentedDocument() {
           };
           return find(this);
         },
-        appendChild(node) { this.childNodes.push(node); },
+        appendChild(node) {
+          if (node.parentNode) node.parentNode.removeChild(node);
+          this.childNodes.push(node);
+          node.parentNode = this;
+        },
         // Moves an attached node, as list reconciliation and block branches do.
         insertBefore(node, referenceNode) {
+          if (node.parentNode && node.parentNode !== this) node.parentNode.removeChild(node);
           const existing = this.childNodes.indexOf(node);
           if (existing !== -1) this.childNodes.splice(existing, 1);
           const index = referenceNode == null ? -1 : this.childNodes.indexOf(referenceNode);
           this.childNodes.splice(index === -1 ? this.childNodes.length : index, 0, node);
+          node.parentNode = this;
         },
-        removeChild(node) { this.childNodes.splice(this.childNodes.indexOf(node), 1); },
+        removeChild(node) {
+          const index = this.childNodes.indexOf(node);
+          if (index === -1) throw new Error('removeChild: the node is not a child of this element');
+          this.childNodes.splice(index, 1);
+          node.parentNode = null;
+        },
         addEventListener(eventName, listener) {
           this.listeners[eventName] = listener;
           metrics.addedListeners++;
@@ -71,6 +91,8 @@ function createInstrumentedDocument() {
       metrics.textNodes++;
       return {
         nodeType: 3,
+        parentNode: null,
+        get previousSibling() { return previousSiblingOf(this); },
         _nodeValue: initialValue,
         get nodeValue() { return this._nodeValue; },
         set nodeValue(value) {
@@ -98,12 +120,37 @@ function createFixtureMounter(name, document, queueMicrotask) {
   )(document, queueMicrotask);
 
   return () => {
-    const target = {
-      childNodes: [],
-      appendChild(node) { this.childNodes.push(node); },
-      removeChild(node) { this.childNodes.splice(this.childNodes.indexOf(node), 1); }
-    };
+    const target = createTarget();
+    return { component: mountComponent(target), target };
+  };
+}
 
+function createTarget() {
+  return {
+    childNodes: [],
+    appendChild(node) { this.childNodes.push(node); node.parentNode = this; },
+    removeChild(node) { this.childNodes.splice(this.childNodes.indexOf(node), 1); node.parentNode = null; }
+  };
+}
+
+// Evaluates a parent fixture that imports one child fixture: the child module
+// is compiled and evaluated the same way and handed to the parent in place of
+// its import statement.
+function createNestedFixtureMounter(parentName, childName, importName, document, queueMicrotask) {
+  const evaluate = (source, extra = {}) => new Function(
+    'document',
+    'queueMicrotask',
+    ...Object.keys(extra),
+    `${source.replace('export default ', '')}\nreturn mountComponent;`
+  )(document, queueMicrotask, ...Object.values(extra));
+  const child = evaluate(compile(loadFixture(childName), { filePath: `test/fixtures/${childName}.wizz` }).source);
+  const parentSource = compile(loadFixture(parentName), { filePath: `test/fixtures/${parentName}.wizz` }).source
+    .split('\n')
+    .filter((line) => !line.startsWith(`import ${importName} from `))
+    .join('\n');
+  const mountComponent = evaluate(parentSource, { [importName]: child });
+  return () => {
+    const target = createTarget();
     return { component: mountComponent(target), target };
   };
 }
@@ -227,6 +274,73 @@ test('benchmark fixture rebuilds a 100-row branch per toggle and never leaks a l
   assert.equal(document.metrics.addedListeners, document.metrics.removedListeners);
   assert.ok(toggleDuration >= 0);
   t.diagnostic(`${cycles} drop/rebuild cycles of a 99-row listener-bearing branch completed in ${toggleDuration.toFixed(2)} ms`);
+});
+
+test('benchmark fixture mounts and updates 1,000 keyed row components with exact costs', (t) => {
+  // Milestone 25: every row is a child component owned by its item record.
+  // The counts pin that unchanged rows never re-render (setProps compares
+  // with Object.is), keyed moves create nothing, and removal leaks nothing.
+  const scheduled = [];
+  const flush = () => { while (scheduled.length > 0) scheduled.shift()(); };
+  const document = createInstrumentedDocument();
+  const mount = createNestedFixtureMounter('benchmark-rows', 'benchmark-row', 'Row', document, (callback) => scheduled.push(callback));
+  const rowCount = 1000;
+
+  let start = performance.now();
+  const { target, component } = mount();
+  const mountDuration = performance.now() - start;
+  const main = target.childNodes[0];
+  const [relabel, reverse, drop, list] = main.childNodes;
+  const rows = () => list.childNodes.filter((node) => node.name === 'li');
+
+  // main, three buttons, the list; li + button + span per row.
+  assert.equal(document.metrics.elements, 5 + rowCount * 3);
+  assert.equal(document.metrics.addedListeners, 3 + rowCount);
+  assert.equal(rows().length, rowCount);
+  assert.equal(list.childNodes.length, rowCount + 1, 'rows plus the list anchor: no placeholder is left');
+  assert.equal(document.metrics.queries, 0);
+
+  // Changing every tenth item rewrites exactly those labels.
+  const before = { ...document.metrics };
+  start = performance.now();
+  relabel.dispatchEvent('click');
+  flush();
+  const relabelDuration = performance.now() - start;
+  assert.equal(document.metrics.textWrites - before.textWrites, rowCount / 10);
+  assert.equal(document.metrics.elements, before.elements);
+  assert.equal(rows()[10].childNodes[0].childNodes[0].nodeValue, 'Row 10!');
+  assert.equal(rows()[11].childNodes[0].childNodes[0].nodeValue, 'Row 11');
+
+  // Row state rides along with a keyed reverse, which creates and writes nothing.
+  const clicked = rows()[5];
+  clicked.childNodes[0].dispatchEvent('click');
+  flush();
+  assert.equal(clicked.childNodes[1].childNodes[0].nodeValue, '1');
+  const afterClick = { ...document.metrics };
+  start = performance.now();
+  reverse.dispatchEvent('click');
+  flush();
+  const reverseDuration = performance.now() - start;
+  assert.equal(rows()[rowCount - 1 - 5], clicked);
+  assert.equal(clicked.childNodes[1].childNodes[0].nodeValue, '1');
+  assert.equal(document.metrics.elements, afterClick.elements);
+  assert.equal(document.metrics.textWrites, afterClick.textWrites);
+
+  // Dropping the picked row destroys exactly one instance and its listener.
+  const afterReverse = { ...document.metrics };
+  drop.dispatchEvent('click');
+  flush();
+  assert.equal(rows().length, rowCount - 1);
+  assert.ok(!rows().includes(clicked));
+  assert.equal(document.metrics.removedListeners - afterReverse.removedListeners, 1);
+  assert.equal(document.metrics.elements, afterReverse.elements);
+
+  start = performance.now();
+  component.destroy();
+  const destroyDuration = performance.now() - start;
+  assert.deepEqual(target.childNodes, []);
+  assert.equal(document.metrics.addedListeners, document.metrics.removedListeners, 'every row listener was released');
+  t.diagnostic(`1,000 row components mounted in ${mountDuration.toFixed(2)} ms; relabel ${relabelDuration.toFixed(2)} ms; keyed reverse ${reverseDuration.toFixed(2)} ms; destroy ${destroyDuration.toFixed(2)} ms`);
 });
 
 test('hydration adopts delivered markup with zero DOM creation and exact reactive writes', async (t) => {

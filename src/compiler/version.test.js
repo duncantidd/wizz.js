@@ -129,10 +129,13 @@ test('pins the current contract versions so bumps are deliberate', () => {
   // analyzer finding); accepted syntax unchanged. Output 1.13.1: the rewriter
   // stops instrumenting assignments to parameters of generators, computed
   // and reserved-word methods, and contextually-named functions.
+  // compiler 1.27.0 / syntax 1.7.0 / output 1.14.0: milestone 25 step 1,
+  // components inside {#each} bodies (WIZZ-G004 retired) with per-row
+  // ownership in create(), server rendering, and hydration.
   assert.deepEqual({ ...VERSIONS }, {
-    compiler: '1.26.0',
-    syntax: '1.6.0',
-    output: '1.13.1'
+    compiler: '1.27.0',
+    syntax: '1.7.0',
+    output: '1.14.0'
   });
 });
 
@@ -149,7 +152,7 @@ test('the version table is frozen so callers cannot mutate the contract', () => 
     'use strict';
     VERSIONS.syntax = '9.9.9';
   }, TypeError);
-  assert.equal(VERSIONS.syntax, '1.6.0');
+  assert.equal(VERSIONS.syntax, '1.7.0');
 });
 
 test('the compiler major version leads or matches every contract major version', () => {

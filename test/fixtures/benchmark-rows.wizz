@@ -1,0 +1,24 @@
+<script>
+  import Row from './benchmark-row.wizz';
+
+  let picked = -1;
+  let rows = Array.from({ length: 1000 }, (unused, index) => ({ id: index, label: 'Row ' + index }));
+
+  function pick(id) {
+    picked = id;
+  }
+
+  function relabel() {
+    rows = rows.map((row) => (row.id % 10 === 0 ? { id: row.id, label: row.label + '!' } : row));
+  }
+
+  function reverse() {
+    rows = [...rows].reverse();
+  }
+
+  function drop() {
+    rows = rows.filter((row) => row.id !== picked);
+  }
+</script>
+
+<main><button on:click={relabel}>Relabel</button><button on:click={reverse}>Reverse</button><button on:click={drop}>Drop {picked}</button><ul>{#each rows as row (row.id)}<Row row={row} onPick={pick} />{/each}</ul></main>
