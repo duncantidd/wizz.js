@@ -2203,3 +2203,29 @@ test('row children adopt their delivered head slices by position and consume the
   component.destroy();
   assert.deepEqual(metas(), [], 'every row released its head node');
 });
+
+// Review of milestone 25 step 1: a child that declares no props returns no
+// setProps(), and the parent compiles without seeing the child. Dynamic
+// attributes on such a tag are ignored instead of throwing on the parent's
+// first update, inside a list or not.
+for (const [mode, mount] of Object.entries(mountBothWays)) {
+  for (const [placement, body] of [
+    ['in an each item', '<ul>{#each todos as todo (todo.id)}<li><Counter extra={todo.text} /></li>{/each}</ul>'],
+    ['as an each item root', '<ul>{#each todos as todo (todo.id)}<Counter extra={todo.text} />{/each}</ul>'],
+    ['outside any list', '<div><Counter extra={label} /></div>']
+  ]) {
+    test(`${mode}: dynamic attributes on a prop-less child are ignored ${placement}`, async (t) => {
+      const source = '<script>\nimport Counter from "./Counter.wizz";\nlet todos = [{ id: 1, text: "a" }];\nlet label = "x";\n'
+        + 'function change() { todos = [{ id: 1, text: "b" }, { id: 2, text: "c" }]; label = "y"; }\n</script>'
+        + `<main on:click={change}>${body}</main>`;
+      const { target, component } = await mount(t, source, noChildSource);
+      const childCount = () => elementsNamed(target, 'span').length;
+      assert.equal(childCount(), 1);
+      await fireEvent(target.childNodes[0]);
+      assert.equal(childCount(), placement === 'outside any list' ? 1 : 2);
+      assert.deepEqual(elementsNamed(target, 'span').map(textOf), placement === 'outside any list' ? ['child'] : ['child', 'child']);
+      component.destroy();
+      assert.deepEqual(target.childNodes, []);
+    });
+  }
+}

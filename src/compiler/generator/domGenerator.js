@@ -52,7 +52,10 @@ function buildComponentPropsSource(node) {
  * The child instance lives in a variable local to the item, not in a
  * factory-scope reference: every row has its own. update() hands it every
  * dynamic prop through setProps(), whose Object.is check skips unchanged
- * values, so a row whose props did not change does not re-render.
+ * values, so a row whose props did not change does not re-render. A child
+ * that declares no props has no setProps() (the parent compiles without
+ * seeing the child), so the call is guarded: undeclared attributes are
+ * ignored, as the component-tag contract says.
  * @param {Object} node - The component tag.
  * @returns {{propsSource: string, childVar: string, setPropsSource: string|null}}
  */
@@ -70,7 +73,7 @@ function itemComponentParts(node) {
   const dynamic = (node.attributes || []).filter((attribute) => attribute.dynamic);
   const setPropsSource = dynamic.length === 0
     ? null
-    : `if (${childVar}) ${childVar}.setProps({ ${dynamic.map((attribute) => `${JSON.stringify(attribute.name)}: ${attribute.value}`).join(', ')} });`;
+    : `if (${childVar} && ${childVar}.setProps) ${childVar}.setProps({ ${dynamic.map((attribute) => `${JSON.stringify(attribute.name)}: ${attribute.value}`).join(', ')} });`;
   return { propsSource, childVar, setPropsSource };
 }
 

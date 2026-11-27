@@ -765,7 +765,7 @@ test('emits factory-scope component references and guarded setProps calls for re
 
   assert.match(source, /let __wizzComponent_1 = null;/);
   assert.match(source, /__wizzComponent_1 = Counter\(__wizzNode_1, \{ "start": start, "label": "Total" \}, __wizzNode_\d+\);/);
-  assert.match(source, /if \(__wizzChanged\.start\) \{\n      if \(__wizzComponent_1\) __wizzComponent_1\.setProps\(\{ "start": start \}\);\n    \}/);
+  assert.match(source, /if \(__wizzChanged\.start\) \{\n      if \(__wizzComponent_1 && __wizzComponent_1\.setProps\) __wizzComponent_1\.setProps\(\{ "start": start \}\);\n    \}/);
 });
 
 test('keeps child component identity across parent prop updates', async () => {

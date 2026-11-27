@@ -110,7 +110,9 @@ function generateUpdateFunction(templateAST, targets = collectUpdateTargets(temp
           const guard = attribute.dependencies.map((dependencyName) => `__wizzChanged.${dependencyName}`).join(' || ');
           builder.add(`if (${guard}) {`)
             .indent()
-            .add(`if (__wizzComponent_${node.componentId}) __wizzComponent_${node.componentId}.setProps({ ${JSON.stringify(attribute.name)}: ${attribute.value} });`)
+            // A child that declares no props returns no setProps(); the
+            // parent compiles without seeing the child, so it checks.
+            .add(`if (__wizzComponent_${node.componentId} && __wizzComponent_${node.componentId}.setProps) __wizzComponent_${node.componentId}.setProps({ ${JSON.stringify(attribute.name)}: ${attribute.value} });`)
             .dedent()
             .add('}');
         }

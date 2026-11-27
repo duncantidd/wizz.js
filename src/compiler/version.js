@@ -236,9 +236,14 @@
 // passes, with the same keys; a mismatch inside a row child remounts inside
 // that child's root. Syntax minor: a template form that used to be rejected
 // compiles. Output minor: lists with components gain the deferred-mount
-// parameters, per-item child variables, and the drop-first removal; lists
-// without components, and every other module, are byte-identical apart from
-// the version banner. The module surface is unchanged.
+// parameters, per-item child variables, and the drop-first removal. Review
+// fix in the same minor: every parent-side setProps() call checks that the
+// child returned one (`if (ref && ref.setProps)`), because a child that
+// declares no props returns `{ destroy() }` only and a reactive attribute on
+// it used to throw TypeError on the parent's first update; modules with
+// reactive component props change by that guard. Every other module is
+// byte-identical apart from the version banner. The module surface is
+// unchanged.
 //
 // Bump rules: a breaking change to a contract bumps its major version and the
 // compiler's major version. Additive capabilities bump the affected minor

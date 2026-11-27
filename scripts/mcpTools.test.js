@@ -746,6 +746,10 @@ test('every documented compile-error limit fails with the code the table cites',
   assert.equal(compileCode(component(imports, '<ul>{#each xs as x}<li><Card /></li>{/each}</ul>')), null);
   assert.equal(compileCode(component(imports, '<ul>{#each xs as x (x.id)}<Card item={x} onPick={f} />{/each}</ul>')), null);
   assert.ok(TEMPLATE_LIMITS.every((row) => !row.limit.includes('WIZZ-G004') && !row.failure.includes('WIZZ-G004')));
+  // The {#each} body workaround's claims about props: an arrow prop is a
+  // grammar error, and a call that returns a function compiles.
+  assert.equal(compileCode(component(imports, '<ul>{#each xs as x (x.id)}<Card onPick={() => f(x.id)} />{/each}</ul>')), 'WIZZ-P032');
+  assert.equal(compileCode(component(imports, '<ul>{#each xs as x (x.id)}<Card onPick={f(x.id)} />{/each}</ul>')), null);
 });
 
 test('every documented silent limit compiles and generates the documented behavior', () => {

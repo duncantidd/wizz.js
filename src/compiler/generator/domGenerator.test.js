@@ -293,7 +293,7 @@ test('a nested each-body component mounts per item after attachment and is owned
   assert.match(source, /__wizzMounts\.push\(\(\) => \{\n {6}const __wizzMountParent = __wizzNode_5\.parentNode;\n {6}__wizzChild_1 = Row\(__wizzMountParent, \{ "todo": item \}, __wizzNode_5\);\n {6}__wizzMountParent\.removeChild\(__wizzNode_5\);\n {6}__wizzDrop\.push\(\(\) => __wizzChild_1\.destroy\(\)\);\n {4}\}\);/);
   assert.doesNotMatch(source, /__wizzRecord\.node = /, 'only a root component repoints the record');
   // The record rebinds the item and hands the row its props.
-  assert.match(source, /update\(__wizzItem\) \{\n {8}item = __wizzItem;\n {8}__wizzNode_3\.childNodes\[0\]\.nodeValue = String\(item\.name\);\n {8}if \(__wizzChild_1\) __wizzChild_1\.setProps\(\{ "todo": item \}\);/);
+  assert.match(source, /update\(__wizzItem\) \{\n {8}item = __wizzItem;\n {8}__wizzNode_3\.childNodes\[0\]\.nodeValue = String\(item\.name\);\n {8}if \(__wizzChild_1 && __wizzChild_1\.setProps\) __wizzChild_1\.setProps\(\{ "todo": item \}\);/);
   // First pass defers mounts to the component scope; later passes run them.
   assert.match(source, /__wizzUpdateList_2\(items, __wizzChildMounts\);/);
   assert.match(source, /__wizzLists\.push\(\(__wizzChanged\) => \{ if \(__wizzChanged\.items\) __wizzUpdateList_2\(items\); \}\);/);
